@@ -21,8 +21,6 @@ router.post("/complete", async (req, res) => {
     RecordingSid,
     CallSid,
     RecordingDuration,
-    From,
-    To,
   } = req.body;
 
   if (!RecordingUrl) {
@@ -33,6 +31,13 @@ router.post("/complete", async (req, res) => {
   console.log(`📼 Recording complete: ${RecordingSid} (${RecordingDuration}s)`);
 
   try {
+    // Fetch call details to get From/To
+    const twilio = require("twilio");
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const call = await client.calls(CallSid).fetch();
+    const From = call.from;
+    const To   = call.to;
+
     // Deepgram needs the .mp3 version — Twilio appends format
     const audioUrl = `${RecordingUrl}.mp3`;
 
