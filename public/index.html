@@ -1,1 +1,523 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Call Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#0a0d12; --surface:#111520; --border:#1e2535; --border2:#2a3347;
+    --text:#e2e8f0; --muted:#64748b; --accent:#3b82f6; --accent2:#1d4ed8;
+    --green:#10b981; --amber:#f59e0b; --red:#ef4444; --mono:'JetBrains Mono',monospace;
+  }
+  body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:0 32px; height:56px; background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100; }
+  .logo { font-size:13px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); }
+  nav { display:flex; gap:4px; }
+  nav button { background:none; border:none; color:var(--muted); font-family:inherit; font-size:13px; font-weight:500; padding:6px 14px; border-radius:6px; cursor:pointer; transition:all 0.15s; }
+  nav button:hover { color:var(--text); background:var(--border); }
+  nav button.active { color:var(--text); background:var(--border2); }
+  .header-right { display:flex; align-items:center; gap:12px; }
+  .status-dot { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  main { flex:1; padding:28px 32px; max-width:1200px; width:100%; margin:0 auto; }
+  .page { display:none; }
+  .page.active { display:block; }
+  .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
+  .page-title { font-size:20px; font-weight:600; }
+  .page-subtitle { font-size:13px; color:var(--muted); margin-top:2px; }
+  .btn { display:inline-flex; align-items:center; gap:7px; padding:8px 16px; border-radius:7px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; border:none; transition:all 0.15s; }
+  .btn-primary { background:var(--accent); color:#fff; }
+  .btn-primary:hover { background:var(--accent2); }
+  .btn-ghost { background:var(--border); color:var(--text); }
+  .btn-ghost:hover { background:var(--border2); }
+  .btn-sm { padding:5px 10px; font-size:12px; }
+  .btn-call { background:#0d2d1a; color:var(--green); border:1px solid #1a4d2e; }
+  .btn-call:hover { background:#0f3d22; }
+  .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; }
+  thead th { text-align:left; font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); }
+  tbody tr { border-bottom:1px solid var(--border); transition:background 0.1s; }
+  tbody tr:last-child { border-bottom:none; }
+  tbody tr:hover { background:rgba(59,130,246,0.04); }
+  td { padding:13px 16px; font-size:13px; vertical-align:middle; }
+  .mono { font-family:var(--mono); font-size:12px; }
+  .badge { display:inline-flex; align-items:center; padding:3px 8px; border-radius:4px; font-size:11px; font-weight:500; }
+  .badge-new { background:#0d1f3a; color:#60a5fa; }
+  .badge-reviewed { background:#1a1a0d; color:var(--amber); }
+  .badge-actioned { background:#0d2d1a; color:var(--green); }
+  .badge-inbound { background:#1a0d2d; color:#a78bfa; }
+  .badge-outbound { background:#0d1f1a; color:#34d399; }
+  .empty { text-align:center; padding:64px 32px; color:var(--muted); }
+  .empty-icon { font-size:36px; margin-bottom:12px; }
+  .empty h3 { font-size:15px; font-weight:500; color:var(--text); margin-bottom:6px; }
+  .empty p { font-size:13px; }
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:200; align-items:center; justify-content:center; backdrop-filter:blur(4px); }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border:1px solid var(--border2); border-radius:12px; width:100%; max-width:580px; max-height:85vh; overflow-y:auto; padding:28px; }
+  .modal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
+  .modal-title { font-size:16px; font-weight:600; }
+  .close-btn { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; line-height:1; padding:4px; }
+  .close-btn:hover { color:var(--text); }
+  .form-group { margin-bottom:16px; }
+  label { display:block; font-size:12px; font-weight:500; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.05em; }
+  input,textarea,select { width:100%; background:var(--bg); border:1px solid var(--border2); border-radius:7px; color:var(--text); font-family:inherit; font-size:13px; padding:10px 12px; outline:none; transition:border-color 0.15s; }
+  input:focus,textarea:focus,select:focus { border-color:var(--accent); }
+  textarea { resize:vertical; min-height:80px; }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .modal-footer { display:flex; gap:10px; justify-content:flex-end; margin-top:24px; }
+  .transcript-box { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:16px; font-family:var(--mono); font-size:12px; line-height:1.7; color:var(--text); max-height:300px; overflow-y:auto; white-space:pre-wrap; margin-bottom:16px; }
+  .speaker-0 { color:#60a5fa; }
+  .speaker-1 { color:#34d399; }
+  .stats-bar { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:28px; }
+  .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; }
+  .stat-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px; }
+  .stat-value { font-size:26px; font-weight:600; font-family:var(--mono); }
+  .stat-value.accent { color:var(--accent); }
+  .stat-value.green { color:var(--green); }
+  .stat-value.amber { color:var(--amber); }
+  .search-bar { display:flex; gap:10px; margin-bottom:16px; align-items:center; }
+  .search-bar input { max-width:300px; }
+  .contacts-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+  .contact-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px; transition:border-color 0.15s; }
+  .contact-card:hover { border-color:var(--border2); }
+  .contact-name { font-size:14px; font-weight:600; margin-bottom:3px; }
+  .contact-company { font-size:12px; color:var(--muted); margin-bottom:10px; }
+  .contact-number { font-family:var(--mono); font-size:12px; color:var(--accent); margin-bottom:14px; }
+  .contact-actions { display:flex; gap:8px; }
+  .import-zone { border:2px dashed var(--border2); border-radius:10px; padding:40px; text-align:center; cursor:pointer; transition:all 0.15s; margin-bottom:20px; }
+  .import-zone:hover { border-color:var(--accent); background:rgba(59,130,246,0.04); }
+  .import-zone p { color:var(--muted); font-size:13px; margin-top:8px; }
+  ::-webkit-scrollbar { width:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⚡ Call Intelligence</div>
+  <nav>
+    <button class="active" onclick="showPage('calls',this)">Calls</button>
+    <button onclick="showPage('contacts',this)">Contacts</button>
+  </nav>
+  <div class="header-right">
+    <div class="status-dot"></div>
+    <span style="font-size:12px;color:var(--muted)">Live</span>
+  </div>
+</header>
+
+<main>
+  <!-- CALLS PAGE -->
+  <div id="page-calls" class="page active">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Call Log</div>
+        <div class="page-subtitle">Every recorded call, automatically logged</div>
+      </div>
+      <button class="btn btn-primary" onclick="refreshCalls()">↻ Refresh</button>
+    </div>
+    <div class="stats-bar">
+      <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value accent" id="stat-total">—</div></div>
+      <div class="stat-card"><div class="stat-label">New</div><div class="stat-value" id="stat-new">—</div></div>
+      <div class="stat-card"><div class="stat-label">Actioned</div><div class="stat-value green" id="stat-actioned">—</div></div>
+      <div class="stat-card"><div class="stat-label">Avg Duration</div><div class="stat-value amber" id="stat-duration">—</div></div>
+    </div>
+    <div class="search-bar">
+      <input type="text" id="call-search" placeholder="Search by number or transcript..." oninput="filterCalls()">
+      <select id="status-filter" onchange="filterCalls()" style="max-width:140px">
+        <option value="">All status</option>
+        <option value="new">New</option>
+        <option value="reviewed">Reviewed</option>
+        <option value="actioned">Actioned</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>Direction</th><th>From</th><th>Duration</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="calls-tbody">
+          <tr><td colspan="6"><div class="empty"><div class="empty-icon">📞</div><h3>Loading...</h3></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- CONTACTS PAGE -->
+  <div id="page-contacts" class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Contacts</div>
+        <div class="page-subtitle">Click call to connect through recorded bridge</div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-ghost" onclick="openImport()">⬆ Import vCard</button>
+        <button class="btn btn-primary" onclick="openAddContact()">+ Add Contact</button>
+      </div>
+    </div>
+    <div class="search-bar">
+      <input type="text" id="contact-search" placeholder="Search contacts..." oninput="filterContacts()">
+    </div>
+    <div class="contacts-grid" id="contacts-grid">
+      <div style="grid-column:1/-1"><div class="empty"><div class="empty-icon">👤</div><h3>No contacts yet</h3><p>Add manually or import from iCloud</p></div></div>
+    </div>
+  </div>
+</main>
+
+<!-- CALL DETAIL MODAL -->
+<div class="modal-overlay" id="modal-call">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-call-title">Call Details</div>
+      <button class="close-btn" onclick="closeModal('modal-call')">×</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">FROM</div>
+        <div class="mono" id="detail-from" style="font-size:12px">—</div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">TO</div>
+        <div class="mono" id="detail-to" style="font-size:12px">—</div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">DURATION</div>
+        <div class="mono" id="detail-duration" style="font-size:12px">—</div>
+      </div>
+    </div>
+    <div style="margin-bottom:16px">
+      <label>Transcript</label>
+      <div class="transcript-box" id="detail-transcript">—</div>
+    </div>
+    <div style="margin-bottom:16px">
+      <label>Instruction for Agent</label>
+      <textarea id="detail-instruction" placeholder="e.g. Summarise and email to john@example.com · Book a follow up call for next Tuesday · Extract the property address and buyer budget"></textarea>
+    </div>
+    <div style="margin-bottom:16px">
+      <label>Status</label>
+      <select id="detail-status">
+        <option value="new">New</option>
+        <option value="reviewed">Reviewed</option>
+        <option value="actioned">Actioned</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-call')">Close</button>
+      <button class="btn btn-primary" onclick="saveCallDetails()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD CONTACT MODAL -->
+<div class="modal-overlay" id="modal-contact">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Add Contact</div>
+      <button class="close-btn" onclick="closeModal('modal-contact')">×</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>First Name</label><input type="text" id="c-first" placeholder="Jane"></div>
+      <div class="form-group"><label>Last Name</label><input type="text" id="c-last" placeholder="Smith"></div>
+    </div>
+    <div class="form-group"><label>Phone Number</label><input type="tel" id="c-phone" placeholder="+61400000000"></div>
+    <div class="form-group"><label>Company</label><input type="text" id="c-company" placeholder="Acme Pty Ltd"></div>
+    <div class="form-group"><label>Notes</label><textarea id="c-notes" placeholder="Any notes..."></textarea></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-contact')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveContact()">Save Contact</button>
+    </div>
+  </div>
+</div>
+
+<!-- IMPORT MODAL -->
+<div class="modal-overlay" id="modal-import">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Import iPhone Contacts</div>
+      <button class="close-btn" onclick="closeModal('modal-import')">×</button>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
+      Go to iCloud.com → Contacts → Select All (Cmd+A) → Export vCard. Then upload the .vcf file below.
+    </p>
+    <div class="import-zone" onclick="document.getElementById('vcf-input').click()">
+      <div style="font-size:32px">📇</div>
+      <p>Click to select your .vcf file</p>
+      <input type="file" id="vcf-input" accept=".vcf" style="display:none" onchange="importVCard(this)">
+    </div>
+    <div id="import-result" style="font-size:13px;color:var(--green);display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-import')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- DIAL MODAL -->
+<div class="modal-overlay" id="modal-dial">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <div class="modal-title">Start Recorded Call</div>
+      <button class="close-btn" onclick="closeModal('modal-dial')">×</button>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
+      Calling <strong id="dial-name" style="color:var(--text)"></strong><br>
+      Your phone will ring first, then connect to them with recording running.
+    </p>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-dial')">Cancel</button>
+      <button class="btn btn-call" onclick="confirmDial()">📞 Start Call</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://gpyprjesdrcjrhmmprqt.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdweXByamVzZHJjanJobW1wcnF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMjE1OTMsImV4cCI6MjA5NzY5NzU5M30.dzfJtYb4NQRJeiNiPre02xU0_v24ruf81P3EdDw3yCA';
+
+let allCalls = [], allContacts = [], currentCallId = null, pendingDial = null;
+
+function showPage(name, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'calls') refreshCalls();
+  if (name === 'contacts') renderContacts();
+}
+
+async function supabaseFetch(path, method='GET', body=null) {
+  const opts = {
+    method,
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': method !== 'GET' ? 'return=representation' : '',
+    }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
+  return res.json();
+}
+
+async function refreshCalls() {
+  const data = await supabaseFetch('calls?order=recorded_at.desc&limit=200');
+  allCalls = Array.isArray(data) ? data : [];
+  updateStats();
+  renderCalls(allCalls);
+}
+
+function updateStats() {
+  document.getElementById('stat-total').textContent = allCalls.length;
+  document.getElementById('stat-new').textContent = allCalls.filter(c => c.status === 'new').length;
+  document.getElementById('stat-actioned').textContent = allCalls.filter(c => c.status === 'actioned').length;
+  const avg = allCalls.length ? Math.round(allCalls.reduce((s,c) => s+(c.duration||0),0)/allCalls.length) : 0;
+  document.getElementById('stat-duration').textContent = formatDur(avg);
+}
+
+function renderCalls(calls) {
+  const tbody = document.getElementById('calls-tbody');
+  if (!calls.length) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><div class="empty-icon">📞</div><h3>No calls yet</h3><p>Calls appear here automatically after recording</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = calls.map(c => `
+    <tr>
+      <td style="color:var(--muted);font-size:12px">${formatTime(c.recorded_at)}</td>
+      <td><span class="badge badge-${c.direction}">${c.direction === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
+      <td class="mono">${lookupName(c.from_number) || c.from_number || '—'}</td>
+      <td style="color:var(--muted)">${formatDur(c.duration)}</td>
+      <td><span class="badge badge-${c.status}">${c.status}</span></td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openCall('${c.id}')">View →</button></td>
+    </tr>
+  `).join('');
+}
+
+function filterCalls() {
+  const q = document.getElementById('call-search').value.toLowerCase();
+  const s = document.getElementById('status-filter').value;
+  renderCalls(allCalls.filter(c => {
+    const mQ = !q || (c.from_number||'').includes(q) || (c.transcript||'').toLowerCase().includes(q);
+    const mS = !s || c.status === s;
+    return mQ && mS;
+  }));
+}
+
+function openCall(id) {
+  const c = allCalls.find(x => x.id === id);
+  if (!c) return;
+  currentCallId = id;
+  document.getElementById('modal-call-title').textContent = `Call — ${formatTime(c.recorded_at)}`;
+  const name = lookupName(c.from_number);
+  document.getElementById('detail-from').textContent = name ? `${name} (${c.from_number})` : (c.from_number||'—');
+  document.getElementById('detail-to').textContent = c.to_number || '—';
+  document.getElementById('detail-duration').textContent = formatDur(c.duration);
+  document.getElementById('detail-transcript').innerHTML = formatTranscript(c.transcript||'No transcript');
+  document.getElementById('detail-instruction').value = c.instruction || '';
+  document.getElementById('detail-status').value = c.status || 'new';
+  openModal('modal-call');
+}
+
+async function saveCallDetails() {
+  const instruction = document.getElementById('detail-instruction').value;
+  const status = document.getElementById('detail-status').value;
+  await supabaseFetch(`calls?id=eq.${currentCallId}`, 'PATCH', { instruction, status });
+  closeModal('modal-call');
+  refreshCalls();
+}
+
+function formatTranscript(text) {
+  return text.split('\n').map(line => {
+    if (line.startsWith('Speaker 0:')) return `<span class="speaker-0">${line}</span>`;
+    if (line.startsWith('Speaker 1:')) return `<span class="speaker-1">${line}</span>`;
+    return line;
+  }).join('\n');
+}
+
+function loadContacts() {
+  try { allContacts = JSON.parse(localStorage.getItem('ci_contacts')||'[]'); } catch { allContacts=[]; }
+}
+
+function saveContacts() { localStorage.setItem('ci_contacts', JSON.stringify(allContacts)); }
+
+function lookupName(number) {
+  const c = allContacts.find(x => x.phone===number || x.phone===number?.replace('+61','0'));
+  return c ? `${c.first} ${c.last}`.trim() : null;
+}
+
+function renderContacts() {
+  loadContacts();
+  const q = (document.getElementById('contact-search')?.value||'').toLowerCase();
+  const filtered = allContacts.filter(c => !q || `${c.first} ${c.last} ${c.company} ${c.phone}`.toLowerCase().includes(q));
+  const grid = document.getElementById('contacts-grid');
+  if (!filtered.length) {
+    grid.innerHTML = `<div style="grid-column:1/-1"><div class="empty"><div class="empty-icon">👤</div><h3>No contacts yet</h3><p>Add manually or import from iCloud</p></div></div>`;
+    return;
+  }
+  grid.innerHTML = filtered.map((c,i) => `
+    <div class="contact-card">
+      <div class="contact-name">${c.first} ${c.last}</div>
+      <div class="contact-company">${c.company||'—'}</div>
+      <div class="contact-number">${c.phone}</div>
+      <div class="contact-actions">
+        <button class="btn btn-call btn-sm" onclick="startDial(${allContacts.indexOf(c)})">📞 Call</button>
+        <button class="btn btn-ghost btn-sm" onclick="deleteContact(${allContacts.indexOf(c)})">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function filterContacts() { renderContacts(); }
+
+function openAddContact() {
+  ['c-first','c-last','c-phone','c-company','c-notes'].forEach(id => document.getElementById(id).value='');
+  openModal('modal-contact');
+}
+
+function saveContact() {
+  loadContacts();
+  const phone = document.getElementById('c-phone').value.trim();
+  if (!phone) return alert('Phone number required');
+  allContacts.push({
+    first: document.getElementById('c-first').value.trim(),
+    last:  document.getElementById('c-last').value.trim(),
+    phone,
+    company: document.getElementById('c-company').value.trim(),
+    notes:   document.getElementById('c-notes').value.trim(),
+  });
+  saveContacts();
+  closeModal('modal-contact');
+  renderContacts();
+}
+
+function deleteContact(i) {
+  loadContacts();
+  if (!confirm('Delete this contact?')) return;
+  allContacts.splice(i,1);
+  saveContacts();
+  renderContacts();
+}
+
+function startDial(i) {
+  loadContacts();
+  pendingDial = allContacts[i];
+  if (!pendingDial) return;
+  document.getElementById('dial-name').textContent = `${pendingDial.first} ${pendingDial.last} (${pendingDial.phone})`;
+  openModal('modal-dial');
+}
+
+async function confirmDial() {
+  if (!pendingDial) return;
+  try {
+    await fetch('/call/initiate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ to: pendingDial.phone })
+    });
+    closeModal('modal-dial');
+    alert('📞 Your phone will ring shortly — answer to connect');
+  } catch {
+    alert('Could not initiate call. Check server is running.');
+  }
+}
+
+function openImport() { openModal('modal-import'); }
+
+function importVCard(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const cards = text.split(/BEGIN:VCARD/i).slice(1);
+    loadContacts();
+    let added = 0;
+    cards.forEach(card => {
+      const get = f => { const m=card.match(new RegExp(f+'[^:]*:(.+)','i')); return m?m[1].trim():''; };
+      const n = get('N').split(';');
+      const last=n[0]||'', first=n[1]||'';
+      const org = get('ORG').replace(/;/g,' ').trim();
+      const telM = card.match(/TEL[^:]*:([+\d\s\-().]+)/i);
+      const phone = telM ? telM[1].replace(/\s/g,'').trim() : '';
+      if (!phone||(!first&&!last)) return;
+      if (allContacts.find(c=>c.phone===phone)) return;
+      allContacts.push({first:first.trim(),last:last.trim(),phone,company:org,notes:''});
+      added++;
+    });
+    saveContacts();
+    const r = document.getElementById('import-result');
+    r.style.display='block';
+    r.textContent=`✅ Imported ${added} contacts`;
+    renderContacts();
+  };
+  reader.readAsText(file);
+}
+
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if(e.target===el) el.classList.remove('open'); });
+});
+
+function formatTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-AU',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+}
+
+function formatDur(s) {
+  if (!s) return '—';
+  const m=Math.floor(s/60),r=s%60;
+  return m>0?`${m}m ${r}s`:`${s}s`;
+}
+
+loadContacts();
+refreshCalls();
+</script>
+</body>
+</html>
