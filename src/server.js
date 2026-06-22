@@ -11,6 +11,7 @@ app.use(express.static(path.join(__dirname, "../public")));
 app.use("/inbound",   require("./routes/inbound"));
 app.use("/outbound",  require("./routes/outbound"));
 app.use("/recording", require("./routes/recording"));
+app.use("/call",      require("./routes/call"));
 
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
