@@ -5,15 +5,10 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-/**
- * Sends an SMS to TRANSCRIPT_RECIPIENT_NUMBER.
- * This is the number that receives the raw transcript —
- * typically your AI agent or your own number.
- */
 async function sendSMS(body) {
   await client.messages.create({
-    from: process.env.TWILIO_PHONE_NUMBER,
-    to:   process.env.TRANSCRIPT_RECIPIENT_NUMBER,
+    from: "whatsapp:+14155238886",
+    to:   `whatsapp:${process.env.TRANSCRIPT_RECIPIENT_NUMBER}`,
     body,
   });
 }
