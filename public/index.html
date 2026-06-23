@@ -130,6 +130,14 @@
   /* Verified contacts table section */
   .section-divider { border:none; border-top:1px solid var(--border); margin:32px 0 24px; }
 
+  /* Expandable summary cell */
+  .summary-cell { max-width:280px; cursor:pointer; }
+  .summary-short { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; color:var(--muted); }
+  .summary-full { display:none; font-size:12px; color:var(--text); line-height:1.6; white-space:normal; padding-top:6px; }
+  .summary-cell.expanded .summary-short { display:none; }
+  .summary-cell.expanded .summary-full { display:block; }
+  .summary-cell.expanded { background:rgba(59,130,246,0.04); border-radius:6px; padding:6px; }
+
   ::-webkit-scrollbar { width:5px; height:5px; }
   ::-webkit-scrollbar-track { background:transparent; }
   ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
@@ -405,7 +413,10 @@ function renderCalls(calls) {
         const name = c.caller_name || lookupContactName(num);
         return name ? name : (num || '—');
       })()}</td>
-      <td class="wrap" style="max-width:280px;font-size:12px;color:var(--muted)">${c.summary ? c.summary.slice(0,80)+(c.summary.length>80?'…':'') : '—'}</td>
+      <td class="summary-cell" onclick="toggleSummary(this)">
+        <div class="summary-short">${c.summary ? c.summary.slice(0,60)+(c.summary.length>60?'…':'') : '—'}</div>
+        ${c.summary ? `<div class="summary-full">${c.summary}</div>` : ''}
+      </td>
       <td style="color:var(--muted)">${formatDur(c.duration)}</td>
       <td><span class="badge badge-${c.status||'new'}">${c.status||'new'}</span></td>
       <td><button class="btn btn-ghost btn-sm" onclick="openCall('${c.id}')">View →</button></td>
@@ -768,6 +779,12 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 document.querySelectorAll('.modal-overlay').forEach(el => {
   el.addEventListener('click', e => { if(e.target===el) el.classList.remove('open'); });
 });
+
+function toggleSummary(el) {
+  // Close any other open summaries first
+  document.querySelectorAll('.summary-cell.expanded').forEach(c => { if (c !== el) c.classList.remove('expanded'); });
+  el.classList.toggle('expanded');
+}
 
 function formatTime(iso) {
   if (!iso) return '—';
