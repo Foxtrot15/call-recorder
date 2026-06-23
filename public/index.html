@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -37,6 +36,8 @@
   .btn-sm { padding:5px 10px; font-size:12px; }
   .btn-call { background:#0d2d1a; color:var(--green); border:1px solid #1a4d2e; }
   .btn-call:hover { background:#0f3d22; }
+  .btn-success { background:#0d2d1a; color:var(--green); border:1px solid #1a4d2e; }
+  .btn-success:hover { background:#0f3d22; }
   .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
   table { width:100%; border-collapse:collapse; }
   thead th { text-align:left; font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); }
@@ -49,6 +50,7 @@
   .badge-new { background:#0d1f3a; color:#60a5fa; }
   .badge-reviewed { background:#1a1a0d; color:var(--amber); }
   .badge-actioned { background:#0d2d1a; color:var(--green); }
+  .badge-complete { background:#0d2d1a; color:var(--green); }
   .badge-inbound { background:#1a0d2d; color:#a78bfa; }
   .badge-outbound { background:#0d1f1a; color:#34d399; }
   .empty { text-align:center; padding:64px 32px; color:var(--muted); }
@@ -91,6 +93,36 @@
   .import-zone { border:2px dashed var(--border2); border-radius:10px; padding:40px; text-align:center; cursor:pointer; transition:all 0.15s; margin-bottom:20px; }
   .import-zone:hover { border-color:var(--accent); background:rgba(59,130,246,0.04); }
   .import-zone p { color:var(--muted); font-size:13px; margin-top:8px; }
+
+  /* ── CRM Review styles ── */
+  .crm-pending-badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; margin-left:8px; background:rgba(245,158,11,0.15); color:var(--amber); border:1px solid rgba(245,158,11,0.25); }
+  .crm-pending-badge.clear { background:rgba(16,185,129,0.1); color:var(--green); border-color:rgba(16,185,129,0.25); }
+  .crm-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; margin-bottom:10px; overflow:hidden; transition:border-color 0.15s; }
+  .crm-card:hover { border-color:var(--border2); }
+  .crm-card.verified { border-color:rgba(16,185,129,0.2); }
+  .crm-card-header { display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer; user-select:none; }
+  .crm-status-dot { width:7px; height:7px; border-radius:50%; background:var(--amber); flex-shrink:0; }
+  .crm-status-dot.verified { background:var(--green); }
+  .crm-caller-line { font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .crm-summary { font-size:12px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:500px; }
+  .intent-pill { font-size:10px; font-weight:500; padding:2px 7px; border-radius:4px; background:rgba(59,130,246,0.12); color:var(--accent); border:1px solid rgba(59,130,246,0.2); text-transform:uppercase; letter-spacing:0.04em; }
+  .crm-expand { color:var(--muted); font-size:16px; transition:transform 0.2s; flex-shrink:0; }
+  .crm-card.open .crm-expand { transform:rotate(180deg); }
+  .crm-body { display:none; border-top:1px solid var(--border); padding:18px 16px; gap:18px; }
+  .crm-card.open .crm-body { display:flex; }
+  .crm-transcript-col { flex:1; min-width:0; }
+  .crm-col-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:8px; }
+  .crm-transcript-snippet { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:12px; font-family:var(--mono); font-size:11px; line-height:1.6; color:var(--muted); max-height:130px; overflow-y:auto; white-space:pre-wrap; }
+  .crm-fields-col { width:270px; flex-shrink:0; }
+  .crm-field { margin-bottom:10px; }
+  .crm-field label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); margin-bottom:4px; display:flex; align-items:center; gap:5px; }
+  .conf-high { font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(16,185,129,0.1); color:var(--green); font-weight:500; }
+  .conf-low  { font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(245,158,11,0.1); color:var(--amber); font-weight:500; }
+  .crm-field input { padding:7px 10px; font-size:12px; }
+  .crm-field input.flagged { border-color:var(--amber); background:rgba(245,158,11,0.05); }
+  .crm-actions { display:flex; gap:8px; margin-top:4px; }
+  .crm-verified-stamp { font-size:12px; color:var(--green); display:flex; align-items:center; gap:5px; padding:6px 0; }
+
   ::-webkit-scrollbar { width:6px; }
   ::-webkit-scrollbar-track { background:transparent; }
   ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
@@ -102,7 +134,7 @@
   <div class="logo">⚡ Call Intelligence</div>
   <nav>
     <button class="active" onclick="showPage('calls',this)">Calls</button>
-    <button onclick="showPage('contacts',this)">Contacts</button>
+    <button onclick="showPage('crm',this)">Contacts <span class="crm-pending-badge" id="crm-nav-badge"></span></button>
   </nav>
   <div class="header-right">
     <div class="status-dot"></div>
@@ -133,14 +165,13 @@
         <option value="new">New</option>
         <option value="reviewed">Reviewed</option>
         <option value="actioned">Actioned</option>
+        <option value="complete">Complete</option>
       </select>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr>
-            <th>Time</th><th>Direction</th><th>From</th><th>Duration</th><th>Status</th><th>Action</th>
-          </tr>
+          <tr><th>Time</th><th>Direction</th><th>From</th><th>Duration</th><th>Status</th><th>Action</th></tr>
         </thead>
         <tbody id="calls-tbody">
           <tr><td colspan="6"><div class="empty"><div class="empty-icon">📞</div><h3>Loading...</h3></div></td></tr>
@@ -149,23 +180,20 @@
     </div>
   </div>
 
-  <!-- CONTACTS PAGE -->
-  <div id="page-contacts" class="page">
+  <!-- CRM REVIEW PAGE -->
+  <div id="page-crm" class="page">
     <div class="page-header">
       <div>
-        <div class="page-title">Contacts</div>
-        <div class="page-subtitle">Click call to connect through recorded bridge</div>
+        <div class="page-title">Contact Review</div>
+        <div class="page-subtitle">Verify and correct AI-extracted contact details before saving</div>
       </div>
       <div style="display:flex;gap:10px">
-        <button class="btn btn-ghost" onclick="openImport()">⬆ Import vCard</button>
-        <button class="btn btn-primary" onclick="openAddContact()">+ Add Contact</button>
+        <button class="btn btn-ghost" onclick="toggleShowVerified()"><span id="verified-toggle-label">Show verified</span></button>
+        <button class="btn btn-primary" onclick="refreshCRM()">↻ Refresh</button>
       </div>
     </div>
-    <div class="search-bar">
-      <input type="text" id="contact-search" placeholder="Search contacts..." oninput="filterContacts()">
-    </div>
-    <div class="contacts-grid" id="contacts-grid">
-      <div style="grid-column:1/-1"><div class="empty"><div class="empty-icon">👤</div><h3>No contacts yet</h3><p>Add manually or import from iCloud</p></div></div>
+    <div id="crm-list">
+      <div class="empty"><div class="empty-icon">⏳</div><h3>Loading...</h3></div>
     </div>
   </div>
 </main>
@@ -197,7 +225,7 @@
     </div>
     <div style="margin-bottom:16px">
       <label>Instruction for Agent</label>
-      <textarea id="detail-instruction" placeholder="e.g. Summarise and email to john@example.com · Book a follow up call for next Tuesday · Extract the property address and buyer budget"></textarea>
+      <textarea id="detail-instruction" placeholder="e.g. Summarise and email to john@example.com"></textarea>
     </div>
     <div style="margin-bottom:16px">
       <label>Status</label>
@@ -214,72 +242,11 @@
   </div>
 </div>
 
-<!-- ADD CONTACT MODAL -->
-<div class="modal-overlay" id="modal-contact">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">Add Contact</div>
-      <button class="close-btn" onclick="closeModal('modal-contact')">×</button>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>First Name</label><input type="text" id="c-first" placeholder="Jane"></div>
-      <div class="form-group"><label>Last Name</label><input type="text" id="c-last" placeholder="Smith"></div>
-    </div>
-    <div class="form-group"><label>Phone Number</label><input type="tel" id="c-phone" placeholder="+61400000000"></div>
-    <div class="form-group"><label>Company</label><input type="text" id="c-company" placeholder="Acme Pty Ltd"></div>
-    <div class="form-group"><label>Notes</label><textarea id="c-notes" placeholder="Any notes..."></textarea></div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-contact')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveContact()">Save Contact</button>
-    </div>
-  </div>
-</div>
-
-<!-- IMPORT MODAL -->
-<div class="modal-overlay" id="modal-import">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">Import iPhone Contacts</div>
-      <button class="close-btn" onclick="closeModal('modal-import')">×</button>
-    </div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
-      Go to iCloud.com → Contacts → Select All (Cmd+A) → Export vCard. Then upload the .vcf file below.
-    </p>
-    <div class="import-zone" onclick="document.getElementById('vcf-input').click()">
-      <div style="font-size:32px">📇</div>
-      <p>Click to select your .vcf file</p>
-      <input type="file" id="vcf-input" accept=".vcf" style="display:none" onchange="importVCard(this)">
-    </div>
-    <div id="import-result" style="font-size:13px;color:var(--green);display:none"></div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-import')">Close</button>
-    </div>
-  </div>
-</div>
-
-<!-- DIAL MODAL -->
-<div class="modal-overlay" id="modal-dial">
-  <div class="modal" style="max-width:400px">
-    <div class="modal-header">
-      <div class="modal-title">Start Recorded Call</div>
-      <button class="close-btn" onclick="closeModal('modal-dial')">×</button>
-    </div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
-      Calling <strong id="dial-name" style="color:var(--text)"></strong><br>
-      Your phone will ring first, then connect to them with recording running.
-    </p>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-dial')">Cancel</button>
-      <button class="btn btn-call" onclick="confirmDial()">📞 Start Call</button>
-    </div>
-  </div>
-</div>
-
 <script>
 const SUPABASE_URL = 'https://gpyprjesdrcjrhmmprqt.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdweXByamVzZHJjanJobW1wcnF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMjE1OTMsImV4cCI6MjA5NzY5NzU5M30.dzfJtYb4NQRJeiNiPre02xU0_v24ruf81P3EdDw3yCA';
 
-let allCalls = [], allContacts = [], currentCallId = null, pendingDial = null;
+let allCalls = [], allCRMCalls = [], currentCallId = null, showVerified = false;
 
 function showPage(name, btn) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -287,7 +254,7 @@ function showPage(name, btn) {
   document.getElementById('page-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'calls') refreshCalls();
-  if (name === 'contacts') renderContacts();
+  if (name === 'crm') refreshCRM();
 }
 
 async function supabaseFetch(path, method='GET', body=null) {
@@ -305,11 +272,14 @@ async function supabaseFetch(path, method='GET', body=null) {
   return res.json();
 }
 
+// ── CALLS PAGE ──────────────────────────────────────────────
+
 async function refreshCalls() {
   const data = await supabaseFetch('calls?order=recorded_at.desc&limit=200');
   allCalls = Array.isArray(data) ? data : [];
   updateStats();
   renderCalls(allCalls);
+  updateCRMBadge();
 }
 
 function updateStats() {
@@ -330,7 +300,7 @@ function renderCalls(calls) {
     <tr>
       <td style="color:var(--muted);font-size:12px">${formatTime(c.recorded_at)}</td>
       <td><span class="badge badge-${c.direction}">${c.direction === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
-      <td class="mono">${lookupName(c.from_number) || c.from_number || '—'}</td>
+      <td class="mono">${c.caller_name || c.from_number || '—'}</td>
       <td style="color:var(--muted)">${formatDur(c.duration)}</td>
       <td><span class="badge badge-${c.status}">${c.status}</span></td>
       <td><button class="btn btn-ghost btn-sm" onclick="openCall('${c.id}')">View →</button></td>
@@ -342,7 +312,7 @@ function filterCalls() {
   const q = document.getElementById('call-search').value.toLowerCase();
   const s = document.getElementById('status-filter').value;
   renderCalls(allCalls.filter(c => {
-    const mQ = !q || (c.from_number||'').includes(q) || (c.transcript||'').toLowerCase().includes(q);
+    const mQ = !q || (c.from_number||'').includes(q) || (c.transcript||'').toLowerCase().includes(q) || (c.caller_name||'').toLowerCase().includes(q);
     const mS = !s || c.status === s;
     return mQ && mS;
   }));
@@ -353,8 +323,7 @@ function openCall(id) {
   if (!c) return;
   currentCallId = id;
   document.getElementById('modal-call-title').textContent = `Call — ${formatTime(c.recorded_at)}`;
-  const name = lookupName(c.from_number);
-  document.getElementById('detail-from').textContent = name ? `${name} (${c.from_number})` : (c.from_number||'—');
+  document.getElementById('detail-from').textContent = c.caller_name ? `${c.caller_name} (${c.from_number})` : (c.from_number||'—');
   document.getElementById('detail-to').textContent = c.to_number || '—';
   document.getElementById('detail-duration').textContent = formatDur(c.duration);
   document.getElementById('detail-transcript').innerHTML = formatTranscript(c.transcript||'No transcript');
@@ -379,124 +348,160 @@ function formatTranscript(text) {
   }).join('\n');
 }
 
-function loadContacts() {
-  try { allContacts = JSON.parse(localStorage.getItem('ci_contacts')||'[]'); } catch { allContacts=[]; }
+// ── CRM REVIEW PAGE ─────────────────────────────────────────
+
+async function refreshCRM() {
+  const data = await supabaseFetch('calls?order=recorded_at.desc&limit=200&status=eq.complete');
+  allCRMCalls = (Array.isArray(data) ? data : []).filter(c => c.caller_name || c.caller_email || c.caller_company);
+  updateCRMBadge();
+  renderCRM();
 }
 
-function saveContacts() { localStorage.setItem('ci_contacts', JSON.stringify(allContacts)); }
-
-function lookupName(number) {
-  const c = allContacts.find(x => x.phone===number || x.phone===number?.replace('+61','0'));
-  return c ? `${c.first} ${c.last}`.trim() : null;
+function updateCRMBadge() {
+  const pending = allCRMCalls.filter(c => !c.crm_verified).length;
+  const badge = document.getElementById('crm-nav-badge');
+  if (pending > 0) {
+    badge.textContent = pending;
+    badge.className = 'crm-pending-badge';
+  } else {
+    badge.textContent = '✓';
+    badge.className = 'crm-pending-badge clear';
+  }
 }
 
-function renderContacts() {
-  loadContacts();
-  const q = (document.getElementById('contact-search')?.value||'').toLowerCase();
-  const filtered = allContacts.filter(c => !q || `${c.first} ${c.last} ${c.company} ${c.phone}`.toLowerCase().includes(q));
-  const grid = document.getElementById('contacts-grid');
-  if (!filtered.length) {
-    grid.innerHTML = `<div style="grid-column:1/-1"><div class="empty"><div class="empty-icon">👤</div><h3>No contacts yet</h3><p>Add manually or import from iCloud</p></div></div>`;
+function toggleShowVerified() {
+  showVerified = !showVerified;
+  document.getElementById('verified-toggle-label').textContent = showVerified ? 'Hide verified' : 'Show verified';
+  renderCRM();
+}
+
+function intentLabel(intent) {
+  const map = { schedule_meeting:'Meeting request', quote_request:'Quote', referral:'Referral', general_enquiry:'Enquiry', complaint:'Complaint', wrong_number:'Wrong number', other:'Other' };
+  return map[intent] || intent || '';
+}
+
+function renderCRM() {
+  const list = document.getElementById('crm-list');
+  const visible = showVerified ? allCRMCalls : allCRMCalls.filter(c => !c.crm_verified);
+
+  if (!visible.length) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">${showVerified ? '📭' : '✅'}</div><h3>${showVerified ? 'No calls with contact data yet' : 'All contacts reviewed'}</h3><p>${showVerified ? 'Calls with extracted contact info appear here' : 'Nothing pending — you\'re up to date'}</p></div>`;
     return;
   }
-  grid.innerHTML = filtered.map((c,i) => `
-    <div class="contact-card">
-      <div class="contact-name">${c.first} ${c.last}</div>
-      <div class="contact-company">${c.company||'—'}</div>
-      <div class="contact-number">${c.phone}</div>
-      <div class="contact-actions">
-        <button class="btn btn-call btn-sm" onclick="startDial(${allContacts.indexOf(c)})">📞 Call</button>
-        <button class="btn btn-ghost btn-sm" onclick="deleteContact(${allContacts.indexOf(c)})">Delete</button>
+
+  list.innerHTML = visible.map(c => {
+    const analysis = c.analysis || {};
+    const emailConf = analysis.caller?.email_confidence || null;
+    const emailFlagged = emailConf === 'low';
+    const isOpen = c._open || false;
+    const isVerified = c.crm_verified;
+
+    return `
+    <div class="crm-card ${isVerified ? 'verified' : ''} ${isOpen ? 'open' : ''}" data-id="${c.id}">
+      <div class="crm-card-header" onclick="toggleCRMCard('${c.id}')">
+        <div class="crm-status-dot ${isVerified ? 'verified' : ''}"></div>
+        <div style="flex:1;min-width:0">
+          <div class="crm-caller-line">
+            ${c.caller_name || c.from_number}
+            ${c.caller_company ? `<span style="color:var(--muted);font-weight:400">· ${c.caller_company}</span>` : ''}
+            ${c.intent ? `<span class="intent-pill">${intentLabel(c.intent)}</span>` : ''}
+          </div>
+          <div class="crm-summary">${c.summary || 'No summary'}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
+          <div style="font-size:11px;color:var(--muted)">${formatTime(c.recorded_at)}</div>
+          <div class="crm-expand">▾</div>
+        </div>
       </div>
-    </div>
-  `).join('');
+
+      <div class="crm-body">
+        <div class="crm-transcript-col">
+          <div class="crm-col-label">Transcript</div>
+          <div class="crm-transcript-snippet">${(c.transcript||'').replace(/</g,'&lt;')}</div>
+          <div style="margin-top:8px;font-size:11px;color:var(--muted)">${c.from_number} · ${formatDur(c.duration)}</div>
+          ${analysis.action ? `<div style="margin-top:10px;background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:6px;padding:10px;font-size:12px;color:var(--accent)">⚡ ${analysis.action}</div>` : ''}
+        </div>
+
+        <div class="crm-fields-col">
+          <div class="crm-col-label">Contact details</div>
+          ${isVerified ? `
+            <div class="crm-verified-stamp">✓ Verified</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.7">
+              ${c.caller_name || '—'}<br>
+              ${c.caller_company || '—'}<br>
+              ${c.caller_email || 'No email'}
+            </div>
+            <div class="crm-actions" style="margin-top:12px">
+              <button class="btn btn-ghost btn-sm" onclick="unverifyCard('${c.id}')">Edit</button>
+            </div>
+          ` : `
+            <div class="crm-field">
+              <label>Name <span class="conf-high">Confident</span></label>
+              <input type="text" id="crm-name-${c.id}" value="${c.caller_name || ''}" placeholder="Unknown">
+            </div>
+            <div class="crm-field">
+              <label>Company</label>
+              <input type="text" id="crm-company-${c.id}" value="${c.caller_company || ''}" placeholder="—">
+            </div>
+            <div class="crm-field">
+              <label>Email ${emailFlagged ? '<span class="conf-low">Check spelling</span>' : c.caller_email ? '<span class="conf-high">Confident</span>' : ''}</label>
+              <input type="email" id="crm-email-${c.id}" value="${c.caller_email || ''}" placeholder="—" class="${emailFlagged ? 'flagged' : ''}">
+            </div>
+            <div class="crm-field">
+              <label>Phone</label>
+              <input type="text" id="crm-phone-${c.id}" value="${c.from_number || ''}" placeholder="—">
+            </div>
+            <div class="crm-actions">
+              <button class="btn btn-success btn-sm" onclick="verifyCard('${c.id}')">Save contact</button>
+              <button class="btn btn-ghost btn-sm" onclick="dismissCard('${c.id}')">No contact</button>
+            </div>
+          `}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
-function filterContacts() { renderContacts(); }
-
-function openAddContact() {
-  ['c-first','c-last','c-phone','c-company','c-notes'].forEach(id => document.getElementById(id).value='');
-  openModal('modal-contact');
+function toggleCRMCard(id) {
+  const c = allCRMCalls.find(x => x.id === id);
+  if (c) { c._open = !c._open; renderCRM(); }
 }
 
-function saveContact() {
-  loadContacts();
-  const phone = document.getElementById('c-phone').value.trim();
-  if (!phone) return alert('Phone number required');
-  allContacts.push({
-    first: document.getElementById('c-first').value.trim(),
-    last:  document.getElementById('c-last').value.trim(),
-    phone,
-    company: document.getElementById('c-company').value.trim(),
-    notes:   document.getElementById('c-notes').value.trim(),
-  });
-  saveContacts();
-  closeModal('modal-contact');
-  renderContacts();
-}
-
-function deleteContact(i) {
-  loadContacts();
-  if (!confirm('Delete this contact?')) return;
-  allContacts.splice(i,1);
-  saveContacts();
-  renderContacts();
-}
-
-function startDial(i) {
-  loadContacts();
-  pendingDial = allContacts[i];
-  if (!pendingDial) return;
-  document.getElementById('dial-name').textContent = `${pendingDial.first} ${pendingDial.last} (${pendingDial.phone})`;
-  openModal('modal-dial');
-}
-
-async function confirmDial() {
-  if (!pendingDial) return;
-  try {
-    await fetch('/call/initiate', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ to: pendingDial.phone })
-    });
-    closeModal('modal-dial');
-    alert('📞 Your phone will ring shortly — answer to connect');
-  } catch {
-    alert('Could not initiate call. Check server is running.');
-  }
-}
-
-function openImport() { openModal('modal-import'); }
-
-function importVCard(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    const text = e.target.result;
-    const cards = text.split(/BEGIN:VCARD/i).slice(1);
-    loadContacts();
-    let added = 0;
-    cards.forEach(card => {
-      const get = f => { const m=card.match(new RegExp(f+'[^:]*:(.+)','i')); return m?m[1].trim():''; };
-      const n = get('N').split(';');
-      const last=n[0]||'', first=n[1]||'';
-      const org = get('ORG').replace(/;/g,' ').trim();
-      const telM = card.match(/TEL[^:]*:([+\d\s\-().]+)/i);
-      const phone = telM ? telM[1].replace(/\s/g,'').trim() : '';
-      if (!phone||(!first&&!last)) return;
-      if (allContacts.find(c=>c.phone===phone)) return;
-      allContacts.push({first:first.trim(),last:last.trim(),phone,company:org,notes:''});
-      added++;
-    });
-    saveContacts();
-    const r = document.getElementById('import-result');
-    r.style.display='block';
-    r.textContent=`✅ Imported ${added} contacts`;
-    renderContacts();
+async function verifyCard(id) {
+  const c = allCRMCalls.find(x => x.id === id);
+  if (!c) return;
+  const updates = {
+    caller_name:    document.getElementById(`crm-name-${id}`)?.value || c.caller_name,
+    caller_company: document.getElementById(`crm-company-${id}`)?.value || c.caller_company,
+    caller_email:   document.getElementById(`crm-email-${id}`)?.value || c.caller_email,
+    from_number:    document.getElementById(`crm-phone-${id}`)?.value || c.from_number,
+    crm_verified:   true,
+    crm_verified_at: new Date().toISOString(),
   };
-  reader.readAsText(file);
+  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', updates);
+  Object.assign(c, updates);
+  c._open = false;
+  updateCRMBadge();
+  renderCRM();
 }
+
+async function dismissCard(id) {
+  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', { crm_verified: true, crm_verified_at: new Date().toISOString() });
+  const c = allCRMCalls.find(x => x.id === id);
+  if (c) { c.crm_verified = true; c._open = false; }
+  updateCRMBadge();
+  renderCRM();
+}
+
+async function unverifyCard(id) {
+  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', { crm_verified: false });
+  const c = allCRMCalls.find(x => x.id === id);
+  if (c) { c.crm_verified = false; c._open = true; }
+  updateCRMBadge();
+  renderCRM();
+}
+
+// ── UTILS ────────────────────────────────────────────────────
 
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -516,7 +521,6 @@ function formatDur(s) {
   return m>0?`${m}m ${r}s`:`${s}s`;
 }
 
-loadContacts();
 refreshCalls();
 </script>
 </body>
