@@ -12,11 +12,12 @@
     --text:#e2e8f0; --muted:#64748b; --accent:#3b82f6; --accent2:#1d4ed8;
     --green:#10b981; --amber:#f59e0b; --red:#ef4444; --mono:'JetBrains Mono',monospace;
   }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; }
-  header { display:flex; align-items:center; justify-content:space-between; padding:0 32px; height:56px; background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100; }
-  .logo { font-size:13px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); }
+  header { display:flex; align-items:center; justify-content:space-between; padding:0 32px; height:56px; background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100; flex-shrink:0; }
+  .logo { font-size:13px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); white-space:nowrap; }
   nav { display:flex; gap:4px; }
-  nav button { background:none; border:none; color:var(--muted); font-family:inherit; font-size:13px; font-weight:500; padding:6px 14px; border-radius:6px; cursor:pointer; transition:all 0.15s; }
+  nav button { background:none; border:none; color:var(--muted); font-family:inherit; font-size:13px; font-weight:500; padding:6px 14px; border-radius:6px; cursor:pointer; transition:all 0.15s; white-space:nowrap; }
   nav button:hover { color:var(--text); background:var(--border); }
   nav button.active { color:var(--text); background:var(--border2); }
   .header-right { display:flex; align-items:center; gap:12px; }
@@ -25,10 +26,11 @@
   main { flex:1; padding:28px 32px; max-width:1200px; width:100%; margin:0 auto; }
   .page { display:none; }
   .page.active { display:block; }
-  .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
+  .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; flex-wrap:wrap; gap:12px; }
   .page-title { font-size:20px; font-weight:600; }
   .page-subtitle { font-size:13px; color:var(--muted); margin-top:2px; }
-  .btn { display:inline-flex; align-items:center; gap:7px; padding:8px 16px; border-radius:7px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; border:none; transition:all 0.15s; }
+  .section-title { font-size:15px; font-weight:600; margin-bottom:14px; display:flex; align-items:center; gap:10px; }
+  .btn { display:inline-flex; align-items:center; gap:7px; padding:8px 16px; border-radius:7px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; border:none; transition:all 0.15s; white-space:nowrap; }
   .btn-primary { background:var(--accent); color:#fff; }
   .btn-primary:hover { background:var(--accent2); }
   .btn-ghost { background:var(--border); color:var(--text); }
@@ -38,31 +40,39 @@
   .btn-call:hover { background:#0f3d22; }
   .btn-success { background:#0d2d1a; color:var(--green); border:1px solid #1a4d2e; }
   .btn-success:hover { background:#0f3d22; }
-  .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
-  table { width:100%; border-collapse:collapse; }
-  thead th { text-align:left; font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); }
+  .btn-warn { background:rgba(245,158,11,0.1); color:var(--amber); border:1px solid rgba(245,158,11,0.25); }
+
+  /* scrollable table wrapper */
+  .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:auto; max-height:60vh; }
+  table { width:100%; border-collapse:collapse; min-width:600px; }
+  thead th { text-align:left; font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); position:sticky; top:0; z-index:2; }
   tbody tr { border-bottom:1px solid var(--border); transition:background 0.1s; }
   tbody tr:last-child { border-bottom:none; }
   tbody tr:hover { background:rgba(59,130,246,0.04); }
-  td { padding:13px 16px; font-size:13px; vertical-align:middle; }
+  td { padding:13px 16px; font-size:13px; vertical-align:middle; white-space:nowrap; }
+  td.wrap { white-space:normal; }
+
   .mono { font-family:var(--mono); font-size:12px; }
   .badge { display:inline-flex; align-items:center; padding:3px 8px; border-radius:4px; font-size:11px; font-weight:500; }
   .badge-new { background:#0d1f3a; color:#60a5fa; }
   .badge-reviewed { background:#1a1a0d; color:var(--amber); }
   .badge-actioned { background:#0d2d1a; color:var(--green); }
   .badge-complete { background:#0d2d1a; color:var(--green); }
+  .badge-error { background:#2d0d0d; color:var(--red); }
   .badge-inbound { background:#1a0d2d; color:#a78bfa; }
   .badge-outbound { background:#0d1f1a; color:#34d399; }
-  .empty { text-align:center; padding:64px 32px; color:var(--muted); }
+
+  .empty { text-align:center; padding:48px 32px; color:var(--muted); }
   .empty-icon { font-size:36px; margin-bottom:12px; }
   .empty h3 { font-size:15px; font-weight:500; color:var(--text); margin-bottom:6px; }
   .empty p { font-size:13px; }
-  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:200; align-items:center; justify-content:center; backdrop-filter:blur(4px); }
+
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:200; align-items:center; justify-content:center; backdrop-filter:blur(4px); padding:16px; }
   .modal-overlay.open { display:flex; }
-  .modal { background:var(--surface); border:1px solid var(--border2); border-radius:12px; width:100%; max-width:580px; max-height:85vh; overflow-y:auto; padding:28px; }
+  .modal { background:var(--surface); border:1px solid var(--border2); border-radius:12px; width:100%; max-width:580px; max-height:90vh; overflow-y:auto; padding:28px; }
   .modal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
   .modal-title { font-size:16px; font-weight:600; }
-  .close-btn { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; line-height:1; padding:4px; }
+  .close-btn { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; line-height:1; padding:4px; flex-shrink:0; }
   .close-btn:hover { color:var(--text); }
   .form-group { margin-bottom:16px; }
   label { display:block; font-size:12px; font-weight:500; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.05em; }
@@ -70,10 +80,12 @@
   input:focus,textarea:focus,select:focus { border-color:var(--accent); }
   textarea { resize:vertical; min-height:80px; }
   .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .modal-footer { display:flex; gap:10px; justify-content:flex-end; margin-top:24px; }
-  .transcript-box { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:16px; font-family:var(--mono); font-size:12px; line-height:1.7; color:var(--text); max-height:300px; overflow-y:auto; white-space:pre-wrap; margin-bottom:16px; }
+  .modal-footer { display:flex; gap:10px; justify-content:flex-end; margin-top:24px; flex-wrap:wrap; }
+
+  .transcript-box { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:16px; font-family:var(--mono); font-size:12px; line-height:1.7; color:var(--text); max-height:220px; overflow-y:auto; white-space:pre-wrap; margin-bottom:16px; }
   .speaker-0 { color:#60a5fa; }
   .speaker-1 { color:#34d399; }
+
   .stats-bar { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:28px; }
   .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; }
   .stat-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px; }
@@ -81,51 +93,53 @@
   .stat-value.accent { color:var(--accent); }
   .stat-value.green { color:var(--green); }
   .stat-value.amber { color:var(--amber); }
-  .search-bar { display:flex; gap:10px; margin-bottom:16px; align-items:center; }
-  .search-bar input { max-width:300px; }
-  .contacts-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
-  .contact-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px; transition:border-color 0.15s; }
-  .contact-card:hover { border-color:var(--border2); }
-  .contact-name { font-size:14px; font-weight:600; margin-bottom:3px; }
-  .contact-company { font-size:12px; color:var(--muted); margin-bottom:10px; }
-  .contact-number { font-family:var(--mono); font-size:12px; color:var(--accent); margin-bottom:14px; }
-  .contact-actions { display:flex; gap:8px; }
-  .import-zone { border:2px dashed var(--border2); border-radius:10px; padding:40px; text-align:center; cursor:pointer; transition:all 0.15s; margin-bottom:20px; }
-  .import-zone:hover { border-color:var(--accent); background:rgba(59,130,246,0.04); }
-  .import-zone p { color:var(--muted); font-size:13px; margin-top:8px; }
 
-  /* ── CRM Review styles ── */
-  .crm-pending-badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; margin-left:8px; background:rgba(245,158,11,0.15); color:var(--amber); border:1px solid rgba(245,158,11,0.25); }
+  .search-bar { display:flex; gap:10px; margin-bottom:16px; align-items:center; flex-wrap:wrap; }
+  .search-bar input { max-width:300px; flex:1; min-width:160px; }
+
+  /* CRM Review */
+  .crm-pending-badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; margin-left:6px; background:rgba(245,158,11,0.15); color:var(--amber); border:1px solid rgba(245,158,11,0.25); }
   .crm-pending-badge.clear { background:rgba(16,185,129,0.1); color:var(--green); border-color:rgba(16,185,129,0.25); }
-  .crm-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; margin-bottom:10px; overflow:hidden; transition:border-color 0.15s; }
-  .crm-card:hover { border-color:var(--border2); }
+
+  .crm-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; margin-bottom:10px; overflow:hidden; }
   .crm-card.verified { border-color:rgba(16,185,129,0.2); }
   .crm-card-header { display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer; user-select:none; }
   .crm-status-dot { width:7px; height:7px; border-radius:50%; background:var(--amber); flex-shrink:0; }
   .crm-status-dot.verified { background:var(--green); }
   .crm-caller-line { font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .crm-summary { font-size:12px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:500px; }
+  .crm-summary { font-size:12px; color:var(--muted); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:460px; }
   .intent-pill { font-size:10px; font-weight:500; padding:2px 7px; border-radius:4px; background:rgba(59,130,246,0.12); color:var(--accent); border:1px solid rgba(59,130,246,0.2); text-transform:uppercase; letter-spacing:0.04em; }
   .crm-expand { color:var(--muted); font-size:16px; transition:transform 0.2s; flex-shrink:0; }
   .crm-card.open .crm-expand { transform:rotate(180deg); }
   .crm-body { display:none; border-top:1px solid var(--border); padding:18px 16px; gap:18px; }
-  .crm-card.open .crm-body { display:flex; }
-  .crm-transcript-col { flex:1; min-width:0; }
+  .crm-card.open .crm-body { display:flex; flex-wrap:wrap; }
+  .crm-transcript-col { flex:1; min-width:220px; }
   .crm-col-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:8px; }
   .crm-transcript-snippet { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:12px; font-family:var(--mono); font-size:11px; line-height:1.6; color:var(--muted); max-height:130px; overflow-y:auto; white-space:pre-wrap; }
-  .crm-fields-col { width:270px; flex-shrink:0; }
+  .crm-fields-col { width:270px; flex-shrink:0; min-width:220px; }
   .crm-field { margin-bottom:10px; }
-  .crm-field label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); margin-bottom:4px; display:flex; align-items:center; gap:5px; }
-  .conf-high { font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(16,185,129,0.1); color:var(--green); font-weight:500; }
-  .conf-low  { font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(245,158,11,0.1); color:var(--amber); font-weight:500; }
+  .crm-field label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); margin-bottom:4px; display:flex; align-items:center; gap:5px; text-transform:uppercase; }
+  .conf-high { font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(16,185,129,0.1); color:var(--green); font-weight:500; text-transform:none; letter-spacing:0; }
+  .conf-low  { font-size:9px; padding:1px 5px; border-radius:3px; background:rgba(245,158,11,0.1); color:var(--amber); font-weight:500; text-transform:none; letter-spacing:0; }
   .crm-field input { padding:7px 10px; font-size:12px; }
   .crm-field input.flagged { border-color:var(--amber); background:rgba(245,158,11,0.05); }
-  .crm-actions { display:flex; gap:8px; margin-top:4px; }
+  .crm-actions { display:flex; gap:8px; margin-top:4px; flex-wrap:wrap; }
   .crm-verified-stamp { font-size:12px; color:var(--green); display:flex; align-items:center; gap:5px; padding:6px 0; }
+  .action-hint { margin-top:10px; background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.15); border-radius:6px; padding:10px; font-size:12px; color:var(--accent); }
 
-  ::-webkit-scrollbar { width:6px; }
+  /* Verified contacts table section */
+  .section-divider { border:none; border-top:1px solid var(--border); margin:32px 0 24px; }
+
+  ::-webkit-scrollbar { width:5px; height:5px; }
   ::-webkit-scrollbar-track { background:transparent; }
   ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+
+  @media (max-width: 640px) {
+    main { padding:16px; }
+    header { padding:0 16px; }
+    .stats-bar { grid-template-columns:1fr 1fr; }
+    .form-row { grid-template-columns:1fr; }
+  }
 </style>
 </head>
 <body>
@@ -134,7 +148,7 @@
   <div class="logo">⚡ Call Intelligence</div>
   <nav>
     <button class="active" onclick="showPage('calls',this)">Calls</button>
-    <button onclick="showPage('crm',this)">Contacts <span class="crm-pending-badge" id="crm-nav-badge"></span></button>
+    <button onclick="showPage('contacts',this)">Contacts <span class="crm-pending-badge" id="crm-nav-badge"></span></button>
   </nav>
   <div class="header-right">
     <div class="status-dot"></div>
@@ -143,12 +157,13 @@
 </header>
 
 <main>
-  <!-- CALLS PAGE -->
+
+  <!-- ── CALLS PAGE ── -->
   <div id="page-calls" class="page active">
     <div class="page-header">
       <div>
         <div class="page-title">Call Log</div>
-        <div class="page-subtitle">Every recorded call, automatically logged</div>
+        <div class="page-subtitle">Every recorded call, automatically transcribed and analysed</div>
       </div>
       <button class="btn btn-primary" onclick="refreshCalls()">↻ Refresh</button>
     </div>
@@ -159,43 +174,68 @@
       <div class="stat-card"><div class="stat-label">Avg Duration</div><div class="stat-value amber" id="stat-duration">—</div></div>
     </div>
     <div class="search-bar">
-      <input type="text" id="call-search" placeholder="Search by number or transcript..." oninput="filterCalls()">
-      <select id="status-filter" onchange="filterCalls()" style="max-width:140px">
+      <input type="text" id="call-search" placeholder="Search number, name, transcript…" oninput="filterCalls()">
+      <select id="status-filter" onchange="filterCalls()" style="max-width:140px;flex:none">
         <option value="">All status</option>
         <option value="new">New</option>
+        <option value="complete">Complete</option>
         <option value="reviewed">Reviewed</option>
         <option value="actioned">Actioned</option>
-        <option value="complete">Complete</option>
       </select>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Time</th><th>Direction</th><th>From</th><th>Duration</th><th>Status</th><th>Action</th></tr>
+          <tr><th>Time</th><th>Direction</th><th>From</th><th>Summary</th><th>Duration</th><th>Status</th><th></th></tr>
         </thead>
         <tbody id="calls-tbody">
-          <tr><td colspan="6"><div class="empty"><div class="empty-icon">📞</div><h3>Loading...</h3></div></td></tr>
+          <tr><td colspan="7"><div class="empty"><div class="empty-icon">📞</div><h3>Loading…</h3></div></td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- CRM REVIEW PAGE -->
-  <div id="page-crm" class="page">
+  <!-- ── CONTACTS PAGE ── -->
+  <div id="page-contacts" class="page">
     <div class="page-header">
       <div>
-        <div class="page-title">Contact Review</div>
-        <div class="page-subtitle">Verify and correct AI-extracted contact details before saving</div>
+        <div class="page-title">Contacts</div>
+        <div class="page-subtitle">Review AI-extracted contacts, then call or email directly</div>
       </div>
-      <div style="display:flex;gap:10px">
-        <button class="btn btn-ghost" onclick="toggleShowVerified()"><span id="verified-toggle-label">Show verified</span></button>
-        <button class="btn btn-primary" onclick="refreshCRM()">↻ Refresh</button>
-      </div>
+      <button class="btn btn-primary" onclick="refreshContacts()">↻ Refresh</button>
     </div>
-    <div id="crm-list">
-      <div class="empty"><div class="empty-icon">⏳</div><h3>Loading...</h3></div>
+
+    <!-- Review queue -->
+    <div class="section-title">
+      To review <span class="crm-pending-badge" id="crm-section-badge"></span>
+    </div>
+    <div id="crm-review-list">
+      <div class="empty"><div class="empty-icon">⏳</div><h3>Loading…</h3></div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- Verified contacts table -->
+    <div class="section-title" style="margin-bottom:14px">
+      Saved contacts
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('vcf-bulk-input').click()">⬆ Import contacts</button>
+      <input type="file" id="vcf-bulk-input" accept=".vcf,text/vcard" style="display:none" onchange="importBulkVCard(this)">
+    </div>
+    <div class="search-bar">
+      <input type="text" id="contact-search" placeholder="Search saved contacts…" oninput="renderVerifiedContacts()">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Company</th><th>Phone</th><th>Email</th><th>Intent</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="contacts-tbody">
+          <tr><td colspan="6"><div class="empty"><div class="empty-icon">👤</div><h3>No saved contacts yet</h3><p>Verify contacts from the review queue above</p></div></td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
+
 </main>
 
 <!-- CALL DETAIL MODAL -->
@@ -225,7 +265,7 @@
     </div>
     <div style="margin-bottom:16px">
       <label>Instruction for Agent</label>
-      <textarea id="detail-instruction" placeholder="e.g. Summarise and email to john@example.com"></textarea>
+      <textarea id="detail-instruction" placeholder="e.g. Summarise and email to client · Book follow-up call"></textarea>
     </div>
     <div style="margin-bottom:16px">
       <label>Status</label>
@@ -242,21 +282,41 @@
   </div>
 </div>
 
+<!-- DIAL MODAL -->
+<div class="modal-overlay" id="modal-dial">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <div class="modal-title">Start Recorded Call</div>
+      <button class="close-btn" onclick="closeModal('modal-dial')">×</button>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
+      Calling <strong id="dial-name" style="color:var(--text)"></strong><br>
+      Your phone will ring first, then connect with recording running.
+    </p>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-dial')">Cancel</button>
+      <button class="btn btn-call" onclick="confirmDial()">📞 Start Call</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const SUPABASE_URL = 'https://gpyprjesdrcjrhmmprqt.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdweXByamVzZHJjanJobW1wcnF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMjE1OTMsImV4cCI6MjA5NzY5NzU5M30.dzfJtYb4NQRJeiNiPre02xU0_v24ruf81P3EdDw3yCA';
 
-let allCalls = [], allCRMCalls = [], currentCallId = null, showVerified = false;
+let allCalls = [], allCRMCalls = [], currentCallId = null, pendingDialNumber = null, pendingDialName = null;
 
+// ── PAGE NAV ────────────────────────────────────────────────
 function showPage(name, btn) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'calls') refreshCalls();
-  if (name === 'crm') refreshCRM();
+  if (name === 'contacts') refreshContacts();
 }
 
+// ── SUPABASE ────────────────────────────────────────────────
 async function supabaseFetch(path, method='GET', body=null) {
   const opts = {
     method,
@@ -269,50 +329,53 @@ async function supabaseFetch(path, method='GET', body=null) {
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
+  if (!res.ok) { console.error('Supabase error', res.status, await res.text()); return null; }
   return res.json();
 }
 
 // ── CALLS PAGE ──────────────────────────────────────────────
-
 async function refreshCalls() {
+  document.getElementById('calls-tbody').innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">⏳</div><h3>Loading…</h3></div></td></tr>';
   const data = await supabaseFetch('calls?order=recorded_at.desc&limit=200');
   allCalls = Array.isArray(data) ? data : [];
   updateStats();
-  renderCalls(allCalls);
-  updateCRMBadge();
+  filterCalls();
+  updateCRMBadge(allCalls);
 }
 
 function updateStats() {
   document.getElementById('stat-total').textContent = allCalls.length;
   document.getElementById('stat-new').textContent = allCalls.filter(c => c.status === 'new').length;
   document.getElementById('stat-actioned').textContent = allCalls.filter(c => c.status === 'actioned').length;
-  const avg = allCalls.length ? Math.round(allCalls.reduce((s,c) => s+(c.duration||0),0)/allCalls.length) : 0;
+  const withDur = allCalls.filter(c => c.duration > 0);
+  const avg = withDur.length ? Math.round(withDur.reduce((s,c) => s+c.duration,0)/withDur.length) : 0;
   document.getElementById('stat-duration').textContent = formatDur(avg);
 }
 
 function renderCalls(calls) {
   const tbody = document.getElementById('calls-tbody');
   if (!calls.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><div class="empty-icon">📞</div><h3>No calls yet</h3><p>Calls appear here automatically after recording</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty"><div class="empty-icon">📞</div><h3>No calls yet</h3><p>Calls appear here automatically after recording</p></div></td></tr>`;
     return;
   }
   tbody.innerHTML = calls.map(c => `
     <tr>
       <td style="color:var(--muted);font-size:12px">${formatTime(c.recorded_at)}</td>
-      <td><span class="badge badge-${c.direction}">${c.direction === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
+      <td><span class="badge badge-${c.direction||'inbound'}">${c.direction === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
       <td class="mono">${c.caller_name || c.from_number || '—'}</td>
+      <td class="wrap" style="max-width:280px;font-size:12px;color:var(--muted)">${c.summary ? c.summary.slice(0,80)+(c.summary.length>80?'…':'') : '—'}</td>
       <td style="color:var(--muted)">${formatDur(c.duration)}</td>
-      <td><span class="badge badge-${c.status}">${c.status}</span></td>
+      <td><span class="badge badge-${c.status||'new'}">${c.status||'new'}</span></td>
       <td><button class="btn btn-ghost btn-sm" onclick="openCall('${c.id}')">View →</button></td>
     </tr>
   `).join('');
 }
 
 function filterCalls() {
-  const q = document.getElementById('call-search').value.toLowerCase();
+  const q = (document.getElementById('call-search').value||'').toLowerCase();
   const s = document.getElementById('status-filter').value;
   renderCalls(allCalls.filter(c => {
-    const mQ = !q || (c.from_number||'').includes(q) || (c.transcript||'').toLowerCase().includes(q) || (c.caller_name||'').toLowerCase().includes(q);
+    const mQ = !q || (c.from_number||'').includes(q) || (c.transcript||'').toLowerCase().includes(q) || (c.caller_name||'').toLowerCase().includes(q) || (c.summary||'').toLowerCase().includes(q);
     const mS = !s || c.status === s;
     return mQ && mS;
   }));
@@ -348,58 +411,47 @@ function formatTranscript(text) {
   }).join('\n');
 }
 
-// ── CRM REVIEW PAGE ─────────────────────────────────────────
-
-async function refreshCRM() {
-  const data = await supabaseFetch('calls?order=recorded_at.desc&limit=200&status=eq.complete');
+// ── CONTACTS PAGE ────────────────────────────────────────────
+async function refreshContacts() {
+  document.getElementById('crm-review-list').innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><h3>Loading…</h3></div>';
+  const data = await supabaseFetch('calls?order=recorded_at.desc&limit=300');
   allCRMCalls = (Array.isArray(data) ? data : []).filter(c => c.caller_name || c.caller_email || c.caller_company);
-  updateCRMBadge();
-  renderCRM();
+  updateCRMBadge(Array.isArray(data) ? data : []);
+  renderCRMReview();
+  renderVerifiedContacts();
 }
 
-function updateCRMBadge() {
-  const pending = allCRMCalls.filter(c => !c.crm_verified).length;
-  const badge = document.getElementById('crm-nav-badge');
-  if (pending > 0) {
-    badge.textContent = pending;
-    badge.className = 'crm-pending-badge';
-  } else {
-    badge.textContent = '✓';
-    badge.className = 'crm-pending-badge clear';
-  }
-}
-
-function toggleShowVerified() {
-  showVerified = !showVerified;
-  document.getElementById('verified-toggle-label').textContent = showVerified ? 'Hide verified' : 'Show verified';
-  renderCRM();
+function updateCRMBadge(calls) {
+  const pending = (calls||allCRMCalls).filter(c => (c.caller_name||c.caller_email||c.caller_company) && !c.crm_verified).length;
+  ['crm-nav-badge','crm-section-badge'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (pending > 0) { el.textContent = pending; el.className = 'crm-pending-badge'; }
+    else { el.textContent = '✓'; el.className = 'crm-pending-badge clear'; }
+  });
 }
 
 function intentLabel(intent) {
-  const map = { schedule_meeting:'Meeting request', quote_request:'Quote', referral:'Referral', general_enquiry:'Enquiry', complaint:'Complaint', wrong_number:'Wrong number', other:'Other' };
+  const map = { schedule_meeting:'Meeting', quote_request:'Quote', referral:'Referral', general_enquiry:'Enquiry', complaint:'Complaint', wrong_number:'Wrong #', other:'Other' };
   return map[intent] || intent || '';
 }
 
-function renderCRM() {
-  const list = document.getElementById('crm-list');
-  const visible = showVerified ? allCRMCalls : allCRMCalls.filter(c => !c.crm_verified);
-
-  if (!visible.length) {
-    list.innerHTML = `<div class="empty"><div class="empty-icon">${showVerified ? '📭' : '✅'}</div><h3>${showVerified ? 'No calls with contact data yet' : 'All contacts reviewed'}</h3><p>${showVerified ? 'Calls with extracted contact info appear here' : 'Nothing pending — you\'re up to date'}</p></div>`;
+function renderCRMReview() {
+  const list = document.getElementById('crm-review-list');
+  const pending = allCRMCalls.filter(c => !c.crm_verified);
+  if (!pending.length) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">✅</div><h3>All contacts reviewed</h3><p>Nothing pending — you're up to date</p></div>`;
     return;
   }
-
-  list.innerHTML = visible.map(c => {
+  list.innerHTML = pending.map(c => {
     const analysis = c.analysis || {};
     const emailConf = analysis.caller?.email_confidence || null;
     const emailFlagged = emailConf === 'low';
     const isOpen = c._open || false;
-    const isVerified = c.crm_verified;
-
     return `
-    <div class="crm-card ${isVerified ? 'verified' : ''} ${isOpen ? 'open' : ''}" data-id="${c.id}">
+    <div class="crm-card ${isOpen ? 'open' : ''}" data-id="${c.id}">
       <div class="crm-card-header" onclick="toggleCRMCard('${c.id}')">
-        <div class="crm-status-dot ${isVerified ? 'verified' : ''}"></div>
+        <div class="crm-status-dot"></div>
         <div style="flex:1;min-width:0">
           <div class="crm-caller-line">
             ${c.caller_name || c.from_number}
@@ -413,58 +465,104 @@ function renderCRM() {
           <div class="crm-expand">▾</div>
         </div>
       </div>
-
       <div class="crm-body">
         <div class="crm-transcript-col">
           <div class="crm-col-label">Transcript</div>
           <div class="crm-transcript-snippet">${(c.transcript||'').replace(/</g,'&lt;')}</div>
           <div style="margin-top:8px;font-size:11px;color:var(--muted)">${c.from_number} · ${formatDur(c.duration)}</div>
-          ${analysis.action ? `<div style="margin-top:10px;background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:6px;padding:10px;font-size:12px;color:var(--accent)">⚡ ${analysis.action}</div>` : ''}
+          ${analysis.action ? `<div class="action-hint">⚡ ${analysis.action}</div>` : ''}
         </div>
-
         <div class="crm-fields-col">
           <div class="crm-col-label">Contact details</div>
-          ${isVerified ? `
-            <div class="crm-verified-stamp">✓ Verified</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.7">
-              ${c.caller_name || '—'}<br>
-              ${c.caller_company || '—'}<br>
-              ${c.caller_email || 'No email'}
-            </div>
-            <div class="crm-actions" style="margin-top:12px">
-              <button class="btn btn-ghost btn-sm" onclick="unverifyCard('${c.id}')">Edit</button>
-            </div>
-          ` : `
-            <div class="crm-field">
-              <label>Name <span class="conf-high">Confident</span></label>
-              <input type="text" id="crm-name-${c.id}" value="${c.caller_name || ''}" placeholder="Unknown">
-            </div>
-            <div class="crm-field">
-              <label>Company</label>
-              <input type="text" id="crm-company-${c.id}" value="${c.caller_company || ''}" placeholder="—">
-            </div>
-            <div class="crm-field">
-              <label>Email ${emailFlagged ? '<span class="conf-low">Check spelling</span>' : c.caller_email ? '<span class="conf-high">Confident</span>' : ''}</label>
-              <input type="email" id="crm-email-${c.id}" value="${c.caller_email || ''}" placeholder="—" class="${emailFlagged ? 'flagged' : ''}">
-            </div>
-            <div class="crm-field">
-              <label>Phone</label>
-              <input type="text" id="crm-phone-${c.id}" value="${c.from_number || ''}" placeholder="—">
-            </div>
-            <div class="crm-actions">
-              <button class="btn btn-success btn-sm" onclick="verifyCard('${c.id}')">Save contact</button>
-              <button class="btn btn-ghost btn-sm" onclick="dismissCard('${c.id}')">No contact</button>
-            </div>
-          `}
+          <div class="crm-field">
+            <label>Name <span class="conf-high">AI extracted</span></label>
+            <input type="text" id="crm-name-${c.id}" value="${esc(c.caller_name)}" placeholder="Unknown">
+          </div>
+          <div class="crm-field">
+            <label>Company</label>
+            <input type="text" id="crm-company-${c.id}" value="${esc(c.caller_company)}" placeholder="—">
+          </div>
+          <div class="crm-field">
+            <label>Email ${emailFlagged ? '<span class="conf-low">Check spelling</span>' : c.caller_email ? '<span class="conf-high">Confident</span>' : ''}</label>
+            <input type="email" id="crm-email-${c.id}" value="${esc(c.caller_email)}" placeholder="—" class="${emailFlagged ? 'flagged' : ''}">
+          </div>
+          <div class="crm-field">
+            <label>Phone</label>
+            <input type="text" id="crm-phone-${c.id}" value="${esc(c.from_number)}" placeholder="—">
+          </div>
+          <div style="margin-bottom:10px">
+            <button class="btn btn-warn btn-sm" onclick="document.getElementById('vcf-input-${c.id}').click()">📇 Pick from contacts</button>
+            <input type="file" id="vcf-input-${c.id}" accept=".vcf,text/vcard" style="display:none" onchange="pickContact(this,'${c.id}')">
+            <div style="font-size:11px;color:var(--muted);margin-top:5px">Opens your phone's contact picker</div>
+          </div>
+          <div class="crm-actions">
+            <button class="btn btn-success btn-sm" onclick="verifyCard('${c.id}')">Save contact</button>
+            <button class="btn btn-ghost btn-sm" onclick="dismissCard('${c.id}')">No contact</button>
+          </div>
         </div>
       </div>
     </div>`;
   }).join('');
 }
 
+function renderVerifiedContacts() {
+  const q = (document.getElementById('contact-search')?.value||'').toLowerCase();
+  const verified = allCRMCalls.filter(c => c.crm_verified && (c.caller_name||c.caller_email||c.caller_company));
+  const filtered = verified.filter(c => !q ||
+    (c.caller_name||'').toLowerCase().includes(q) ||
+    (c.caller_company||'').toLowerCase().includes(q) ||
+    (c.caller_email||'').toLowerCase().includes(q) ||
+    (c.from_number||'').includes(q)
+  );
+  const tbody = document.getElementById('contacts-tbody');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><div class="empty-icon">👤</div><h3>No saved contacts yet</h3><p>Verify contacts from the review queue above</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map(c => `
+    <tr>
+      <td style="font-weight:500">${c.caller_name || '—'}</td>
+      <td style="color:var(--muted)">${c.caller_company || '—'}</td>
+      <td class="mono">${c.from_number || '—'}</td>
+      <td style="color:var(--muted)">${c.caller_email || '—'}</td>
+      <td>${c.intent ? `<span class="intent-pill">${intentLabel(c.intent)}</span>` : '—'}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-call btn-sm" onclick="startDial('${c.from_number}','${esc(c.caller_name)}')">📞 Call</button>
+          ${c.caller_email ? `<a href="mailto:${c.caller_email}" class="btn btn-ghost btn-sm">✉ Email</a>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="unverifyCard('${c.id}')">Edit</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
 function toggleCRMCard(id) {
   const c = allCRMCalls.find(x => x.id === id);
-  if (c) { c._open = !c._open; renderCRM(); }
+  if (c) { c._open = !c._open; renderCRMReview(); }
+}
+
+function pickContact(input, callId) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const card = text.split(/BEGIN:VCARD/i)[1] || '';
+    const get = f => { const m=card.match(new RegExp(f+'[^:]*:(.+)','i')); return m?m[1].trim():''; };
+    const n = get('N').split(';');
+    const last=n[0]||'', first=n[1]||'';
+    const name = [first.trim(), last.trim()].filter(Boolean).join(' ');
+    const org = get('ORG').replace(/;/g,' ').trim();
+    const email = get('EMAIL');
+    const telM = card.match(/TEL[^:]*:([+\d\s\-().]+)/i);
+    const phone = telM ? telM[1].replace(/\s/g,'').trim() : '';
+    if (name) document.getElementById(`crm-name-${callId}`).value = name;
+    if (org)  document.getElementById(`crm-company-${callId}`).value = org;
+    if (email) document.getElementById(`crm-email-${callId}`).value = email;
+    if (phone) document.getElementById(`crm-phone-${callId}`).value = phone;
+  };
+  reader.readAsText(file);
 }
 
 async function verifyCard(id) {
@@ -482,7 +580,8 @@ async function verifyCard(id) {
   Object.assign(c, updates);
   c._open = false;
   updateCRMBadge();
-  renderCRM();
+  renderCRMReview();
+  renderVerifiedContacts();
 }
 
 async function dismissCard(id) {
@@ -490,7 +589,8 @@ async function dismissCard(id) {
   const c = allCRMCalls.find(x => x.id === id);
   if (c) { c.crm_verified = true; c._open = false; }
   updateCRMBadge();
-  renderCRM();
+  renderCRMReview();
+  renderVerifiedContacts();
 }
 
 async function unverifyCard(id) {
@@ -498,10 +598,45 @@ async function unverifyCard(id) {
   const c = allCRMCalls.find(x => x.id === id);
   if (c) { c.crm_verified = false; c._open = true; }
   updateCRMBadge();
-  renderCRM();
+  renderCRMReview();
+  renderVerifiedContacts();
+}
+
+function importBulkVCard(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    alert('Bulk import coming soon — use the per-call contact picker for now.');
+  };
+  reader.readAsText(file);
+}
+
+// ── DIAL ─────────────────────────────────────────────────────
+function startDial(number, name) {
+  pendingDialNumber = number;
+  pendingDialName   = name;
+  document.getElementById('dial-name').textContent = `${name} (${number})`;
+  openModal('modal-dial');
+}
+
+async function confirmDial() {
+  if (!pendingDialNumber) return;
+  try {
+    await fetch('/call/initiate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ to: pendingDialNumber })
+    });
+    closeModal('modal-dial');
+    alert('📞 Your phone will ring shortly — answer to connect');
+  } catch {
+    alert('Could not initiate call. Check server is running.');
+  }
 }
 
 // ── UTILS ────────────────────────────────────────────────────
+function esc(str) { return (str||'').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -516,11 +651,12 @@ function formatTime(iso) {
 }
 
 function formatDur(s) {
-  if (!s) return '—';
+  if (!s||s===0) return '—';
   const m=Math.floor(s/60),r=s%60;
   return m>0?`${m}m ${r}s`:`${s}s`;
 }
 
+// ── INIT ─────────────────────────────────────────────────────
 refreshCalls();
 </script>
 </body>
