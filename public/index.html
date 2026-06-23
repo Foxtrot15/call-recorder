@@ -548,15 +548,26 @@ function saveConnections() {
   updateConnectionStatuses(data);
 }
 
-function loadConnections() {
+async function loadConnections() {
   try {
     const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
-    if (data.gmailAddress)    document.getElementById('gmail-address').value    = data.gmailAddress;
-    if (data.gmailPassword)   document.getElementById('gmail-password').value   = data.gmailPassword;
-    if (data.gcalId)          document.getElementById('gcal-id').value          = data.gcalId;
     if (data.outlookAddress)  document.getElementById('outlook-address').value  = data.outlookAddress;
     if (data.outlookPassword) document.getElementById('outlook-password').value = data.outlookPassword;
     if (data.fergusKey)       document.getElementById('fergus-key').value       = data.fergusKey;
+
+    // Check live Google status from backend
+    try {
+      const res = await fetch('/auth/status?clientId=default');
+      const status = await res.json();
+      if (status.google?.connected) {
+        data.googleConnected = true;
+        data.googleEmail = status.google.email;
+        localStorage.setItem('ci_connections', JSON.stringify(data));
+      } else {
+        data.googleConnected = false;
+      }
+    } catch {}
+
     updateConnectionStatuses(data);
   } catch {}
 }
