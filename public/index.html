@@ -259,6 +259,10 @@
         <div class="mono" id="detail-duration" style="font-size:12px">—</div>
       </div>
     </div>
+    <div id="detail-summary-wrap" style="margin-bottom:16px;display:none">
+      <label>Summary</label>
+      <div id="detail-summary" style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:8px;padding:12px;font-size:13px;color:var(--text);line-height:1.5"></div>
+    </div>
     <div style="margin-bottom:16px">
       <label>Transcript</label>
       <div class="transcript-box" id="detail-transcript">—</div>
@@ -271,6 +275,7 @@
       <label>Status</label>
       <select id="detail-status">
         <option value="new">New</option>
+        <option value="complete">Complete</option>
         <option value="reviewed">Reviewed</option>
         <option value="actioned">Actioned</option>
       </select>
@@ -278,6 +283,21 @@
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modal-call')">Close</button>
       <button class="btn btn-primary" onclick="saveCallDetails()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONTACT SEARCH MODAL -->
+<div class="modal-overlay" id="modal-contact-search">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <div class="modal-title">Search contacts</div>
+      <button class="close-btn" onclick="closeModal('modal-contact-search')">×</button>
+    </div>
+    <input type="text" id="contact-search-input" placeholder="Type a name…" oninput="renderContactSearchResults()" style="margin-bottom:12px">
+    <div id="contact-search-results" style="max-height:320px;overflow-y:auto"></div>
+    <div style="margin-top:14px;font-size:12px;color:var(--muted)">
+      No contacts? <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-contact-search');document.getElementById('vcf-bulk-input').click()">Import from phone</button>
     </div>
   </div>
 </div>
@@ -358,17 +378,21 @@ function renderCalls(calls) {
     tbody.innerHTML = `<tr><td colspan="7"><div class="empty"><div class="empty-icon">📞</div><h3>No calls yet</h3><p>Calls appear here automatically after recording</p></div></td></tr>`;
     return;
   }
-  tbody.innerHTML = calls.map(c => `
+  const TWILIO_NUMBER = '+61344224989';
+  tbody.innerHTML = calls.map(c => {
+    // True direction: if from_number is the Twilio number, it's outbound (we initiated)
+    const trueDirection = c.from_number === TWILIO_NUMBER ? 'outbound' : 'inbound';
+    return `
     <tr>
       <td style="color:var(--muted);font-size:12px">${formatTime(c.recorded_at)}</td>
-      <td><span class="badge badge-${c.direction||'inbound'}">${c.direction === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
-      <td class="mono">${c.caller_name || c.from_number || '—'}</td>
+      <td><span class="badge badge-${trueDirection}">${trueDirection === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
+      <td class="mono">${c.caller_name || (trueDirection === 'inbound' ? c.from_number : c.to_number) || '—'}</td>
       <td class="wrap" style="max-width:280px;font-size:12px;color:var(--muted)">${c.summary ? c.summary.slice(0,80)+(c.summary.length>80?'…':'') : '—'}</td>
       <td style="color:var(--muted)">${formatDur(c.duration)}</td>
       <td><span class="badge badge-${c.status||'new'}">${c.status||'new'}</span></td>
       <td><button class="btn btn-ghost btn-sm" onclick="openCall('${c.id}')">View →</button></td>
     </tr>
-  `).join('');
+  `}).join('');
 }
 
 function filterCalls() {
@@ -389,9 +413,17 @@ function openCall(id) {
   document.getElementById('detail-from').textContent = c.caller_name ? `${c.caller_name} (${c.from_number})` : (c.from_number||'—');
   document.getElementById('detail-to').textContent = c.to_number || '—';
   document.getElementById('detail-duration').textContent = formatDur(c.duration);
+  // Summary
+  const summaryWrap = document.getElementById('detail-summary-wrap');
+  const summaryEl   = document.getElementById('detail-summary');
+  if (c.summary) { summaryEl.textContent = c.summary; summaryWrap.style.display = 'block'; }
+  else { summaryWrap.style.display = 'none'; }
   document.getElementById('detail-transcript').innerHTML = formatTranscript(c.transcript||'No transcript');
   document.getElementById('detail-instruction').value = c.instruction || '';
-  document.getElementById('detail-status').value = c.status || 'new';
+  // Set status — handle 'complete' which exists in DB but not old dropdown
+  const statusEl = document.getElementById('detail-status');
+  statusEl.value = c.status || 'new';
+  if (!statusEl.value) statusEl.value = 'new';
   openModal('modal-call');
 }
 
@@ -491,9 +523,7 @@ function renderCRMReview() {
             <input type="text" id="crm-phone-${c.id}" value="${esc(c.from_number)}" placeholder="—">
           </div>
           <div style="margin-bottom:10px">
-            <button class="btn btn-warn btn-sm" onclick="document.getElementById('vcf-input-${c.id}').click()">📇 Pick from contacts</button>
-            <input type="file" id="vcf-input-${c.id}" accept=".vcf,text/vcard" style="display:none" onchange="pickContact(this,'${c.id}')">
-            <div style="font-size:11px;color:var(--muted);margin-top:5px">Opens your phone's contact picker</div>
+            <button class="btn btn-warn btn-sm" onclick="openContactSearch('${c.id}')">📇 Search imported contacts</button>
           </div>
           <div class="crm-actions">
             <button class="btn btn-success btn-sm" onclick="verifyCard('${c.id}')">Save contact</button>
@@ -542,27 +572,77 @@ function toggleCRMCard(id) {
   if (c) { c._open = !c._open; renderCRMReview(); }
 }
 
-function pickContact(input, callId) {
+// ── IMPORTED CONTACTS ────────────────────────────────────────
+let importedContacts = [];
+let activeContactSearchCallId = null;
+
+try { importedContacts = JSON.parse(localStorage.getItem('ci_imported_contacts')||'[]'); } catch { importedContacts=[]; }
+
+function importBulkVCardFromFile(input) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
     const text = e.target.result;
-    const card = text.split(/BEGIN:VCARD/i)[1] || '';
-    const get = f => { const m=card.match(new RegExp(f+'[^:]*:(.+)','i')); return m?m[1].trim():''; };
-    const n = get('N').split(';');
-    const last=n[0]||'', first=n[1]||'';
-    const name = [first.trim(), last.trim()].filter(Boolean).join(' ');
-    const org = get('ORG').replace(/;/g,' ').trim();
-    const email = get('EMAIL');
-    const telM = card.match(/TEL[^:]*:([+\d\s\-().]+)/i);
-    const phone = telM ? telM[1].replace(/\s/g,'').trim() : '';
-    if (name) document.getElementById(`crm-name-${callId}`).value = name;
-    if (org)  document.getElementById(`crm-company-${callId}`).value = org;
-    if (email) document.getElementById(`crm-email-${callId}`).value = email;
-    if (phone) document.getElementById(`crm-phone-${callId}`).value = phone;
+    const cards = text.split(/BEGIN:VCARD/i).slice(1);
+    let added = 0;
+    cards.forEach(card => {
+      const get = f => { const m=card.match(new RegExp(f+'[^:]*:([^\r\n]+)','i')); return m?m[1].trim():''; };
+      const n = get('N').split(';');
+      const last=(n[0]||'').trim(), first=(n[1]||'').trim();
+      const name = [first, last].filter(Boolean).join(' ');
+      const org = get('ORG').replace(/;/g,' ').trim();
+      const email = get('EMAIL');
+      const telM = card.match(/TEL[^:]*:([+\d\s\-().]+)/i);
+      const phone = telM ? telM[1].replace(/[\s\-().]/g,'').trim() : '';
+      if (!name && !phone) return;
+      importedContacts.push({ name, org, email, phone });
+      added++;
+    });
+    localStorage.setItem('ci_imported_contacts', JSON.stringify(importedContacts));
+    alert(`✅ Imported ${added} contacts — now searchable on each call card`);
   };
   reader.readAsText(file);
+}
+
+function openContactSearch(callId) {
+  activeContactSearchCallId = callId;
+  document.getElementById('contact-search-input').value = '';
+  renderContactSearchResults();
+  openModal('modal-contact-search');
+}
+
+function renderContactSearchResults() {
+  const q = document.getElementById('contact-search-input').value.toLowerCase();
+  const results = q
+    ? importedContacts.filter(c => (c.name||'').toLowerCase().includes(q) || (c.org||'').toLowerCase().includes(q) || (c.phone||'').includes(q))
+    : importedContacts.slice(0, 20);
+  const el = document.getElementById('contact-search-results');
+  if (!importedContacts.length) {
+    el.innerHTML = `<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px">No contacts imported yet.<br>Use the button below to import your phone contacts.</div>`;
+    return;
+  }
+  if (!results.length) {
+    el.innerHTML = `<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px">No matches found</div>`;
+    return;
+  }
+  el.innerHTML = results.map((c,i) => `
+    <div onclick="selectImportedContact(${importedContacts.indexOf(c)})" style="padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid var(--border);margin-bottom:6px;transition:background 0.1s" onmouseover="this.style.background='rgba(59,130,246,0.07)'" onmouseout="this.style.background=''">
+      <div style="font-weight:500;font-size:13px">${c.name||'Unknown'}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">${[c.org, c.phone, c.email].filter(Boolean).join(' · ')}</div>
+    </div>
+  `).join('');
+}
+
+function selectImportedContact(idx) {
+  const c = importedContacts[idx];
+  const id = activeContactSearchCallId;
+  if (!c || !id) return;
+  if (c.name)  document.getElementById(`crm-name-${id}`).value = c.name;
+  if (c.org)   document.getElementById(`crm-company-${id}`).value = c.org;
+  if (c.email) document.getElementById(`crm-email-${id}`).value = c.email;
+  if (c.phone) document.getElementById(`crm-phone-${id}`).value = c.phone;
+  closeModal('modal-contact-search');
 }
 
 async function verifyCard(id) {
@@ -602,15 +682,7 @@ async function unverifyCard(id) {
   renderVerifiedContacts();
 }
 
-function importBulkVCard(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    alert('Bulk import coming soon — use the per-call contact picker for now.');
-  };
-  reader.readAsText(file);
-}
+function importBulkVCard(input) { importBulkVCardFromFile(input); }
 
 // ── DIAL ─────────────────────────────────────────────────────
 function startDial(number, name) {
