@@ -130,6 +130,23 @@
   /* Verified contacts table section */
   .section-divider { border:none; border-top:1px solid var(--border); margin:32px 0 24px; }
 
+  /* Connection cards */
+  .conn-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px; transition:border-color 0.15s; }
+  .conn-card.connected { border-color:rgba(16,185,129,0.3); }
+  .conn-header { display:flex; align-items:center; gap:12px; margin-bottom:0; }
+  .conn-icon { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0; }
+  .conn-info { flex:1; min-width:0; }
+  .conn-name { font-weight:600; font-size:14px; }
+  .conn-desc { font-size:12px; color:var(--muted); margin-top:1px; }
+  .conn-status { font-size:11px; padding:3px 8px; border-radius:4px; background:rgba(100,116,139,0.15); color:var(--muted); white-space:nowrap; flex-shrink:0; }
+  .conn-status.connected { background:rgba(16,185,129,0.1); color:var(--green); }
+  .conn-body { display:none; margin-top:16px; border-top:1px solid var(--border); padding-top:16px; }
+  .conn-body.open { display:block; }
+  .conn-steps { font-size:12px; color:var(--muted); line-height:1.8; margin-bottom:14px; }
+  .conn-toggle-btn { margin-top:14px; width:100%; background:none; border:1px dashed var(--border2); color:var(--muted); border-radius:6px; padding:7px; font-family:inherit; font-size:12px; cursor:pointer; transition:all 0.15s; }
+  .conn-toggle-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .conn-toggle-btn.open { display:none; }
+
   /* Expandable summary cell */
   .summary-cell { max-width:280px; cursor:pointer; }
   .summary-short { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; color:var(--muted); }
@@ -258,112 +275,131 @@
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
 
       <!-- Gmail -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-          <div style="width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">✉️</div>
-          <div>
-            <div style="font-weight:600;font-size:14px">Gmail</div>
-            <div style="font-size:12px;color:var(--muted)">Send follow-up emails automatically</div>
+      <div class="conn-card" id="card-gmail">
+        <div class="conn-header">
+          <div class="conn-icon" style="background:#fff">✉️</div>
+          <div class="conn-info">
+            <div class="conn-name">Gmail</div>
+            <div class="conn-desc">Send follow-up emails automatically</div>
           </div>
-          <div id="gmail-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+          <div class="conn-status" id="gmail-status">Not connected</div>
         </div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
-          <strong style="color:var(--text)">Setup steps:</strong><br>
-          1. Go to your Google Account → Security<br>
-          2. Enable 2-Step Verification if not already on<br>
-          3. Search "App passwords" and create one for "Mail"<br>
-          4. Paste the 16-character password below
+        <div class="conn-body" id="body-gmail">
+          <div class="conn-steps">
+            1. Go to <strong>Google Account → Security</strong><br>
+            2. Enable 2-Step Verification<br>
+            3. Search "App passwords" → create one for Mail<br>
+            4. Paste the 16-character password below
+          </div>
+          <div class="form-group">
+            <label>Gmail address</label>
+            <input type="email" id="gmail-address" placeholder="you@gmail.com" oninput="saveConnections()">
+          </div>
+          <div class="form-group">
+            <label>App password</label>
+            <input type="password" id="gmail-password" placeholder="xxxx xxxx xxxx xxxx" oninput="saveConnections()">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <a href="https://myaccount.google.com/apppasswords" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Get app password →</a>
+            <button class="btn btn-primary btn-sm" onclick="connectService('gmail')">Connect</button>
+          </div>
         </div>
-        <div style="margin-bottom:10px">
-          <label>Gmail address</label>
-          <input type="email" id="gmail-address" placeholder="you@gmail.com" oninput="saveConnections()">
-        </div>
-        <div style="margin-bottom:14px">
-          <label>App password</label>
-          <input type="password" id="gmail-password" placeholder="xxxx xxxx xxxx xxxx" oninput="saveConnections()">
-        </div>
-        <a href="https://myaccount.google.com/apppasswords" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Google Account →</a>
+        <button class="conn-toggle-btn" id="toggle-gmail" onclick="toggleConnCard('gmail')">Set up →</button>
       </div>
 
       <!-- Google Calendar -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-          <div style="width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📅</div>
-          <div>
-            <div style="font-weight:600;font-size:14px">Google Calendar</div>
-            <div style="font-size:12px;color:var(--muted)">Auto-create appointments from calls</div>
+      <div class="conn-card" id="card-gcal">
+        <div class="conn-header">
+          <div class="conn-icon" style="background:#fff">📅</div>
+          <div class="conn-info">
+            <div class="conn-name">Google Calendar</div>
+            <div class="conn-desc">Auto-create appointments from calls</div>
           </div>
-          <div id="gcal-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+          <div class="conn-status" id="gcal-status">Not connected</div>
         </div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
-          <strong style="color:var(--text)">Setup steps:</strong><br>
-          1. Open Google Calendar → Settings<br>
-          2. Click your calendar name on the left<br>
-          3. Scroll to "Integrate calendar"<br>
-          4. Copy your Calendar ID below
+        <div class="conn-body" id="body-gcal">
+          <div class="conn-steps">
+            1. Open <strong>Google Calendar → Settings</strong><br>
+            2. Click your calendar name on the left<br>
+            3. Scroll to "Integrate calendar"<br>
+            4. Copy your Calendar ID below
+          </div>
+          <div class="form-group">
+            <label>Calendar ID</label>
+            <input type="text" id="gcal-id" placeholder="you@gmail.com" oninput="saveConnections()">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <a href="https://calendar.google.com/r/settings" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Open Calendar →</a>
+            <button class="btn btn-primary btn-sm" onclick="connectService('gcal')">Connect</button>
+          </div>
         </div>
-        <div style="margin-bottom:14px">
-          <label>Calendar ID</label>
-          <input type="text" id="gcal-id" placeholder="you@gmail.com or abc123@group.calendar.google.com" oninput="saveConnections()">
-        </div>
-        <a href="https://calendar.google.com/r/settings" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Google Calendar →</a>
+        <button class="conn-toggle-btn" id="toggle-gcal" onclick="toggleConnCard('gcal')">Set up →</button>
       </div>
 
       <!-- Outlook -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-          <div style="width:36px;height:36px;background:#0078d4;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📧</div>
-          <div>
-            <div style="font-weight:600;font-size:14px">Outlook / Microsoft 365</div>
-            <div style="font-size:12px;color:var(--muted)">For Outlook email and calendar</div>
+      <div class="conn-card" id="card-outlook">
+        <div class="conn-header">
+          <div class="conn-icon" style="background:#0078d4">📧</div>
+          <div class="conn-info">
+            <div class="conn-name">Outlook / Microsoft 365</div>
+            <div class="conn-desc">For Outlook email and calendar</div>
           </div>
-          <div id="outlook-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+          <div class="conn-status" id="outlook-status">Not connected</div>
         </div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
-          <strong style="color:var(--text)">Setup steps:</strong><br>
-          1. Go to Outlook Settings → Mail → Sync email<br>
-          2. Enable SMTP authentication<br>
-          3. Use your full email and password below<br>
-          4. SMTP server: smtp-mail.outlook.com, port 587
+        <div class="conn-body" id="body-outlook">
+          <div class="conn-steps">
+            1. Go to <strong>Outlook Settings → Mail → Sync email</strong><br>
+            2. Enable SMTP authentication<br>
+            3. SMTP: smtp-mail.outlook.com, port 587
+          </div>
+          <div class="form-group">
+            <label>Outlook address</label>
+            <input type="email" id="outlook-address" placeholder="you@outlook.com" oninput="saveConnections()">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="outlook-password" placeholder="Your Outlook password" oninput="saveConnections()">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <a href="https://outlook.live.com/mail/options/mail/accounts" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Open Outlook →</a>
+            <button class="btn btn-primary btn-sm" onclick="connectService('outlook')">Connect</button>
+          </div>
         </div>
-        <div style="margin-bottom:10px">
-          <label>Outlook address</label>
-          <input type="email" id="outlook-address" placeholder="you@outlook.com" oninput="saveConnections()">
-        </div>
-        <div style="margin-bottom:14px">
-          <label>Password</label>
-          <input type="password" id="outlook-password" placeholder="Your Outlook password" oninput="saveConnections()">
-        </div>
-        <a href="https://outlook.live.com/mail/options/mail/accounts" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Outlook Settings →</a>
+        <button class="conn-toggle-btn" id="toggle-outlook" onclick="toggleConnCard('outlook')">Set up →</button>
       </div>
 
       <!-- Fergus -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-          <div style="width:36px;height:36px;background:#f97316;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🔧</div>
-          <div>
-            <div style="font-weight:600;font-size:14px">Fergus</div>
-            <div style="font-size:12px;color:var(--muted)">Auto-create jobs from call transcripts</div>
+      <div class="conn-card" id="card-fergus">
+        <div class="conn-header">
+          <div class="conn-icon" style="background:#f97316">🔧</div>
+          <div class="conn-info">
+            <div class="conn-name">Fergus</div>
+            <div class="conn-desc">Auto-create jobs from call transcripts</div>
           </div>
-          <div id="fergus-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+          <div class="conn-status" id="fergus-status">Not connected</div>
         </div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
-          <strong style="color:var(--text)">Setup steps:</strong><br>
-          1. Log into Fergus → Settings → Integrations<br>
-          2. Generate an API key<br>
-          3. Paste it below
+        <div class="conn-body" id="body-fergus">
+          <div class="conn-steps">
+            1. Log into <strong>Fergus → Settings → Integrations</strong><br>
+            2. Generate an API key<br>
+            3. Paste it below
+          </div>
+          <div class="form-group">
+            <label>Fergus API key</label>
+            <input type="password" id="fergus-key" placeholder="Your Fergus API key" oninput="saveConnections()">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <a href="https://app.fergus.com/settings/integrations" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Open Fergus →</a>
+            <button class="btn btn-primary btn-sm" onclick="connectService('fergus')">Connect</button>
+          </div>
         </div>
-        <div style="margin-bottom:14px">
-          <label>Fergus API key</label>
-          <input type="password" id="fergus-key" placeholder="Your Fergus API key" oninput="saveConnections()">
-        </div>
-        <a href="https://app.fergus.com/settings/integrations" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Fergus →</a>
+        <button class="conn-toggle-btn" id="toggle-fergus" onclick="toggleConnCard('fergus')">Set up →</button>
       </div>
 
     </div>
 
     <div style="margin-top:20px;padding:14px 16px;background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:8px;font-size:12px;color:var(--muted);line-height:1.6">
-      🔒 Credentials are stored locally on this device only. They are never sent to any server other than the respective service when sending emails or creating events.
+      🔒 Credentials are stored locally on this device only and never sent to any third party server.
     </div>
   </div>
 
@@ -466,6 +502,38 @@ function showPage(name, btn) {
   if (name === 'calls') refreshCalls();
   if (name === 'contacts') refreshContacts();
   if (name === 'connections') loadConnections();
+}
+
+function toggleConnCard(id) {
+  const body = document.getElementById('body-' + id);
+  const btn  = document.getElementById('toggle-' + id);
+  const isOpen = body.classList.contains('open');
+  // Close all others
+  document.querySelectorAll('.conn-body').forEach(b => b.classList.remove('open'));
+  document.querySelectorAll('.conn-toggle-btn').forEach(b => b.classList.remove('open'));
+  if (!isOpen) {
+    body.classList.add('open');
+    btn.classList.add('open');
+  }
+}
+
+function connectService(id) {
+  saveConnections();
+  const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
+  const checks = {
+    gmail:   !!(data.gmailAddress && data.gmailPassword),
+    gcal:    !!data.gcalId,
+    outlook: !!(data.outlookAddress && data.outlookPassword),
+    fergus:  !!data.fergusKey,
+  };
+  if (!checks[id]) {
+    alert('Please fill in all fields before connecting.');
+    return;
+  }
+  // Close the card body
+  document.getElementById('body-' + id).classList.remove('open');
+  document.getElementById('toggle-' + id).classList.remove('open');
+  updateConnectionStatuses(data);
 }
 
 function saveConnections() {
