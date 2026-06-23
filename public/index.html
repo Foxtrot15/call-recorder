@@ -286,22 +286,12 @@
         </div>
         <div class="conn-body" id="body-gmail">
           <div class="conn-steps">
-            1. Go to <strong>Google Account → Security</strong><br>
-            2. Enable 2-Step Verification<br>
-            3. Search "App passwords" → create one for Mail<br>
-            4. Paste the 16-character password below
+            Securely connect your Google account. You'll be taken to Google's login screen — no passwords are stored by us.
           </div>
-          <div class="form-group">
-            <label>Gmail address</label>
-            <input type="email" id="gmail-address" placeholder="you@gmail.com" oninput="saveConnections()">
-          </div>
-          <div class="form-group">
-            <label>App password</label>
-            <input type="password" id="gmail-password" placeholder="xxxx xxxx xxxx xxxx" oninput="saveConnections()">
-          </div>
-          <div style="display:flex;gap:8px;margin-top:4px">
-            <a href="https://myaccount.google.com/apppasswords" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Get app password →</a>
-            <button class="btn btn-primary btn-sm" onclick="connectService('gmail')">Connect</button>
+          <div style="margin-top:4px">
+            <button class="btn btn-primary" onclick="connectService('gmail')" style="width:100%;justify-content:center;gap:10px">
+              <img src="https://www.google.com/favicon.ico" style="width:16px;height:16px"> Sign in with Google
+            </button>
           </div>
         </div>
         <button class="conn-toggle-btn" id="toggle-gmail" onclick="toggleConnCard('gmail')">Set up →</button>
@@ -319,18 +309,12 @@
         </div>
         <div class="conn-body" id="body-gcal">
           <div class="conn-steps">
-            1. Open <strong>Google Calendar → Settings</strong><br>
-            2. Click your calendar name on the left<br>
-            3. Scroll to "Integrate calendar"<br>
-            4. Copy your Calendar ID below
+            Uses the same Google account as Gmail. Connect once and both Gmail and Calendar are linked.
           </div>
-          <div class="form-group">
-            <label>Calendar ID</label>
-            <input type="text" id="gcal-id" placeholder="you@gmail.com" oninput="saveConnections()">
-          </div>
-          <div style="display:flex;gap:8px;margin-top:4px">
-            <a href="https://calendar.google.com/r/settings" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Open Calendar →</a>
-            <button class="btn btn-primary btn-sm" onclick="connectService('gcal')">Connect</button>
+          <div style="margin-top:4px">
+            <button class="btn btn-primary" onclick="connectService('gcal')" style="width:100%;justify-content:center;gap:10px">
+              <img src="https://www.google.com/favicon.ico" style="width:16px;height:16px"> Sign in with Google
+            </button>
           </div>
         </div>
         <button class="conn-toggle-btn" id="toggle-gcal" onclick="toggleConnCard('gcal')">Set up →</button>
@@ -518,22 +502,37 @@ function toggleConnCard(id) {
 }
 
 function connectService(id) {
-  saveConnections();
-  const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
-  const checks = {
-    gmail:   !!(data.gmailAddress && data.gmailPassword),
-    gcal:    !!data.gcalId,
-    outlook: !!(data.outlookAddress && data.outlookPassword),
-    fergus:  !!data.fergusKey,
-  };
-  if (!checks[id]) {
-    alert('Please fill in all fields before connecting.');
+  if (id === 'gmail' || id === 'gcal') {
+    // OAuth flow — redirect to Google
+    const clientId = 'default';
+    window.location.href = `/auth/google?clientId=${clientId}`;
     return;
   }
-  // Close the card body
-  document.getElementById('body-' + id).classList.remove('open');
-  document.getElementById('toggle-' + id).classList.remove('open');
-  updateConnectionStatuses(data);
+  if (id === 'outlook') {
+    // SMTP — save locally for now
+    saveConnections();
+    const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
+    if (!data.outlookAddress || !data.outlookPassword) {
+      alert('Please fill in your Outlook email and password.');
+      return;
+    }
+    document.getElementById('body-' + id).classList.remove('open');
+    document.getElementById('toggle-' + id).classList.remove('open');
+    updateConnectionStatuses(data);
+    return;
+  }
+  if (id === 'fergus') {
+    saveConnections();
+    const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
+    if (!data.fergusKey) {
+      alert('Please enter your Fergus API key.');
+      return;
+    }
+    document.getElementById('body-' + id).classList.remove('open');
+    document.getElementById('toggle-' + id).classList.remove('open');
+    updateConnectionStatuses(data);
+    return;
+  }
 }
 
 function saveConnections() {
@@ -563,15 +562,19 @@ function loadConnections() {
 }
 
 function updateConnectionStatuses(data) {
-  const set = (id, connected) => {
+  const set = (id, connected, label) => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.textContent = connected ? '✓ Connected' : 'Not set up';
+    el.textContent = connected ? (label || '✓ Connected') : 'Not connected';
     el.style.background = connected ? 'rgba(16,185,129,0.1)' : 'rgba(100,116,139,0.15)';
     el.style.color = connected ? 'var(--green)' : 'var(--muted)';
+    // Update card border
+    const card = document.getElementById('card-' + id.replace('-status',''));
+    if (card) card.classList.toggle('connected', connected);
   };
-  set('gmail-status',   !!(data.gmailAddress && data.gmailPassword));
-  set('gcal-status',    !!data.gcalId);
+  const googleLabel = data.googleEmail ? `✓ ${data.googleEmail}` : '✓ Connected';
+  set('gmail-status',   !!data.googleConnected, googleLabel);
+  set('gcal-status',    !!data.googleConnected, googleLabel);
   set('outlook-status', !!(data.outlookAddress && data.outlookPassword));
   set('fergus-status',  !!data.fergusKey);
 }
@@ -1029,6 +1032,37 @@ function formatDur(s) {
 }
 
 // ── INIT ─────────────────────────────────────────────────────
+// Check if returning from OAuth
+(async () => {
+  const params = new URLSearchParams(window.location.search);
+  const auth = params.get('auth');
+  const provider = params.get('provider');
+  const email = params.get('email');
+  if (auth === 'success' && provider === 'google') {
+    // Store connected email in localStorage for display
+    const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
+    data.googleEmail = decodeURIComponent(email || '');
+    data.googleConnected = true;
+    localStorage.setItem('ci_connections', JSON.stringify(data));
+    // Clean URL
+    window.history.replaceState({}, '', '/');
+  } else if (auth === 'error') {
+    alert('Connection failed. Please try again.');
+    window.history.replaceState({}, '', '/');
+  }
+  // Check live status from backend
+  try {
+    const res = await fetch('/auth/status?clientId=default');
+    const status = await res.json();
+    if (status.google?.connected) {
+      const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
+      data.googleConnected = true;
+      data.googleEmail = status.google.email;
+      localStorage.setItem('ci_connections', JSON.stringify(data));
+    }
+  } catch {}
+})();
+
 refreshCalls();
 </script>
 </body>
