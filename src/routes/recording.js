@@ -21,9 +21,31 @@ router.post("/complete", async (req, res) => {
     const twilio = require("twilio");
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const call = await client.calls(CallSid).fetch();
-    const From          = call.from;
-    const To            = call.to;
-    const ForwardedFrom = call.forwardedFrom || null; // client's real mobile
+
+    const TWILIO_NUMBER     = process.env.TWILIO_NUMBER || process.env.CLIENT_TWILIO_NUMBER;
+    const CLIENT_REAL       = process.env.CLIENT_REAL_NUMBER;
+
+    let From, To, direction;
+
+    // Detect outbound: Twilio is the From (child leg dialling out)
+    if (call.from === TWILIO_NUMBER || call.from?.replace(/\s/g,'') === TWILIO_NUMBER) {
+      // Outbound call — from is client's real number, to is the person they called
+      From      = CLIENT_REAL;
+      To        = call.to;
+      direction = "outbound";
+    } else if (call.to === CLIENT_REAL || call.forwardedFrom) {
+      // Inbound — someone called the Twilio number, got forwarded to client
+      From      = call.from;
+      To        = CLIENT_REAL;
+      direction = "inbound";
+    } else {
+      // Fallback
+      From      = call.from;
+      To        = call.to;
+      direction = call.direction?.includes("outbound") ? "outbound" : "inbound";
+    }
+
+    console.log(`📞 ${direction}: ${From} → ${To}`);
 
     // ── Transcribe ────────────────────────────────────────────
     const audioUrl   = `${RecordingUrl}.mp3`;
@@ -33,8 +55,6 @@ router.post("/complete", async (req, res) => {
       console.error("⚠️  Empty transcript returned");
       return;
     }
-
-    const direction = From === process.env.CLIENT_REAL_NUMBER ? "outbound" : "inbound";
 
     // ── Analyse with Claude ───────────────────────────────────
     let analysis = null;
@@ -46,12 +66,11 @@ router.post("/complete", async (req, res) => {
     }
 
     // ── Upsert Supabase record ────────────────────────────────
-    // Try update first (record created by inbound.js), fall back to insert
     const payload = {
       recording_sid:      RecordingSid,
       from_number:        From,
       to_number:          To,
-      client_real_number: ForwardedFrom,
+      client_real_number: CLIENT_REAL,
       direction,
       duration:           parseInt(RecordingDuration, 10),
       transcript,
@@ -96,8 +115,12 @@ router.post("/complete", async (req, res) => {
 
     // ── Send WhatsApp ─────────────────────────────────────────
     const duration = formatDuration(RecordingDuration);
-    const header   = `📞 ${direction === "outbound" ? "Outbound" : "Inbound"} call (${duration})\nFrom: ${From}\nTo: ${To}\n\n`;
-    const body     = analysis?.summary
+    const contactLabel = direction === "outbound"
+      ? `To: ${To}`
+      : `From: ${From}`;
+
+    const header = `📞 ${direction === "outbound" ? "Outbound" : "Inbound"} call (${duration})\n${contactLabel}\n\n`;
+    const body   = analysis?.summary
       ? `${header}Summary: ${analysis.summary}\n\n${transcript}`
       : header + transcript;
 
