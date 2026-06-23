@@ -25,6 +25,10 @@ router.post("/complete", async (req, res) => {
     const TWILIO_NUMBER     = process.env.TWILIO_NUMBER || process.env.CLIENT_TWILIO_NUMBER;
     const CLIENT_REAL       = process.env.CLIENT_REAL_NUMBER;
 
+    // Debug — log raw call data
+    console.log(`🔍 Raw: from=${call.from} to=${call.to} dir=${call.direction} fwd=${call.forwardedFrom}`);
+    console.log(`🔍 Env: TWILIO_NUMBER=${TWILIO_NUMBER} CLIENT_REAL=${CLIENT_REAL}`);
+
     let From, To, direction;
 
     // Detect outbound: Twilio is the From (child leg dialling out)
