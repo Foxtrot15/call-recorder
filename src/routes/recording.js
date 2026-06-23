@@ -25,28 +25,25 @@ router.post("/complete", async (req, res) => {
     const TWILIO_NUMBER     = process.env.TWILIO_NUMBER || process.env.CLIENT_TWILIO_NUMBER;
     const CLIENT_REAL       = process.env.CLIENT_REAL_NUMBER;
 
-    // Debug — log raw call data
-    console.log(`🔍 Raw: from=${call.from} to=${call.to} dir=${call.direction} fwd=${call.forwardedFrom}`);
-    console.log(`🔍 Env: TWILIO_NUMBER=${TWILIO_NUMBER} CLIENT_REAL=${CLIENT_REAL}`);
+    // Check if we already have a record for this call (outbound clicks store it immediately)
+    const { data: existingRecord } = await supabase
+      .from("calls")
+      .select("direction, from_number, to_number")
+      .eq("call_sid", CallSid)
+      .single();
 
     let From, To, direction;
 
-    // Detect outbound: Twilio is the From (child leg dialling out)
-    if (call.from === TWILIO_NUMBER || call.from?.replace(/\s/g,'') === TWILIO_NUMBER) {
-      // Outbound call — from is client's real number, to is the person they called
-      From      = CLIENT_REAL;
-      To        = call.to;
+    if (existingRecord && existingRecord.direction === "outbound") {
+      // Outbound click-to-call — use the pre-stored numbers
+      From      = existingRecord.from_number;
+      To        = existingRecord.to_number;
       direction = "outbound";
-    } else if (call.to === CLIENT_REAL || call.forwardedFrom) {
-      // Inbound — someone called the Twilio number, got forwarded to client
+    } else {
+      // Inbound — someone called the Twilio number
       From      = call.from;
       To        = CLIENT_REAL;
       direction = "inbound";
-    } else {
-      // Fallback
-      From      = call.from;
-      To        = call.to;
-      direction = call.direction?.includes("outbound") ? "outbound" : "inbound";
     }
 
     console.log(`📞 ${direction}: ${From} → ${To}`);
