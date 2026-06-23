@@ -2,18 +2,14 @@ require("dotenv").config();
 const express = require("express");
 const path    = require("path");
 const app     = express();
-
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-
 app.use(express.static(path.join(__dirname, "../public")));
-
 app.use("/inbound",   require("./routes/inbound"));
 app.use("/outbound",  require("./routes/outbound"));
 app.use("/recording", require("./routes/recording"));
 app.use("/call",      require("./routes/call"));
-
+app.use("/auth",      require("./routes/auth"));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
