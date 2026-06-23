@@ -157,6 +157,7 @@
   <nav>
     <button class="active" onclick="showPage('calls',this)">Calls</button>
     <button onclick="showPage('contacts',this)">Contacts <span class="crm-pending-badge" id="crm-nav-badge"></span></button>
+    <button onclick="showPage('connections',this)">Connections</button>
   </nav>
   <div class="header-right">
     <div class="status-dot"></div>
@@ -241,6 +242,128 @@
           <tr><td colspan="6"><div class="empty"><div class="empty-icon">👤</div><h3>No saved contacts yet</h3><p>Verify contacts from the review queue above</p></div></td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+
+
+  <!-- ── CONNECTIONS PAGE ── -->
+  <div id="page-connections" class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Connections</div>
+        <div class="page-subtitle">Connect your email and calendar to automate follow-ups</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
+
+      <!-- Gmail -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <div style="width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">✉️</div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Gmail</div>
+            <div style="font-size:12px;color:var(--muted)">Send follow-up emails automatically</div>
+          </div>
+          <div id="gmail-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
+          <strong style="color:var(--text)">Setup steps:</strong><br>
+          1. Go to your Google Account → Security<br>
+          2. Enable 2-Step Verification if not already on<br>
+          3. Search "App passwords" and create one for "Mail"<br>
+          4. Paste the 16-character password below
+        </div>
+        <div style="margin-bottom:10px">
+          <label>Gmail address</label>
+          <input type="email" id="gmail-address" placeholder="you@gmail.com" oninput="saveConnections()">
+        </div>
+        <div style="margin-bottom:14px">
+          <label>App password</label>
+          <input type="password" id="gmail-password" placeholder="xxxx xxxx xxxx xxxx" oninput="saveConnections()">
+        </div>
+        <a href="https://myaccount.google.com/apppasswords" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Google Account →</a>
+      </div>
+
+      <!-- Google Calendar -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <div style="width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📅</div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Google Calendar</div>
+            <div style="font-size:12px;color:var(--muted)">Auto-create appointments from calls</div>
+          </div>
+          <div id="gcal-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
+          <strong style="color:var(--text)">Setup steps:</strong><br>
+          1. Open Google Calendar → Settings<br>
+          2. Click your calendar name on the left<br>
+          3. Scroll to "Integrate calendar"<br>
+          4. Copy your Calendar ID below
+        </div>
+        <div style="margin-bottom:14px">
+          <label>Calendar ID</label>
+          <input type="text" id="gcal-id" placeholder="you@gmail.com or abc123@group.calendar.google.com" oninput="saveConnections()">
+        </div>
+        <a href="https://calendar.google.com/r/settings" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Google Calendar →</a>
+      </div>
+
+      <!-- Outlook -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <div style="width:36px;height:36px;background:#0078d4;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📧</div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Outlook / Microsoft 365</div>
+            <div style="font-size:12px;color:var(--muted)">For Outlook email and calendar</div>
+          </div>
+          <div id="outlook-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
+          <strong style="color:var(--text)">Setup steps:</strong><br>
+          1. Go to Outlook Settings → Mail → Sync email<br>
+          2. Enable SMTP authentication<br>
+          3. Use your full email and password below<br>
+          4. SMTP server: smtp-mail.outlook.com, port 587
+        </div>
+        <div style="margin-bottom:10px">
+          <label>Outlook address</label>
+          <input type="email" id="outlook-address" placeholder="you@outlook.com" oninput="saveConnections()">
+        </div>
+        <div style="margin-bottom:14px">
+          <label>Password</label>
+          <input type="password" id="outlook-password" placeholder="Your Outlook password" oninput="saveConnections()">
+        </div>
+        <a href="https://outlook.live.com/mail/options/mail/accounts" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Outlook Settings →</a>
+      </div>
+
+      <!-- Fergus -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <div style="width:36px;height:36px;background:#f97316;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🔧</div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Fergus</div>
+            <div style="font-size:12px;color:var(--muted)">Auto-create jobs from call transcripts</div>
+          </div>
+          <div id="fergus-status" style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(100,116,139,0.15);color:var(--muted)">Not set up</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px">
+          <strong style="color:var(--text)">Setup steps:</strong><br>
+          1. Log into Fergus → Settings → Integrations<br>
+          2. Generate an API key<br>
+          3. Paste it below
+        </div>
+        <div style="margin-bottom:14px">
+          <label>Fergus API key</label>
+          <input type="password" id="fergus-key" placeholder="Your Fergus API key" oninput="saveConnections()">
+        </div>
+        <a href="https://app.fergus.com/settings/integrations" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">Open Fergus →</a>
+      </div>
+
+    </div>
+
+    <div style="margin-top:20px;padding:14px 16px;background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:8px;font-size:12px;color:var(--muted);line-height:1.6">
+      🔒 Credentials are stored locally on this device only. They are never sent to any server other than the respective service when sending emails or creating events.
     </div>
   </div>
 
@@ -342,6 +465,47 @@ function showPage(name, btn) {
   btn.classList.add('active');
   if (name === 'calls') refreshCalls();
   if (name === 'contacts') refreshContacts();
+  if (name === 'connections') loadConnections();
+}
+
+function saveConnections() {
+  const data = {
+    gmailAddress:   document.getElementById('gmail-address')?.value || '',
+    gmailPassword:  document.getElementById('gmail-password')?.value || '',
+    gcalId:         document.getElementById('gcal-id')?.value || '',
+    outlookAddress: document.getElementById('outlook-address')?.value || '',
+    outlookPassword:document.getElementById('outlook-password')?.value || '',
+    fergusKey:      document.getElementById('fergus-key')?.value || '',
+  };
+  localStorage.setItem('ci_connections', JSON.stringify(data));
+  updateConnectionStatuses(data);
+}
+
+function loadConnections() {
+  try {
+    const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
+    if (data.gmailAddress)    document.getElementById('gmail-address').value    = data.gmailAddress;
+    if (data.gmailPassword)   document.getElementById('gmail-password').value   = data.gmailPassword;
+    if (data.gcalId)          document.getElementById('gcal-id').value          = data.gcalId;
+    if (data.outlookAddress)  document.getElementById('outlook-address').value  = data.outlookAddress;
+    if (data.outlookPassword) document.getElementById('outlook-password').value = data.outlookPassword;
+    if (data.fergusKey)       document.getElementById('fergus-key').value       = data.fergusKey;
+    updateConnectionStatuses(data);
+  } catch {}
+}
+
+function updateConnectionStatuses(data) {
+  const set = (id, connected) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = connected ? '✓ Connected' : 'Not set up';
+    el.style.background = connected ? 'rgba(16,185,129,0.1)' : 'rgba(100,116,139,0.15)';
+    el.style.color = connected ? 'var(--green)' : 'var(--muted)';
+  };
+  set('gmail-status',   !!(data.gmailAddress && data.gmailPassword));
+  set('gcal-status',    !!data.gcalId);
+  set('outlook-status', !!(data.outlookAddress && data.outlookPassword));
+  set('fergus-status',  !!data.fergusKey);
 }
 
 // ── SUPABASE ────────────────────────────────────────────────
