@@ -186,7 +186,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Time</th><th>Direction</th><th>From</th><th>Summary</th><th>Duration</th><th>Status</th><th></th></tr>
+          <tr><th>Time</th><th>Direction</th><th>Contact</th><th>Summary</th><th>Duration</th><th>Status</th><th></th></tr>
         </thead>
         <tbody id="calls-tbody">
           <tr><td colspan="7"><div class="empty"><div class="empty-icon">📞</div><h3>Loading…</h3></div></td></tr>
@@ -247,11 +247,11 @@
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px">
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">FROM</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px" id="detail-from-label">FROM</div>
         <div class="mono" id="detail-from" style="font-size:12px">—</div>
       </div>
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">TO</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px" id="detail-to-label">TO</div>
         <div class="mono" id="detail-to" style="font-size:12px">—</div>
       </div>
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
@@ -400,7 +400,11 @@ function renderCalls(calls) {
     <tr>
       <td style="color:var(--muted);font-size:12px">${formatTime(c.recorded_at)}</td>
       <td><span class="badge badge-${trueDirection}">${trueDirection === 'inbound' ? '↙ In' : '↗ Out'}</span></td>
-      <td class="mono">${c.caller_name || lookupContactName(trueDirection === 'inbound' ? c.from_number : c.to_number) || (trueDirection === 'inbound' ? c.from_number : c.to_number) || '—'}</td>
+      <td class="mono">${(() => {
+        const num = trueDirection === 'inbound' ? c.from_number : c.to_number;
+        const name = c.caller_name || lookupContactName(num);
+        return name ? name : (num || '—');
+      })()}</td>
       <td class="wrap" style="max-width:280px;font-size:12px;color:var(--muted)">${c.summary ? c.summary.slice(0,80)+(c.summary.length>80?'…':'') : '—'}</td>
       <td style="color:var(--muted)">${formatDur(c.duration)}</td>
       <td><span class="badge badge-${c.status||'new'}">${c.status||'new'}</span></td>
@@ -424,16 +428,21 @@ function openCall(id) {
   if (!c) return;
   currentCallId = id;
   document.getElementById('modal-call-title').textContent = `Call — ${formatTime(c.recorded_at)}`;
-  const TWILIO_NUM = '+61344224989';
-  const trueDir = c.from_number === TWILIO_NUM ? 'outbound' : 'inbound';
+  const trueDir = c.direction === 'outbound' ? 'outbound' : 'inbound';
   const contactNum = trueDir === 'inbound' ? c.from_number : c.to_number;
   const contactName = c.caller_name || lookupContactName(contactNum);
-  document.getElementById('detail-from').textContent = trueDir === 'inbound'
-    ? (contactName ? contactName + ' (' + c.from_number + ')' : (c.from_number||'—'))
-    : 'You';
-  document.getElementById('detail-to').textContent = trueDir === 'outbound'
-    ? (contactName ? contactName + ' (' + c.to_number + ')' : (c.to_number||'—'))
-    : (c.to_number||'—');
+  const contactDisplay = contactName ? contactName + ' (' + contactNum + ')' : (contactNum || '—');
+  if (trueDir === 'outbound') {
+    document.getElementById('detail-from-label').textContent = 'ME';
+    document.getElementById('detail-to-label').textContent = 'CONTACT';
+    document.getElementById('detail-from').textContent = 'You';
+    document.getElementById('detail-to').textContent = contactDisplay;
+  } else {
+    document.getElementById('detail-from-label').textContent = 'CONTACT';
+    document.getElementById('detail-to-label').textContent = 'TO';
+    document.getElementById('detail-from').textContent = contactDisplay;
+    document.getElementById('detail-to').textContent = c.to_number || '—';
+  }
   document.getElementById('detail-duration').textContent = formatDur(c.duration);
   // Summary
   const summaryWrap = document.getElementById('detail-summary-wrap');
@@ -583,6 +592,7 @@ function renderVerifiedContacts() {
           <button class="btn btn-call btn-sm" onclick="startDial('${c.from_number}','${esc(c.caller_name)}')">📞 Call</button>
           ${c.caller_email ? `<a href="mailto:${c.caller_email}" class="btn btn-ghost btn-sm">✉ Email</a>` : ''}
           <button class="btn btn-ghost btn-sm" onclick="unverifyCard('${c.id}')">Edit</button>
+          <button class="btn btn-sm" style="background:rgba(239,68,68,0.1);color:var(--red);border:1px solid rgba(239,68,68,0.2)" onclick="deleteContact('${c.id}')">Delete</button>
         </div>
       </td>
     </tr>
@@ -690,6 +700,27 @@ async function dismissCard(id) {
   await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', { crm_verified: true, crm_verified_at: new Date().toISOString() });
   const c = allCRMCalls.find(x => x.id === id);
   if (c) { c.crm_verified = true; c._open = false; }
+  updateCRMBadge();
+  renderCRMReview();
+  renderVerifiedContacts();
+}
+
+async function deleteContact(id) {
+  if (!confirm('Remove this contact? The call record stays but contact details will be cleared.')) return;
+  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', {
+    crm_verified:   false,
+    caller_name:    null,
+    caller_email:   null,
+    caller_company: null,
+    crm_verified_at: null,
+  });
+  const c = allCRMCalls.find(x => x.id === id);
+  if (c) {
+    c.crm_verified   = false;
+    c.caller_name    = null;
+    c.caller_email   = null;
+    c.caller_company = null;
+  }
   updateCRMBadge();
   renderCRMReview();
   renderVerifiedContacts();
