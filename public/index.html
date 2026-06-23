@@ -400,10 +400,8 @@ function renderCalls(calls) {
     tbody.innerHTML = `<tr><td colspan="7"><div class="empty"><div class="empty-icon">📞</div><h3>No calls yet</h3><p>Calls appear here automatically after recording</p></div></td></tr>`;
     return;
   }
-  const TWILIO_NUMBER = '+61344224989';
   tbody.innerHTML = calls.map(c => {
-    // True direction: if from_number is the Twilio number, it's outbound (we initiated)
-    const trueDirection = c.from_number === TWILIO_NUMBER ? 'outbound' : 'inbound';
+    const trueDirection = c.direction === 'outbound' ? 'outbound' : 'inbound';
     return `
     <tr>
       <td style="color:var(--muted);font-size:12px">${formatTime(c.recorded_at)}</td>
