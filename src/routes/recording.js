@@ -4,6 +4,8 @@ const transcribeAudio = require("../services/transcribe");
 const analyseCall     = require("../services/analyse");
 const sendSMS         = require("../services/sms");
 const supabase        = require("../services/supabase");
+const { createDraft } = require("../services/gmail");
+const { createEvent } = require("../services/gcal");
 
 router.post("/complete", async (req, res) => {
   res.sendStatus(200);
@@ -114,7 +116,55 @@ router.post("/complete", async (req, res) => {
 
     console.log(`💾 Call saved: ${savedId}`);
 
-    // ── Send WhatsApp ─────────────────────────────────────────
+    // ── Gmail draft + Calendar event ─────────────────────────
+    const CLIENT_ID = "default"; // per-client in future
+    try {
+      if (analysis && direction === "inbound") {
+        const callerName  = analysis.caller?.name    || From;
+        const callerEmail = analysis.caller?.email   || null;
+        const intent      = analysis.intent          || "general_enquiry";
+        const summary     = analysis.summary         || "Call received";
+        const action      = analysis.action          || "";
+
+        // Always create a draft email for inbound calls with contact info
+        if (callerEmail) {
+          const subject = `Following up on your call${callerName ? ` — ${callerName}` : ""}`;
+          const body = [
+            `Hi${callerName ? ` ${callerName.split(" ")[0]}` : ""},`,
+            ``,
+            `Thank you for calling. ${summary}`,
+            ``,
+            action ? `Next step: ${action}` : "",
+            ``,
+            `Please don't hesitate to reach out if you have any questions.`,
+            ``,
+            `Kind regards`,
+          ].filter(Boolean).join("
+");
+
+          await createDraft(CLIENT_ID, { to: callerEmail, subject, body });
+          console.log(`📧 Draft created for ${callerEmail}`);
+        }
+
+        // Create calendar event if meeting was requested
+        if (intent === "schedule_meeting" && analysis.follow_up?.detail) {
+          await createEvent(CLIENT_ID, {
+            title:          `Meeting with ${callerName}`,
+            description:    `${summary}
+
+From call: ${From}
+
+${analysis.follow_up.detail}`,
+            attendeeEmail:  callerEmail || null,
+          });
+          console.log(`📅 Calendar event created for ${callerName}`);
+        }
+      }
+    } catch (err) {
+      console.error("⚠️  Gmail/Calendar automation failed (call still saved):", err.message);
+    }
+
+    // ── Send SMS ─────────────────────────────────────────
     const duration = formatDuration(RecordingDuration);
     const contactLabel = direction === "outbound"
       ? `To: ${To}`
