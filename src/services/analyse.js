@@ -77,9 +77,7 @@ ${factsInstruction}${contextSection}`,
   try {
     return JSON.parse(text);
   } catch {
-    const clean = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(clean);
-  }
-}
-
-module.exports = analyseCall;
+    // Strip markdown fences and control characters
+    const clean = text
+      .replace(/```json|```/g, "")
+      .replace(/[
