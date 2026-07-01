@@ -10,6 +10,7 @@ app.use("/outbound",  require("./routes/outbound"));
 app.use("/recording", require("./routes/recording"));
 app.use("/call",      require("./routes/call"));
 app.use("/auth",      require("./routes/auth"));
+app.use("/test",      require("./routes/test"));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
