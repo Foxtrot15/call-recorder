@@ -1,8 +1,23 @@
 const axios = require("axios");
 
-async function analyseCall(transcript, contactContext = null) {
+async function analyseCall(transcript, contactContext = null, businessProfile = null) {
   const contextSection = contactContext
-    ? `\n\nCONTACT HISTORY:\n${contactContext}\n\nUse this history to provide richer analysis. Note if this is a returning contact, reference previous interactions in the summary, and update any known facts.`
+    ? `\n\nCONTACT HISTORY:\n${contactContext}\n\nUse this history to provide richer analysis. Note if this is a returning contact and reference previous interactions in the summary.`
+    : "";
+
+  // Build dynamic facts extraction based on business type
+  let factsInstruction;
+  if (businessProfile?.extraction_fields?.length) {
+    const fields = businessProfile.extraction_fields
+      .map(f => `  - "${f.key}" (${f.label}): ${f.description}. Example: "${f.example}"`)
+      .join("\n");
+    factsInstruction = `- facts: extract these business-specific facts if mentioned (omit if not mentioned):\n${fields}`;
+  } else {
+    factsInstruction = `- facts: extract any specific business facts mentioned (property, budget, timeline, job type, location etc). Use snake_case keys.`;
+  }
+
+  const businessContext = businessProfile
+    ? `\n\nBUSINESS TYPE: ${businessProfile.business_type} (${businessProfile.industry})\n${businessProfile.profile_summary}`
     : "";
 
   const response = await axios.post(
@@ -10,17 +25,17 @@ async function analyseCall(transcript, contactContext = null) {
     {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1000,
-      system: `You are analysing transcripts of calls received by a small business.
+      system: `You are analysing transcripts of calls received by a small business.${businessContext}
 Extract structured information and respond ONLY with a valid JSON object — no preamble, no markdown, no backticks.
 
 Return this exact shape:
 {
   "caller": {
-    "name":              string | null,
-    "company":           string | null,
-    "email":             string | null,
-    "email_confidence":  "high" | "low" | null,
-    "phone":             string | null
+    "name":             string | null,
+    "company":          string | null,
+    "email":            string | null,
+    "email_confidence": "high" | "low" | null,
+    "phone":            string | null
   },
   "intent":    string,
   "summary":   string,
@@ -37,7 +52,7 @@ Rules:
 - summary: 1-2 sentences, plain English. If returning contact, reference previous interactions.
 - action: the single most important next step, or null
 - email_confidence: "low" if email was spelled out phonetically, repeated with corrections, or uncertain
-- facts: extract any specific business facts mentioned — property address, budget, timeline, job type, location, settlement date etc. Use snake_case keys. e.g. {"property_suburb": "Toorak", "budget": "$1.2M", "settlement_weeks": "6"}${contextSection}`,
+${factsInstruction}${contextSection}`,
 
       messages: [
         {
