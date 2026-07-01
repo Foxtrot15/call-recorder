@@ -6,6 +6,12 @@ const sendNotification = require("../services/notify");
 const supabase         = require("../services/supabase");
 const { createDraft }  = require("../services/gmail");
 const { createEvent }  = require("../services/gcal");
+const {
+  getOrCreateContact,
+  getContactHistory,
+  updateContactFromCall,
+  buildContactContext,
+} = require("../services/contacts");
 
 router.post("/complete", async (req, res) => {
   res.sendStatus(200);
@@ -19,14 +25,13 @@ router.post("/complete", async (req, res) => {
   console.log(`📼 Recording complete: ${RecordingSid} (${RecordingDuration}s)`);
 
   try {
-    // ── Fetch call details from Twilio ────────────────────────
     const twilio = require("twilio");
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const call = await client.calls(CallSid).fetch();
 
     const CLIENT_REAL = process.env.CLIENT_REAL_NUMBER;
+    const GOOGLE_CLIENT_ID = "default";
 
-    // Check if we already have a record for this call (outbound clicks store it immediately)
     const { data: existingRecord } = await supabase
       .from("calls")
       .select("direction, from_number, to_number")
@@ -56,16 +61,42 @@ router.post("/complete", async (req, res) => {
       return;
     }
 
-    // ── Analyse with Claude ───────────────────────────────────
+    // ── Load contact history for context ─────────────────────
+    let contactContext = null;
+    let contact = null;
+    try {
+      if (direction === "inbound") {
+        contact = await getOrCreateContact(GOOGLE_CLIENT_ID, From);
+        const history = await getContactHistory(GOOGLE_CLIENT_ID, From);
+        if (history.length > 0) {
+          contactContext = buildContactContext(contact, history);
+          console.log(`👤 Found ${history.length} previous calls from ${From}`);
+        }
+      }
+    } catch (err) {
+      console.error("⚠️  Contact history lookup failed:", err.message);
+    }
+
+    // ── Analyse with Claude (with contact context) ────────────
     let analysis = null;
     try {
-      analysis = await analyseCall(transcript);
+      analysis = await analyseCall(transcript, contactContext);
       console.log(`🤖 Analysis complete for ${CallSid}`);
     } catch (err) {
       console.error("⚠️  Analysis failed (call still saved):", err.message);
     }
 
-    // ── Upsert Supabase record ────────────────────────────────
+    // ── Update contact profile ────────────────────────────────
+    try {
+      if (direction === "inbound" && analysis) {
+        await updateContactFromCall(GOOGLE_CLIENT_ID, From, analysis, new Date().toISOString());
+        console.log(`👤 Contact profile updated for ${From}`);
+      }
+    } catch (err) {
+      console.error("⚠️  Contact update failed:", err.message);
+    }
+
+    // ── Upsert Supabase call record ───────────────────────────
     const payload = {
       recording_sid:      RecordingSid,
       from_number:        From,
@@ -114,7 +145,6 @@ router.post("/complete", async (req, res) => {
     console.log(`💾 Call saved: ${savedId}`);
 
     // ── Gmail draft + Calendar event ─────────────────────────
-    const GOOGLE_CLIENT_ID = "default";
     try {
       if (analysis && direction === "inbound") {
         const callerName  = analysis.caller?.name  || From;
@@ -125,11 +155,14 @@ router.post("/complete", async (req, res) => {
 
         if (callerEmail) {
           const firstName = callerName.split(" ")[0];
+          const isReturning = contactContext !== null;
           const subject = "Following up on your call" + (callerName ? " — " + callerName : "");
           const bodyLines = [
             "Hi " + firstName + ",",
             "",
-            "Thank you for calling. " + summary,
+            isReturning
+              ? "Great to hear from you again. " + summary
+              : "Thank you for calling. " + summary,
             "",
             action ? "Next step: " + action : "",
             "",
@@ -137,9 +170,12 @@ router.post("/complete", async (req, res) => {
             "",
             "Kind regards",
           ].filter(Boolean);
-          const body = bodyLines.join("\n");
 
-          await createDraft(GOOGLE_CLIENT_ID, { to: callerEmail, subject, body });
+          await createDraft(GOOGLE_CLIENT_ID, {
+            to: callerEmail,
+            subject,
+            body: bodyLines.join("\n"),
+          });
           console.log("📧 Draft created for " + callerEmail);
         }
 
@@ -163,7 +199,7 @@ router.post("/complete", async (req, res) => {
       ? (analysis?.caller?.name || To)
       : (analysis?.caller?.name || From);
 
-    await sendNotification("default", {
+    await sendNotification(GOOGLE_CLIENT_ID, {
       direction,
       duration,
       from:        contactDisplay,
