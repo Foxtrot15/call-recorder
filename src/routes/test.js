@@ -153,17 +153,19 @@ Write a SHORT, natural, professional email directly to the client.
         }
 
         // Fire calendar for meetings, appointments, site visits, consultations
+        const facts = analysis.facts || {};
         const needsCalendar = intent === "schedule_meeting" || 
           (analysis.follow_up?.type === "meeting") ||
-          (analysis.facts?.appointment_date || analysis.facts?.visit_date || analysis.facts?.meeting_date || analysis.facts?.consultation_date);
+          (facts.appointment_date || facts.visit_date || facts.meeting_date || facts.job_start_date);
           
         if (needsCalendar && (analysis.follow_up?.detail || analysis.action)) {
           const eventDetail = analysis.follow_up?.detail || analysis.action || summary;
           const desc = summary + "\n\nContact: " + From + (callerEmail ? " | " + callerEmail : "") + "\n\n" + eventDetail;
           await createEvent(clientId, {
-            title:         `${callerName} — ${intent === "schedule_meeting" ? "Meeting" : "Appointment"}`,
+            title:         `${callerName} — ${facts.job_start_date ? "Job" : intent === "schedule_meeting" ? "Meeting" : "Appointment"}`,
             description:   desc,
             attendeeEmail: callerEmail || null,
+            facts,
           });
           console.log("📅 Calendar event created for " + callerName);
         }
