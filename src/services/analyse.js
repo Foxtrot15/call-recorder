@@ -40,6 +40,7 @@ Return this exact shape:
   "intent":    string,
   "summary":   string,
   "action":    string | null,
+  "suggested_actions": [string],
   "facts":     object,
   "follow_up": {
     "type":   "email" | "call" | "meeting" | "none",
@@ -51,6 +52,7 @@ Rules:
 - intent: one of schedule_meeting, quote_request, referral, general_enquiry, complaint, wrong_number, follow_up, other
 - summary: 1-2 sentences, plain English. If returning contact, reference previous interactions.
 - action: the single most important next step, or null
+- suggested_actions: array of 2-3 short action labels the business owner could take, e.g. ["Send quote", "Book site visit", "Schedule callback"] — keep each under 5 words
 - email_confidence: "low" if email was spelled out phonetically, repeated with corrections, or uncertain
 ${factsInstruction}${contextSection}`,
 
