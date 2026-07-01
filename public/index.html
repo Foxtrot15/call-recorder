@@ -175,6 +175,8 @@
     <button class="active" onclick="showPage('calls',this)">Calls</button>
     <button onclick="showPage('contacts',this)">Contacts <span class="crm-pending-badge" id="crm-nav-badge"></span></button>
     <button onclick="showPage('connections',this)">Connections</button>
+    <button onclick="showPage('test',this)">🧪 Test</button>
+    <button onclick="showPage('profile',this)">Profile</button>
   </nav>
   <div class="header-right">
     <div class="status-dot"></div>
@@ -387,6 +389,140 @@
     </div>
   </div>
 
+
+  <!-- ── PROFILE PAGE ── -->
+  <div id="page-profile" class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Business Profile</div>
+        <div class="page-subtitle">Aida uses this to write emails and follow-ups in your voice</div>
+      </div>
+      <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
+    </div>
+
+    <div style="max-width:600px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;display:flex;flex-direction:column;gap:16px">
+
+        <div class="form-group">
+          <label>Your name</label>
+          <input type="text" id="profile-name" placeholder="e.g. Peter">
+        </div>
+
+        <div class="form-group">
+          <label>Business name</label>
+          <input type="text" id="profile-business" placeholder="e.g. Dang Property Advisory">
+        </div>
+
+        <div class="form-group">
+          <label>Business type</label>
+          <select id="profile-type">
+            <option value="">Select...</option>
+            <option value="buyers_advocate">Buyers Advocate</option>
+            <option value="conveyancer">Conveyancer</option>
+            <option value="mortgage_broker">Mortgage Broker</option>
+            <option value="real_estate_agent">Real Estate Agent</option>
+            <option value="tradie">Tradie</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+
+        <div class="form-group" id="profile-type-other-wrap" style="display:none">
+          <label>Describe your business</label>
+          <input type="text" id="profile-type-other" placeholder="e.g. Plumbing and drainage services">
+        </div>
+
+        <div class="form-group">
+          <label>Your email address</label>
+          <input type="email" id="profile-email" placeholder="e.g. peter@yourbusiness.com.au">
+        </div>
+
+        <div class="form-group">
+          <label>Phone number</label>
+          <input type="tel" id="profile-phone" placeholder="e.g. 0467 745 066">
+        </div>
+
+        <div class="form-group">
+          <label>Email sign-off</label>
+          <input type="text" id="profile-signoff" placeholder="e.g. Peter Dang | Dang Property Advisory">
+        </div>
+
+        <div class="form-group">
+          <label>Reply tone</label>
+          <select id="profile-tone">
+            <option value="professional">Professional</option>
+            <option value="friendly">Friendly & warm</option>
+            <option value="concise">Short & direct</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>About your business <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(helps Aida write better emails)</span></label>
+          <textarea id="profile-about" placeholder="e.g. I help first home buyers and investors find and secure properties across Melbourne. I specialise in off-market deals and auction bidding." style="min-height:100px"></textarea>
+        </div>
+
+      </div>
+
+      <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+        Profile is stored locally on this device. It is used only to personalise emails Aida drafts on your behalf.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TEST PAGE ── -->
+  <div id="page-test" class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Test Injection</div>
+        <div class="page-subtitle">Simulate calls without using Twilio credit</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:28px">
+
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('buyers_advocate')">
+        <div class="stat-label">Buyers Advocate</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Sarah, Marcus, James</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+      </div>
+
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('conveyancer')">
+        <div class="stat-label">Conveyancer</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Tom, Lisa, David & Rebecca</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+      </div>
+
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('plumber')">
+        <div class="stat-label">Plumber</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Kevin, Sandra, Paul</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+      </div>
+
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('mortgage_broker')">
+        <div class="stat-label">Mortgage Broker</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Amy, Chris, Raj</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+      </div>
+
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px">
+      <div class="stat-label" style="margin-bottom:12px">Custom transcript</div>
+      <div class="form-group">
+        <label>Phone number</label>
+        <input type="text" id="test-phone" placeholder="+61400000000" value="+61499000001">
+      </div>
+      <div class="form-group">
+        <label>Transcript</label>
+        <textarea id="test-transcript" style="min-height:120px" placeholder="Speaker 0: Hi, my name is..."></textarea>
+      </div>
+      <button class="btn btn-primary" onclick="injectSingle()">Inject call →</button>
+    </div>
+
+    <div id="test-log" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:var(--mono);font-size:12px;color:var(--muted);min-height:100px;max-height:300px;overflow-y:auto;white-space:pre-wrap">
+      Ready to inject calls...
+    </div>
+  </div>
+
 </main>
 
 <!-- CALL DETAIL MODAL -->
@@ -486,6 +622,8 @@ function showPage(name, btn) {
   if (name === 'calls') refreshCalls();
   if (name === 'contacts') refreshContacts();
   if (name === 'connections') loadConnections();
+  if (name === 'test') document.getElementById('test-log').textContent = 'Ready to inject calls...';
+  if (name === 'profile') loadProfile();
 }
 
 function toggleConnCard(id) {
@@ -1040,6 +1178,138 @@ function formatDur(s) {
   if (!s||s===0) return '—';
   const m=Math.floor(s/60),r=s%60;
   return m>0?`${m}m ${r}s`:`${s}s`;
+}
+
+// ── PROFILE ──────────────────────────────────────────────────
+function saveProfile() {
+  const profile = {
+    name:     document.getElementById('profile-name').value.trim(),
+    business: document.getElementById('profile-business').value.trim(),
+    type:     document.getElementById('profile-type').value,
+    typeOther:document.getElementById('profile-type-other').value.trim(),
+    email:    document.getElementById('profile-email').value.trim(),
+    phone:    document.getElementById('profile-phone').value.trim(),
+    signoff:  document.getElementById('profile-signoff').value.trim(),
+    tone:     document.getElementById('profile-tone').value,
+    about:    document.getElementById('profile-about').value.trim(),
+  };
+  localStorage.setItem('aida_profile', JSON.stringify(profile));
+
+  // Push to backend so recording pipeline can use it
+  fetch('/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(profile),
+  }).catch(() => {});
+
+  alert('Profile saved!');
+}
+
+function loadProfile() {
+  try {
+    const profile = JSON.parse(localStorage.getItem('aida_profile') || '{}');
+    if (profile.name)      document.getElementById('profile-name').value     = profile.name;
+    if (profile.business)  document.getElementById('profile-business').value = profile.business;
+    if (profile.type)      document.getElementById('profile-type').value      = profile.type;
+    if (profile.typeOther) document.getElementById('profile-type-other').value = profile.typeOther;
+    if (profile.email)     document.getElementById('profile-email').value     = profile.email;
+    if (profile.phone)     document.getElementById('profile-phone').value     = profile.phone;
+    if (profile.signoff)   document.getElementById('profile-signoff').value   = profile.signoff;
+    if (profile.tone)      document.getElementById('profile-tone').value      = profile.tone;
+    if (profile.about)     document.getElementById('profile-about').value     = profile.about;
+    // Show other field if needed
+    if (profile.type === 'other') document.getElementById('profile-type-other-wrap').style.display = 'block';
+  } catch {}
+}
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'profile-type') {
+    document.getElementById('profile-type-other-wrap').style.display =
+      e.target.value === 'other' ? 'block' : 'none';
+  }
+});
+
+
+// ── TEST INJECTION ───────────────────────────────────────────
+const TEST_SCENARIOS = {
+  buyers_advocate: [
+    { from_number: "+61411111001", duration: 45, transcript: "Speaker 0: Hi there, I found your number online. My name's Sarah Chen. I'm looking to buy my first home in the inner east, probably around Fitzroy or Collingwood. My budget is around $900,000. I've got pre-approval from ANZ. Could someone give me a callback? My email is sarah.chen@gmail.com. Thanks." },
+    { from_number: "+61411111002", duration: 62, transcript: "Speaker 0: Hello, this is Marcus Webb calling. I'm an investor looking to purchase a second property. I'm interested in the Bayside area, thinking Mount Eliza or Frankston South. Budget is flexible, probably up to $1.5 million. My email is marcus.webb@webbinvestments.com.au. Please call me back when you get a chance." },
+    { from_number: "+61411111003", duration: 38, transcript: "Speaker 0: Hi, James Nguyen here. My wife and I are relocating from Sydney in about 3 months and we need to buy quickly. We're looking in the Doncaster or Manningham area. We have a budget of about $1.1 million and we're pre-approved. Can someone call me back urgently? james.nguyen@hotmail.com. Thanks." }
+  ],
+  conveyancer: [
+    { from_number: "+61422222001", duration: 55, transcript: "Speaker 0: Hi, my name is Tom Bradley. I'm purchasing a property at 14 Elm Street in Ringwood. The purchase price is $785,000 and settlement is in 60 days. My solicitor said I need a conveyancer. Can you help? My email is tom.bradley@outlook.com." },
+    { from_number: "+61422222002", duration: 40, transcript: "Speaker 0: Hello, Lisa Park calling. I'm selling my investment property in Box Hill. The sale price is $650,000. The buyer's solicitor has already been in touch. I need a conveyancer on my end. Settlement is 45 days away. You can email me at lisa.park@gmail.com." },
+    { from_number: "+61422222003", duration: 70, transcript: "Speaker 0: Hi there, David and Rebecca Morrison here. We're buying a house in Thornbury, $920,000, and we also need to sell our current home in Preston at the same time. Both settlements need to line up. Can you handle both? Our email is david.morrison@morrisonfamily.com." }
+  ],
+  plumber: [
+    { from_number: "+61433333001", duration: 35, transcript: "Speaker 0: Yeah hi, Kevin here from 23 Rosewood Drive Dandenong. Got a burst pipe under the kitchen sink, there's water everywhere. Need someone out urgently today if possible. My number is 0433 333 001. Please call me back." },
+    { from_number: "+61433333002", duration: 48, transcript: "Speaker 0: Hi, Sandra calling from Cheltenham. I need a hot water system replaced. The old one is about 12 years old and it's not heating properly. It's a gas system, 250 litre. Can I get a quote? My email is sandra.mills@gmail.com." },
+    { from_number: "+61433333003", duration: 52, transcript: "Speaker 0: Hi there, I'm calling about a bathroom renovation quote. We want to move the toilet and add a second vanity. Property is in Hawthorn. I'm flexible on timing, not urgent. Can someone come out for a quote? Name's Paul Georgiou, paul@georgioudesign.com.au." }
+  ],
+  mortgage_broker: [
+    { from_number: "+61444444001", duration: 58, transcript: "Speaker 0: Hi, Amy Walsh here. My husband and I are looking to refinance our home loan. Current loan is with CBA, about $480,000 outstanding. We've been in the property for 5 years in Essendon. Our fixed rate is ending in 3 months. Can someone call me back to discuss options? amy.walsh@gmail.com." },
+    { from_number: "+61444444002", duration: 43, transcript: "Speaker 0: Hello, Chris Tan calling. First home buyer here. Looking at properties around $700,000 in the western suburbs. I'm self-employed, been running my business for 2 years. I've heard it's harder to get loans when self-employed. Can someone help me understand my options? chris.tan@tanelectrical.com.au." },
+    { from_number: "+61444444003", duration: 67, transcript: "Speaker 0: Hi, Raj Patel here. I'm looking to buy an investment property. Already own my home in Glen Waverley, about $800,000 equity. Looking to use equity to fund a deposit on a unit in the CBD, probably around $550,000. Need to understand how to structure it. raj.patel@patelfamily.net." }
+  ]
+};
+
+function testLog(msg) {
+  const el = document.getElementById('test-log');
+  el.textContent += `\n${new Date().toLocaleTimeString()} — ${msg}`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function injectBatch(industry) {
+  const calls = TEST_SCENARIOS[industry];
+  if (!calls) return;
+  const log = document.getElementById('test-log');
+  log.textContent = `Injecting ${calls.length} ${industry} calls...`;
+
+  for (const call of calls) {
+    testLog(`Injecting: ${call.from_number}...`);
+    try {
+      const res = await fetch('/test/inject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...call, skip_notify: true }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        testLog(`✅ ${data.analysis?.caller?.name || call.from_number} — ${data.analysis?.summary?.slice(0,60)}...`);
+        if (data.business_profile_updated) testLog('🏢 Business profile updated!');
+      } else {
+        testLog(`❌ Failed: ${data.error}`);
+      }
+    } catch (err) {
+      testLog(`❌ Error: ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 800));
+  }
+  testLog('\nDone! Refresh Calls and Contacts pages to see results.');
+}
+
+async function injectSingle() {
+  const phone      = document.getElementById('test-phone').value;
+  const transcript = document.getElementById('test-transcript').value;
+  if (!transcript) return alert('Please enter a transcript');
+
+  testLog(`Injecting single call from ${phone}...`);
+  try {
+    const res = await fetch('/test/inject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_number: phone, transcript, skip_notify: true }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      testLog(`✅ ${data.analysis?.caller?.name || phone} — ${data.analysis?.summary}`);
+    } else {
+      testLog(`❌ Failed: ${data.error}`);
+    }
+  } catch (err) {
+    testLog(`❌ Error: ${err.message}`);
+  }
 }
 
 // ── INIT ─────────────────────────────────────────────────────
