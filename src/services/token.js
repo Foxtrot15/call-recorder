@@ -1,9 +1,8 @@
-
 const crypto = require("crypto");
 const supabase = require("./supabase");
 
 const ALGORITHM = "aes-256-gcm";
-const KEY = Buffer.from(process.env.ENCRYPTION_KEY.padEnd(32).slice(0, 32));
+const KEY = Buffer.from((process.env.ENCRYPTION_KEY || "").padEnd(32).slice(0, 32));
 
 function encrypt(text) {
   const iv = crypto.randomBytes(16);
