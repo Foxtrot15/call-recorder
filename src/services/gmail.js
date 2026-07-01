@@ -1,42 +1,56 @@
-
+const axios = require("axios");
 const { google } = require("googleapis");
 const { getToken, storeToken } = require("./token");
 
-const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI  = `${process.env.BASE_URL}/auth/google/callback`;
+async function refreshAccessToken(tokenData) {
+  const params = new URLSearchParams();
+  params.append("client_id",     process.env.GOOGLE_CLIENT_ID);
+  params.append("client_secret", process.env.GOOGLE_CLIENT_SECRET);
+  params.append("refresh_token", tokenData.refreshToken);
+  params.append("grant_type",    "refresh_token");
+
+  const res = await axios.post("https://oauth2.googleapis.com/token", params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeout: 10000,
+  });
+
+  return res.data.access_token;
+}
 
 async function getAuthClient(clientId) {
   const tokenData = await getToken(clientId, "google");
   if (!tokenData) throw new Error("No Google token found for client " + clientId);
 
-  const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-  oauth2Client.setCredentials({
-    access_token:  tokenData.accessToken,
-    refresh_token: tokenData.refreshToken,
-    expiry_date:   tokenData.expiry ? new Date(tokenData.expiry).getTime() : null,
-  });
+  // Check if token is expired or about to expire
+  let accessToken = tokenData.accessToken;
+  const expiry = tokenData.expiry ? new Date(tokenData.expiry).getTime() : 0;
+  const now = Date.now();
 
-  // Auto-refresh token if expired
-  oauth2Client.on("tokens", async (tokens) => {
-    if (tokens.refresh_token || tokens.access_token) {
-      await storeToken(clientId, "google", {
-        accessToken:  tokens.access_token || tokenData.accessToken,
-        refreshToken: tokens.refresh_token || tokenData.refreshToken,
-        expiry:       tokens.expiry_date,
-        email:        tokenData.email,
-      });
-    }
-  });
+  if (!expiry || expiry < now + 60000) {
+    // Refresh the token
+    accessToken = await refreshAccessToken(tokenData);
+    await storeToken(clientId, "google", {
+      accessToken,
+      refreshToken: tokenData.refreshToken,
+      expiry:       new Date(now + 3600000).toISOString(),
+      email:        tokenData.email,
+    });
+  }
 
-  return oauth2Client;
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    `${process.env.BASE_URL}/auth/google/callback`
+  );
+  oauth2Client.setCredentials({ access_token: accessToken });
+
+  return { oauth2Client, email: tokenData.email };
 }
 
 async function createDraft(clientId, { to, subject, body }) {
-  const auth   = await getAuthClient(clientId);
-  const gmail  = google.gmail({ version: "v1", auth });
+  const { oauth2Client } = await getAuthClient(clientId);
+  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-  // Build RFC 2822 email
   const emailLines = [
     `To: ${to}`,
     `Subject: ${subject}`,
@@ -60,8 +74,8 @@ async function createDraft(clientId, { to, subject, body }) {
 }
 
 async function sendEmail(clientId, { to, subject, body }) {
-  const auth  = await getAuthClient(clientId);
-  const gmail = google.gmail({ version: "v1", auth });
+  const { oauth2Client } = await getAuthClient(clientId);
+  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   const emailLines = [
     `To: ${to}`,
@@ -84,4 +98,4 @@ async function sendEmail(clientId, { to, subject, body }) {
   console.log(`📧 Email sent to ${to}`);
 }
 
-module.exports = { createDraft, sendEmail };
+module.exports = { createDraft, sendEmail, getAuthClient };
