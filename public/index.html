@@ -479,28 +479,40 @@
 
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:28px">
 
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('dentist')">
+      <div class="stat-card" style="border-color:var(--border2)">
         <div class="stat-label">🦷 Dentist</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Emma, Greg, Wendy</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Book appt · Quote · Emergency</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="injectBatch('dentist')">Inject →</button>
+          <button class="btn btn-primary btn-sm" onclick="injectBatch('dentist',true)">+ Send emails</button>
+        </div>
       </div>
 
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('accountant')">
+      <div class="stat-card" style="border-color:var(--border2)">
         <div class="stat-label">🧾 Accountant</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Michael, Lisa, Robert & Helen</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Consult · Urgent tax · SMSF</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="injectBatch('accountant')">Inject →</button>
+          <button class="btn btn-primary btn-sm" onclick="injectBatch('accountant',true)">+ Send emails</button>
+        </div>
       </div>
 
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('saas')">
+      <div class="stat-card" style="border-color:var(--border2)">
         <div class="stat-label">💻 SaaS</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Natalie, Tom, Priya</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Demo · Quote · Support issue</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="injectBatch('saas')">Inject →</button>
+          <button class="btn btn-primary btn-sm" onclick="injectBatch('saas',true)">+ Send emails</button>
+        </div>
       </div>
 
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('plumber')">
+      <div class="stat-card" style="border-color:var(--border2)">
         <div class="stat-label">🔧 Plumber</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Kevin, Sandra, Paul</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Emergency · Quote · Book job</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="injectBatch('plumber')">Inject →</button>
+          <button class="btn btn-primary btn-sm" onclick="injectBatch('plumber',true)">+ Send emails</button>
+        </div>
       </div>
 
     </div>
@@ -1258,202 +1270,128 @@ document.addEventListener('change', (e) => {
 // ── TEST INJECTION ───────────────────────────────────────────
 const TEST_SCENARIOS = {
   dentist: [
+    // Scenario 1: Book appointment
     { from_number: "+61411111001", duration: 180, transcript: `Speaker 0: Hi there, thanks for calling Melbourne Dental Care, this is Jessica speaking.
-Speaker 1: Oh hi Jessica, my name is Emma Lawson. I've just moved to the area and I'm looking for a new dentist.
-Speaker 0: Wonderful, welcome to the area Emma! Are you looking for a general checkup or do you have something specific you need help with?
-Speaker 1: Both really. I'm overdue for a checkup and clean — it's been about 18 months. And I've had some sensitivity in my back left molar. I'm worried it might be a cavity.
-Speaker 0: I see, okay. Do you have private health insurance?
-Speaker 1: Yes, I'm with Medibank. I have extras cover but I'm not sure exactly what's included.
-Speaker 0: No worries at all, we can check that for you when you come in. We bulk bill the standard checkup and clean through most Medibank extras. The cavity would depend on what we find on the x-ray.
-Speaker 1: That's great. How soon could I get an appointment? I work in the city so I'd need something early morning or after 5.
-Speaker 0: We have a 7:30am slot this Thursday or a 5:30pm next Tuesday. Which works better?
-Speaker 1: Thursday 7:30 would be perfect actually.
-Speaker 0: Lovely. Can I take your email address to send you a confirmation?
+Speaker 1: Oh hi Jessica, my name is Emma Lawson. I've just moved to the area and I need a checkup and clean. I also have some sensitivity in my back left molar.
+Speaker 0: Of course Emma. Are you free this Thursday at 7:30am?
+Speaker 1: Thursday 7:30 would be perfect.
+Speaker 0: Great. Can I take your email to send a confirmation?
 Speaker 1: Sure, it's emma.lawson@gmail.com.
-Speaker 0: Perfect. And your mobile?
-Speaker 1: 0411 111 001.
-Speaker 0: Great Emma, we'll see you Thursday at 7:30. Please arrive 5 minutes early to fill in a new patient form.
+Speaker 0: Perfect Emma, we'll see you Thursday at 7:30. Please arrive 5 minutes early to fill in a new patient form.
 Speaker 1: Will do, thanks so much Jessica.` },
-    { from_number: "+61411111002", duration: 210, transcript: `Speaker 0: Melbourne Dental Care, how can I help you?
-Speaker 1: Hi, Greg Papadopoulos here. I need to make an appointment for my son Jake. He's 8 and this will be his first proper dental checkup.
-Speaker 0: Lovely, we see lots of kids here. How is Jake about dentists, has he been before?
-Speaker 1: He had one checkup when he was about 4 but he was pretty scared. He's still a bit nervous.
-Speaker 0: That's totally normal. Our dentist Dr Sarah is wonderful with anxious kids — she takes it really slowly and explains everything before she does it. We also have Netflix on the ceiling which kids love.
-Speaker 1: Oh that's great actually. He'd love that.
-Speaker 0: Does he have any particular concerns or is it just the general anxiety about dentists?
-Speaker 1: Mostly just scared of the needle. He heard from a friend that getting a filling hurts.
-Speaker 0: For a checkup we won't need any needles at all, just a look around and a clean. We'd only need an injection if we found something that needed treatment, and we always talk parents through that first.
-Speaker 1: That's reassuring. Can I come in with him?
-Speaker 0: Absolutely, we encourage parents to come in for kids under 12.
-Speaker 1: Perfect. What's your availability like for a Saturday?
-Speaker 0: We have Saturday the 12th at 9am or 11am available.
-Speaker 1: 9am works. My email is greg.papadopoulos@outlook.com.
-Speaker 0: Got that. We'll send Jake a fun reminder email too — we have a kids version with a cartoon tooth.
-Speaker 1: He'll love that, thanks!` },
-    { from_number: "+61411111003", duration: 195, transcript: `Speaker 0: Thanks for calling Melbourne Dental Care, Jessica speaking.
-Speaker 1: Hi Jessica, my name is Wendy Richardson. I'm interested in teeth whitening and I think I also need some other work done.
-Speaker 0: Of course Wendy. For whitening we offer both in-chair and take-home options. What other work were you thinking about?
-Speaker 1: My last dentist mentioned I might need a crown on my upper left tooth — it had a big old filling that's starting to crack apparently.
-Speaker 0: Right, so you'd want a consultation to assess both things. Do you have private health?
-Speaker 1: Yes, HCF extras cover.
-Speaker 0: HCF usually covers a good portion of the crown depending on your tier. Whitening is typically cosmetic so not covered, but we have payment plans.
-Speaker 1: That's fine, I've been saving up for it. What's the rough cost for in-chair whitening?
-Speaker 0: It's $650 for our Zoom in-chair treatment. Most people see 6-8 shades lighter in a single 90 minute session.
-Speaker 1: Ooh that's good. And how long does a crown take?
-Speaker 0: Usually two appointments — the first to prep and take impressions, then two weeks later to fit the permanent crown.
-Speaker 1: Okay, can I start with a consultation to look at both things?
-Speaker 0: Absolutely. We have Tuesday at 4pm or Friday at 2pm this week.
-Speaker 1: Friday at 2 please. My email is wendy.richardson@icloud.com.
-Speaker 0: Perfect Wendy, see you Friday at 2pm!` }
+    // Scenario 2: Quote request
+    { from_number: "+61411111002", duration: 210, transcript: `Speaker 0: Melbourne Dental Care, how can I help?
+Speaker 1: Hi, Wendy Richardson here. I need a crown on my upper left tooth and I'm also interested in whitening. Can I get a quote?
+Speaker 0: Of course Wendy. The crown would depend on what we find in the consultation but typically $1,800-2,200. Whitening is $650 for our Zoom in-chair treatment.
+Speaker 1: And does HCF cover the crown?
+Speaker 0: HCF usually covers 50-60% depending on your tier. I'd suggest coming in for a consultation so we can check your cover and give you an exact quote.
+Speaker 1: That sounds good. My email is wendy.richardson@icloud.com.
+Speaker 0: Perfect, I'll send you a consultation booking link now Wendy.` },
+    // Scenario 3: Urgent / emergency
+    { from_number: "+61411111003", duration: 120, transcript: `Speaker 0: Melbourne Dental Care, Jessica speaking.
+Speaker 1: Hi, my name is Greg Papadopoulos. My son Jake broke a tooth at footy training and it's bleeding. He's 8. Can we come in today?
+Speaker 0: Oh no, poor Jake. Yes we can see him today — can you come in at 2pm?
+Speaker 1: Yes absolutely. Thank you so much.
+Speaker 0: Bring the tooth fragment if you have it. And try to keep him calm, we'll look after him. Can I get your mobile?
+Speaker 1: 0411 111 002. And email is greg.papadopoulos@outlook.com.
+Speaker 0: See you at 2pm Greg.` }
   ],
   accountant: [
-    { from_number: "+61422222001", duration: 240, transcript: `Speaker 0: Good afternoon, Collins & Associates, how can I help?
-Speaker 1: Hi, my name is Michael Chen. I'm looking for a new accountant. I run an IT consulting business.
-Speaker 0: Great, I'm Sarah. What kind of help are you looking for Michael?
-Speaker 1: A few things. I've been operating as a sole trader for 3 years now. My turnover this year is around $280,000 and I'm wondering if I should switch to a company structure for tax purposes.
-Speaker 0: That's a common question at that revenue level. Generally around $120-130k profit the company tax rate of 25% becomes more attractive than the top personal rate. What are your rough profits after expenses?
-Speaker 1: Probably about $180,000 after expenses.
-Speaker 0: Yes at that level a company structure would likely save you meaningful tax. There are setup costs and ongoing compliance but it usually pays off quickly. Do you have an accountant currently?
-Speaker 1: I've just been doing it myself through myTax which I know is probably not ideal at this point.
-Speaker 0: At $280k turnover with potential restructuring, you'd definitely benefit from professional help. We'd also want to review the last couple of years returns to make sure everything's been claimed correctly.
-Speaker 1: That would be great. What do your fees look like roughly?
-Speaker 0: For a sole trader returning to company transition, business tax return and personal return, probably in the $3,500-4,500 range for the first year including the restructuring work. Then around $2,500 ongoing annually.
-Speaker 1: That seems reasonable given what I've probably been missing. Can I book a consultation?
-Speaker 0: Of course. Are you free this week?
-Speaker 1: Thursday afternoon works.
-Speaker 0: We have 2pm Thursday. Can I take your email?
-Speaker 1: michael.chen@techsolutions.com.au` },
-    { from_number: "+61422222002", duration: 190, transcript: `Speaker 0: Collins & Associates, Sarah speaking.
-Speaker 1: Hi Sarah, my name is Lisa Nguyen. I'm a freelance graphic designer and I'm in a bit of a mess with my tax.
-Speaker 0: Okay Lisa, what's going on?
-Speaker 1: I haven't lodged a tax return in 2 years. I know I'm behind and I'm honestly really stressed about it. I'm worried about penalties.
-Speaker 0: You're not the first person in this situation and it's very fixable. The ATO actually has a voluntary disclosure process that can significantly reduce penalties if you come forward proactively rather than waiting to be audited.
-Speaker 1: Oh really? I didn't know that.
-Speaker 0: Yes. Have you been keeping any records at all? Invoices, bank statements?
-Speaker 1: I have all my bank statements and I've kept most of my invoices. I use my personal account for everything though which makes it messy.
-Speaker 0: That's fine, bank statements are actually a great starting point. We can reconstruct your income and expenses from those. What's your rough income been over the two years?
-Speaker 1: Maybe $65,000 a year. Sometimes more.
-Speaker 0: Okay so not a huge amount of tax at stake but the penalties can add up. We'd want to get both returns lodged as soon as possible. Do you have a laptop at home you could gather documents on?
-Speaker 1: Yes.
-Speaker 0: Great. I'd suggest booking a 90 minute appointment where you bring everything and we can start working through it together. Would that help?
-Speaker 1: Yes that would be amazing. I've been losing sleep over this.
-Speaker 0: You'll feel so much better once it's sorted. Can I get your email?
-Speaker 1: lisa.design@gmail.com` },
-    { from_number: "+61422222003", duration: 270, transcript: `Speaker 0: Collins & Associates, good morning.
-Speaker 1: Good morning. My name's Robert Burgess. My wife Helen and I are looking for a new accountant. Our previous one has retired.
-Speaker 0: Sorry to hear that, it's always disruptive when that happens. What services were you using with them?
-Speaker 1: They handled our SMSF audit and annual accounts, our two personal tax returns, and we have a couple of investment properties so the schedules for those as well.
-Speaker 0: Okay so a fairly comprehensive engagement. How long have you had the SMSF?
-Speaker 1: About 12 years. It's got about $1.4 million in it now. Mostly index funds and some direct shares.
-Speaker 0: And are you both still working or drawing a pension from the fund?
-Speaker 1: I'm still working part time, Helen is fully retired drawing a pension.
-Speaker 0: Right so you've got a split accumulation and pension account which has some complexity around tax on earnings. Is the fund currently compliant — has the audit been done for this financial year?
-Speaker 1: The 2024 audit was done but 2025 hasn't been yet. It's coming up.
-Speaker 0: No problem, we're well set up for SMSF work. We'd need the previous accountant to transfer the working papers which we can help facilitate. How many investment properties do you have?
-Speaker 1: Two. One in Hawthorn, one in Geelong. Both positively geared now.
-Speaker 0: Great, relatively straightforward then. Would you like to come in for an initial meeting? No charge for that — we like to understand clients' situations before quoting.
-Speaker 1: That sounds very reasonable. My email is robert.burgess@burgessgroup.com.au and we're flexible on timing.` }
+    // Scenario 1: Consultation / advice
+    { from_number: "+61422222001", duration: 240, transcript: `Speaker 0: Collins and Associates, Sarah speaking.
+Speaker 1: Hi Sarah, Michael Chen here. I run an IT consulting business, sole trader, $280k turnover. I think I need to restructure to a company but I'm not sure. Can I get some advice?
+Speaker 0: Absolutely Michael. At that revenue level it's usually worth it — you'd drop from the 47% personal rate to 25% company tax on retained profits. We'd set up the company, transfer the business, and handle the first year returns. Happy to book a consultation to go through the numbers specifically for your situation.
+Speaker 1: Yes please. What does a consultation cost?
+Speaker 0: First consultation is free. After that our fees are $3,500-4,500 for the restructure and first year returns.
+Speaker 1: That sounds reasonable. Can we book for Thursday afternoon?
+Speaker 0: Thursday 2pm works. Email please?
+Speaker 1: michael.chen@techsolutions.com.au
+Speaker 0: Perfect, see you Thursday Michael.` },
+    // Scenario 2: Urgent / overdue tax
+    { from_number: "+61422222002", duration: 190, transcript: `Speaker 0: Collins and Associates, Sarah speaking.
+Speaker 1: Hi Sarah, I'm Lisa Nguyen. I'm really stressed — I haven't lodged tax returns for 2 years. I'm scared about penalties. Can you help?
+Speaker 0: Lisa, you're not alone in this situation and it's very fixable. If you come forward voluntarily the ATO significantly reduces penalties. What's your approximate income over those two years?
+Speaker 1: About $65,000 each year. I'm a freelance graphic designer.
+Speaker 0: Okay, probably looking at $8-12k in tax each year plus interest but we can negotiate the penalties down substantially. We'd want to get both returns lodged as soon as possible.
+Speaker 1: Can I come in this week? I want to sort this out.
+Speaker 0: Yes — bring your bank statements and any invoices you have. Can you do Friday at 10am?
+Speaker 1: Yes! Thank you. My email is lisa.design@gmail.com.
+Speaker 0: We'll get this sorted Lisa, see you Friday.` },
+    // Scenario 3: SMSF / complex
+    { from_number: "+61422222003", duration: 270, transcript: `Speaker 0: Collins and Associates, good morning.
+Speaker 1: Morning, Robert Burgess here. My wife Helen and I need a new accountant. We have an SMSF with $1.4 million, two investment properties, and our personal returns. Our previous accountant retired.
+Speaker 0: That's quite a comprehensive engagement Robert. Is the 2025 SMSF audit done yet?
+Speaker 1: Not yet. It's overdue actually.
+Speaker 0: That's a priority then — there are penalties for late lodgement. Can I suggest we book an initial meeting this week to assess the situation and get you onboarded quickly?
+Speaker 1: Yes absolutely. How does Tuesday work?
+Speaker 0: Tuesday 10am is available. Can I get your email?
+Speaker 1: robert.burgess@burgessgroup.com.au. And should Helen come too?
+Speaker 0: Yes, that would be ideal since you're both members of the fund.
+Speaker 0: Perfect Robert, see you both Tuesday at 10am.` }
   ],
   saas: [
-    { from_number: "+61433333001", duration: 220, transcript: `Speaker 0: Thanks for calling Streamline Software, this is Alex.
-Speaker 1: Hi Alex, my name is Natalie Forbes. I run a marketing agency called Forbes Creative, about 12 staff. I'm looking at switching our project management software.
-Speaker 0: Great timing Natalie, we work with a lot of agencies. What are you using currently?
-Speaker 1: Asana. We've been on it for 4 years but the pricing has just gone up again and we're paying about $1,800 a month now. It's getting hard to justify.
-Speaker 0: Yeah we hear that a lot. What features do you actually use day to day?
-Speaker 1: Task management, timelines, client portals — our clients can see their project status — and we do resource planning to see who's overloaded.
-Speaker 0: All of those are core features for us. The client portal one is interesting — is that a critical feature or nice to have?
-Speaker 1: Critical. Our clients love it and it's become a point of difference for us.
-Speaker 0: Good news — our client portal is actually more customisable than Asana's. You can white label it with your branding.
-Speaker 1: Oh that's interesting. What does your pricing look like for 12 users?
-Speaker 0: Our Business plan is $45 per user per month. So for 12 users that's $540 a month — saving you over $1,200 a month versus Asana.
-Speaker 1: That's significant. Does it integrate with Xero? We invoice through Xero.
-Speaker 0: Yes, native Xero integration. Time tracked in Streamline flows straight through to Xero invoices.
-Speaker 1: That's actually a feature we've been wanting. Currently we export manually. Can I get a demo?
-Speaker 0: Absolutely. I can do a personalised demo focused on agency workflows. What's your email?
-Speaker 1: natalie@forbesmarketing.com.au. Maybe next Tuesday?
-Speaker 0: Tuesday 10am works perfectly.` },
+    // Scenario 1: Demo request
+    { from_number: "+61433333001", duration: 220, transcript: `Speaker 0: Streamline Software, Alex speaking.
+Speaker 1: Hi Alex, Natalie Forbes here. I run a 12-person marketing agency. We're paying $1,800 a month for Asana and I'm looking for alternatives. Can I get a demo?
+Speaker 0: Absolutely Natalie. We work with a lot of agencies. What features do you rely on most?
+Speaker 1: Task management, client portals — our clients can see project status — and resource planning.
+Speaker 0: All core features for us. Our client portal is actually more customisable than Asana's, white label with your branding. For 12 users we'd be $540 a month versus your current $1,800.
+Speaker 1: That's a big saving. Does it integrate with Xero?
+Speaker 0: Native Xero integration. Can I book you in for a personalised demo next Tuesday at 10am?
+Speaker 1: Tuesday 10am is perfect. natalie@forbesmarketing.com.au.
+Speaker 0: Done Natalie, sending you a calendar invite now.` },
+    // Scenario 2: Quote / pricing
     { from_number: "+61433333002", duration: 195, transcript: `Speaker 0: Streamline Software, Alex speaking.
-Speaker 1: G'day Alex, Tom Smith from BuildRight Construction. We build commercial fit-outs, about 25 tradies in the field.
-Speaker 0: Hi Tom! Construction is actually one of our strongest verticals. What are you looking for?
-Speaker 1: We need something to manage our jobs — scheduling who's where each day, tracking materials, and then invoicing at the end. At the moment it's all spreadsheets and it's a nightmare.
-Speaker 0: Spreadsheets for 25 people in the field would definitely be painful. Do you need the tradies to have access on their phones?
-Speaker 1: Yeah that's important. They need to see their schedule for the day and mark off when jobs are done.
-Speaker 0: We have a mobile app that's built for exactly that. Tradies see their daily jobs, can upload photos, log materials used, and mark complete. That all feeds back to the office in real time.
-Speaker 1: That would be massive for us. What about quoting — we do a lot of quotes before jobs?
-Speaker 0: Quoting is built in. You can build quote templates, send them for client e-sign, and when they accept it converts straight to a job.
-Speaker 1: Does it do Xero integration? Our bookkeeper lives in Xero.
+Speaker 1: Hey Alex, Tom Smith from BuildRight Construction. 25 tradies in the field. Need job scheduling, materials tracking, invoicing. Can I get a price?
+Speaker 0: Hi Tom. Our Trade plan is $55 per user. For 25 users that's $1,375 a month. Annual plan gives you 2 months free so effectively $1,146 a month.
+Speaker 1: And the tradies get a mobile app?
+Speaker 0: Yes, they see their daily jobs, upload photos, log materials, mark complete — all feeds back to the office in real time.
+Speaker 1: Does it do Xero?
 Speaker 0: Native integration. Completed jobs with materials and labour flow straight to Xero as draft invoices.
-Speaker 1: Righto. What's the damage cost-wise for 25 users?
-Speaker 0: Trade plan is $55 per user. For 25 that's $1,375 a month. But we have an annual option that's effectively 2 months free.
-Speaker 1: Can I get a demo? My email is tom.smith@buildright.com.au
-Speaker 0: Absolutely Tom, I'll send you a calendar link now.` },
-    { from_number: "+61433333003", duration: 250, transcript: `Speaker 0: Streamline Software, Alex here.
-Speaker 1: Hello, my name is Priya Kumar. I'm the operations manager at Sunrise Aged Care. We operate three residential facilities.
-Speaker 0: Hi Priya. Aged care is quite specialised — what are you looking to manage?
-Speaker 1: Primarily our rostering. We have about 200 staff across three sites and our current system is very manual. We also need compliance reporting for the aged care quality standards.
-Speaker 0: That's a significant operation. Do you currently have any software or is it all manual?
-Speaker 1: We use an old system called CareTrack but it's being discontinued next year. We need to migrate.
-Speaker 0: CareTrack is one we've migrated a few times actually, so we have a good handle on the data migration. In terms of aged care compliance — do you mean the Aged Care Quality Standards reporting, or are you also thinking about the AN-ACC funding model reporting?
-Speaker 1: Both actually. The AN-ACC reporting especially is becoming more complex.
-Speaker 0: We have a dedicated aged care module that handles both. It was built in partnership with a large aged care provider. Can I ask — what's your biggest pain point with the current system?
-Speaker 1: Honestly? When a staff member calls in sick we have to manually call through a list to find a replacement. It takes forever.
-Speaker 0: We have an automated fill-shift feature — when a shift goes unfilled it automatically sends offers to qualified available staff in order of preference. Most facilities fill shifts in under 20 minutes.
-Speaker 1: That alone would be worth the switch. What does pricing look like for our size?
-Speaker 0: For 200 staff enterprise pricing — I'd want to put together a custom quote. Can I get your email and set up a scoping call with our aged care specialist?
-Speaker 1: priya.kumar@sunriseagedcare.com.au. Yes that would be great.` }
+Speaker 1: Okay I'm interested. Can you send me a formal quote?
+Speaker 0: Absolutely. Email?
+Speaker 1: tom.smith@buildright.com.au
+Speaker 0: Quote will be with you within the hour Tom.` },
+    // Scenario 3: Support / complaint
+    { from_number: "+61433333003", duration: 160, transcript: `Speaker 0: Streamline Software, Alex speaking.
+Speaker 1: Hi, Priya Kumar from Sunrise Aged Care. We signed up last month and our staff are having trouble with the rostering module. Half of them can't log in on their phones.
+Speaker 0: Hi Priya, I'm sorry to hear that. That's not the experience we want. Are they getting an error message or just can't access it at all?
+Speaker 1: They get a login error — something about their device not being recognised.
+Speaker 0: That's a device authentication issue. It's usually a quick fix — I'd like to get our tech support to call you within the hour. Can I confirm your email?
+Speaker 1: priya.kumar@sunriseagedcare.com.au. I need this fixed today — we do our rostering on Monday mornings.
+Speaker 0: Understood, I'm escalating this right now as urgent. You'll have a call within 30 minutes.
+Speaker 1: Thank you Alex.` }
   ],
   plumber: [
+    // Scenario 1: Emergency / urgent
     { from_number: "+61444444001", duration: 150, transcript: `Speaker 0: Ace Plumbing, Dave speaking.
-Speaker 1: Dave, it's Kevin Marsh, 23 Rosewood Drive Dandenong. Mate I've got a burst pipe under the kitchen sink, there's water pouring out everywhere.
-Speaker 0: Okay Kevin don't panic. Have you turned off the water at the mains?
-Speaker 1: Where's the mains?
-Speaker 0: Usually outside near the front of the house, sometimes near the meter box. It's a tap or a valve.
-Speaker 1: Hang on... yeah I found it. Turning it now. Okay it's stopped.
-Speaker 0: Good man. Any water already on the floor?
-Speaker 1: Yeah quite a bit, I'm mopping it up now.
-Speaker 0: Is it a visible pipe under the sink or behind the wall?
-Speaker 1: It's the pipe connecting to the tap, I can see it. The fitting looks like it's cracked.
-Speaker 0: Right, that's a straightforward fix. Are you home now?
-Speaker 1: Yeah I work from home.
-Speaker 0: I can be there within the hour. It'll be our call-out rate of $150 plus parts — the fitting itself is usually $20-30.
-Speaker 1: Yeah please come, I need the water back on.
-Speaker 0: On my way Kevin. 23 Rosewood Drive Dandenong yeah?
-Speaker 1: Yeah mate. My mobile is 0444 444 001.
-Speaker 0: See you soon.` },
+Speaker 1: Dave, Kevin Marsh, 23 Rosewood Drive Dandenong. Burst pipe under the kitchen sink, water everywhere. I've turned off the mains.
+Speaker 0: Good work Kevin. Is it the flexible hose connecting to the tap or a pipe in the wall?
+Speaker 1: Flexible hose. I can see it's cracked right at the fitting.
+Speaker 0: Straightforward fix. I'm about 20 minutes away. Call out is $150 plus parts — probably $20-30 for the fitting.
+Speaker 1: Yes please come. Mobile is 0444 444 001.
+Speaker 0: On my way Kevin.` },
+    // Scenario 2: Quote request
     { from_number: "+61444444002", duration: 185, transcript: `Speaker 0: Ace Plumbing, Dave speaking.
-Speaker 1: Hi Dave, Sandra Mills here from Cheltenham. I need to get my hot water system replaced.
-Speaker 0: Hi Sandra. What type of system do you have — gas or electric, and do you know the brand?
-Speaker 1: It's a gas Rheem, I think 250 litres. It's about 12 years old and it's just not heating properly anymore.
-Speaker 0: 12 years is a good run for a hot water system. Are you getting some hot water or none at all?
-Speaker 1: Some, but it's running out really fast. Used to last for two showers, now it barely lasts one.
-Speaker 0: That's classic signs of a failing element or the tank starting to go. At 12 years it's usually more economical to replace than repair. How many people in the house?
-Speaker 1: Just me and my husband.
-Speaker 0: For two people a 160 litre would actually be sufficient but a 250 is fine too if you want the headroom. Are you happy to stick with gas?
-Speaker 1: I was actually wondering about heat pump — I've heard they're more efficient?
-Speaker 0: They are — about 3 times more efficient than gas. Higher upfront cost but the running costs are much lower. There's also a government rebate at the moment, $1,000 off for replacing gas with heat pump.
-Speaker 1: Oh I didn't know that. What's the price difference?
-Speaker 0: A gas replacement would be around $1,800-2,200 installed. A heat pump is around $3,500-4,000 but minus the $1,000 rebate so $2,500-3,000. Over 5 years the heat pump is usually cheaper overall.
-Speaker 1: That makes sense. Can I get a quote?
-Speaker 0: I can come out Thursday or Friday this week. What's your email for the quote?
-Speaker 1: sandra.mills@gmail.com. Friday afternoon if possible.
-Speaker 0: Friday 2pm work?
-Speaker 1: Perfect.` },
+Speaker 1: Hi Dave, Sandra Mills from Cheltenham. I need a quote on replacing my hot water system. It's a 12 year old Rheem gas 250 litre.
+Speaker 0: Good timing to replace it Sandra. Are you happy to stick with gas or interested in heat pump?
+Speaker 1: What's the difference in cost?
+Speaker 0: Gas replacement is $1,800-2,200 installed. Heat pump is $3,500-4,000 but there's a $1,000 government rebate so effectively $2,500-3,000. Heat pump running costs are about 3 times cheaper.
+Speaker 1: The heat pump sounds better long term. Can I get a proper written quote?
+Speaker 0: Of course. Can I come Friday afternoon to measure up and give you an exact price?
+Speaker 1: Friday 2pm works. My email is sandra.mills@gmail.com.
+Speaker 0: See you Friday Sandra.` },
+    // Scenario 3: Schedule job / booking
     { from_number: "+61444444003", duration: 200, transcript: `Speaker 0: Ace Plumbing, Dave speaking.
-Speaker 1: Hi Dave, Paul Georgiou here. I'm looking for a quote on a bathroom renovation.
-Speaker 0: Sure Paul. What are you looking to do?
-Speaker 1: We want to reconfigure the bathroom a bit. Move the toilet to the other wall, add a second vanity, and we might want to move the shower to the corner.
-Speaker 0: Okay so quite a bit of work. Is this the main bathroom or an ensuite?
-Speaker 1: Main bathroom. It's about 3 by 2.5 metres.
-Speaker 0: And the house — is it slab on ground or suspended timber floor?
-Speaker 1: It's a 1970s brick veneer so I think concrete slab.
-Speaker 0: Moving a toilet on a slab is more involved — we need to core drill and run new waste pipes. It adds cost and time but absolutely doable. Do you have a tiler organised or are you looking for us to coordinate the full renovation?
-Speaker 1: I'd love a full quote including tiling if possible. I want one tradie to manage it all.
-Speaker 0: We can do that — we have tilers we work with regularly. Have you got a budget in mind?
-Speaker 1: I'm thinking $15,000-20,000 but I'm not sure if that's realistic.
-Speaker 0: For moving the toilet on slab, second vanity, repositioning shower, and tiling — that's a realistic budget, probably mid-range. Depends on the tiles you choose and fixture quality.
-Speaker 1: Great. When could you come and look?
-Speaker 0: I do site visits Tuesday and Wednesday mornings. My email is dave@aceplumbing.com.au — send me yours and I'll confirm a time.
-Speaker 1: paul@georgioudesign.com.au. Next Tuesday morning would be great.` }
+Speaker 1: Hi Dave, Paul Georgiou here. I want to book in a bathroom reno. We spoke last week and you quoted $17,500 for moving the toilet, adding a vanity, and tiling.
+Speaker 0: Hi Paul, yes I remember. You're in Hawthorn yeah?
+Speaker 1: That's right. We've decided to go ahead. When can you start?
+Speaker 0: I have a slot starting the 14th of July. It's a 5-7 day job depending on the tile work. Does that suit?
+Speaker 1: July 14 is perfect. What do you need from us to lock it in?
+Speaker 0: I'll send a deposit invoice for 30% — that's $5,250 — to lock the dates. Once that's paid we're booked in.
+Speaker 1: Great. Send it to paul@georgioudesign.com.au.
+Speaker 0: Done Paul. And we'll need you to pick your tiles before we start — I'll send you our preferred supplier's link.
+Speaker 1: Sounds good. Looking forward to it Dave.` }
   ]
 };
 
@@ -1463,11 +1401,11 @@ function testLog(msg) {
   el.scrollTop = el.scrollHeight;
 }
 
-async function injectBatch(industry) {
+async function injectBatch(industry, sendEmails = false) {
   const calls = TEST_SCENARIOS[industry];
   if (!calls) return;
   const log = document.getElementById('test-log');
-  log.textContent = `Injecting ${calls.length} ${industry} calls...`;
+  log.textContent = `Injecting ${calls.length} ${industry} calls${sendEmails ? ' (with emails)' : ''}...`;
 
   for (const call of calls) {
     testLog(`Injecting: ${call.from_number}...`);
@@ -1475,11 +1413,12 @@ async function injectBatch(industry) {
       const res = await fetch('/test/inject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...call, skip_notify: true }),
+        body: JSON.stringify({ ...call, skip_notify: !sendEmails }),
       });
       const data = await res.json();
       if (data.success) {
         testLog(`✅ ${data.analysis?.caller?.name || call.from_number} — ${data.analysis?.summary?.slice(0,60)}...`);
+        if (data.analysis?.suggested_actions?.length) testLog(`   Actions: ${data.analysis.suggested_actions.join(' · ')}`);
         if (data.business_profile_updated) testLog('🏢 Business profile updated!');
       } else {
         testLog(`❌ Failed: ${data.error}`);
@@ -1487,7 +1426,7 @@ async function injectBatch(industry) {
     } catch (err) {
       testLog(`❌ Error: ${err.message}`);
     }
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 1000));
   }
   testLog('\nDone! Refresh Calls and Contacts pages to see results.');
 }
