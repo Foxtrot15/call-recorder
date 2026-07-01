@@ -28,6 +28,7 @@ router.post("/inject", async (req, res) => {
     duration    = 60,
     clientId    = "default",
     skip_notify = false,
+    skip_drafts = false,
   } = req.body;
 
   if (!transcript) {
@@ -99,7 +100,7 @@ router.post("/inject", async (req, res) => {
 
     // ── Gmail draft + Calendar event ─────────────────────────
     try {
-      if (analysis && direction === "inbound") {
+      if (!skip_drafts && analysis && direction === "inbound") {
         const callerName  = analysis.caller?.name  || From;
         const callerEmail = analysis.caller?.email || null;
         const intent      = analysis.intent        || "general_enquiry";
