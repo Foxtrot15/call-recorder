@@ -5,18 +5,21 @@ async function analyseCall(transcript, contactContext = null, businessProfile = 
     ? `\n\nCONTACT HISTORY:\n${contactContext}\n\nUse this history to provide richer analysis. Note if this is a returning contact and reference previous interactions in the summary.`
     : "";
 
+  // Scheduling fields are ALWAYS required
+  const schedulingFields = `REQUIRED scheduling fields (always extract if mentioned):
+  - "appointment_date": any specific date for a visit, meeting, or consultation (e.g. "Friday", "July 14")
+  - "appointment_time": any specific time (e.g. "2pm", "9am")
+  - "job_start_date": date when a job/project starts (e.g. "July 14", "Monday the 14th")
+  - "job_duration_days": number of days a job takes (e.g. "5", "7")`;
+
   let factsInstruction;
   if (businessProfile?.extraction_fields?.length) {
     const fields = businessProfile.extraction_fields
       .map(f => `  - "${f.key}" (${f.label}): ${f.description}. Example: "${f.example}"`)
       .join("\n");
-    factsInstruction = `- facts: extract these business-specific facts if mentioned (omit if not mentioned):\n${fields}`;
+    factsInstruction = `- facts: ${schedulingFields}\nAlso extract these business-specific facts if mentioned:\n${fields}`;
   } else {
-    factsInstruction = `- facts: extract any specific business facts mentioned. Use snake_case keys. Always extract timing facts if mentioned:
-  - For meetings/consultations/site visits: "appointment_date" (e.g. "Friday", "Thursday 2pm", "July 14") and "appointment_time" (e.g. "2pm", "10am")
-  - For trade jobs/projects: "job_start_date" (e.g. "July 14", "Monday") and "job_duration_days" (e.g. "5", "7") 
-  - For quotes/deposits: "quote_amount", "deposit_amount", "deposit_due"
-  - Other: property_suburb, budget, job_type, urgency, system_type etc`;
+    factsInstruction = `- facts: ${schedulingFields}\nAlso extract any other relevant business facts (property, budget, job type, urgency etc). Use snake_case keys.`;
   }
 
   const businessContext = businessProfile
