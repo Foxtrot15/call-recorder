@@ -34,21 +34,20 @@ async function getAccessToken(clientId) {
   return accessToken;
 }
 
-// Parse day names into next occurrence of that day (Melbourne time)
+// Parse day names into next occurrence of that day
 function nextDayOfWeek(dayName) {
   const days = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
   const target = days[dayName.toLowerCase()];
   if (target === undefined) return null;
   
-  // Work in Melbourne local time
-  const nowMelb = new Date(new Date().toLocaleString("en-AU", { timeZone: "Australia/Melbourne" }));
-  const currentDay = nowMelb.getDay();
+  const now = new Date();
+  const currentDay = now.getDay();
   let diff = (target - currentDay + 7) % 7;
-  if (diff === 0) diff = 7; // If today, go to next week
+  if (diff === 0) diff = 7; // same day = next week
   
-  const result = new Date(nowMelb);
+  const result = new Date(now);
   result.setDate(result.getDate() + diff);
-  result.setHours(9, 0, 0, 0); // Default 9am, overridden by appointment_time
+  result.setHours(9, 0, 0, 0);
   return result;
 }
 
