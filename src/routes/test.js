@@ -1,3 +1,4 @@
+const axios = require("axios");
 const express = require("express");
 const router  = express.Router();
 const analyseCall      = require("../services/analyse");
@@ -108,27 +109,58 @@ router.post("/inject", async (req, res) => {
 
         if (callerEmail) {
           const firstName = callerName.split(" ")[0];
-          const subject = "Following up on your call" + (callerName ? " — " + callerName : "");
-          const bodyLines = [
-            "Hi " + firstName + ",",
-            "",
-            isReturning ? "Great to hear from you again. " + summary : "Thank you for calling. " + summary,
-            "",
-            action ? "Next step: " + action : "",
-            "",
-            "Please don't hesitate to reach out if you have any questions.",
-            "",
-            "Kind regards",
-          ].filter(Boolean);
 
-          await createDraft(clientId, { to: callerEmail, subject, body: bodyLines.join("\n") });
+          // Build a natural follow-up email using Claude
+          const emailRes = await axios.post(
+            "https://api.anthropic.com/v1/messages",
+            {
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 400,
+              system: `You are writing a follow-up email on behalf of a small business owner to a client they just spoke with on the phone.
+Write a SHORT, natural, professional email directly to the client.
+- Address them by first name
+- Refer to specifics from the call (dates, prices, what was agreed)
+- Write in first person as if you are the business owner
+- Do NOT summarise the call in third person
+- Do NOT say "as discussed" more than once
+- Keep it to 3-5 sentences max
+- End with a warm sign-off
+- No subject line, just the email body`,
+              messages: [{
+                role: "user",
+                content: `Write a follow-up email to ${firstName} based on this call summary: ${summary}\n\nKey facts from call: ${JSON.stringify(analysis.facts || {})}\n\nNext action: ${action || "follow up"}`,
+              }],
+            },
+            {
+              headers: {
+                "x-api-key": process.env.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          const emailBody = emailRes.data?.content?.[0]?.text?.trim() || 
+            `Hi ${firstName},\n\nGreat speaking with you today. ${action || "I'll be in touch shortly."}\n\nKind regards`;
+
+          const subject = isReturning 
+            ? `Following up — ${callerName}` 
+            : `Great speaking with you today, ${firstName}`;
+
+          await createDraft(clientId, { to: callerEmail, subject, body: emailBody });
           console.log("📧 Draft created for " + callerEmail);
         }
 
-        if (intent === "schedule_meeting" && analysis.follow_up?.detail) {
-          const desc = summary + "\n\nFrom call: " + From + "\n\n" + analysis.follow_up.detail;
+        // Fire calendar for meetings, appointments, site visits, consultations
+        const needsCalendar = intent === "schedule_meeting" || 
+          (analysis.follow_up?.type === "meeting") ||
+          (analysis.facts?.appointment_date || analysis.facts?.visit_date || analysis.facts?.meeting_date || analysis.facts?.consultation_date);
+          
+        if (needsCalendar && (analysis.follow_up?.detail || analysis.action)) {
+          const eventDetail = analysis.follow_up?.detail || analysis.action || summary;
+          const desc = summary + "\n\nContact: " + From + (callerEmail ? " | " + callerEmail : "") + "\n\n" + eventDetail;
           await createEvent(clientId, {
-            title:         "Meeting with " + callerName,
+            title:         `${callerName} — ${intent === "schedule_meeting" ? "Meeting" : "Appointment"}`,
             description:   desc,
             attendeeEmail: callerEmail || null,
           });
