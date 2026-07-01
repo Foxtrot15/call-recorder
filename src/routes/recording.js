@@ -1,11 +1,11 @@
 const express = require("express");
 const router = express.Router();
-const transcribeAudio = require("../services/transcribe");
-const analyseCall     = require("../services/analyse");
+const transcribeAudio  = require("../services/transcribe");
+const analyseCall      = require("../services/analyse");
 const sendNotification = require("../services/notify");
-const supabase        = require("../services/supabase");
-const { createDraft } = require("../services/gmail");
-const { createEvent } = require("../services/gcal");
+const supabase         = require("../services/supabase");
+const { createDraft }  = require("../services/gmail");
+const { createEvent }  = require("../services/gcal");
 
 router.post("/complete", async (req, res) => {
   res.sendStatus(200);
@@ -24,8 +24,7 @@ router.post("/complete", async (req, res) => {
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const call = await client.calls(CallSid).fetch();
 
-    const TWILIO_NUMBER     = process.env.TWILIO_NUMBER || process.env.CLIENT_TWILIO_NUMBER;
-    const CLIENT_REAL       = process.env.CLIENT_REAL_NUMBER;
+    const CLIENT_REAL = process.env.CLIENT_REAL_NUMBER;
 
     // Check if we already have a record for this call (outbound clicks store it immediately)
     const { data: existingRecord } = await supabase
@@ -37,12 +36,10 @@ router.post("/complete", async (req, res) => {
     let From, To, direction;
 
     if (existingRecord && existingRecord.direction === "outbound") {
-      // Outbound click-to-call — use the pre-stored numbers
       From      = existingRecord.from_number;
       To        = existingRecord.to_number;
       direction = "outbound";
     } else {
-      // Inbound — someone called the Twilio number
       From      = call.from;
       To        = CLIENT_REAL;
       direction = "inbound";
@@ -117,71 +114,65 @@ router.post("/complete", async (req, res) => {
     console.log(`💾 Call saved: ${savedId}`);
 
     // ── Gmail draft + Calendar event ─────────────────────────
-    const CLIENT_ID = "default"; // per-client in future
+    const GOOGLE_CLIENT_ID = "default";
     try {
       if (analysis && direction === "inbound") {
-        const callerName  = analysis.caller?.name    || From;
-        const callerEmail = analysis.caller?.email   || null;
-        const intent      = analysis.intent          || "general_enquiry";
-        const summary     = analysis.summary         || "Call received";
-        const action      = analysis.action          || "";
+        const callerName  = analysis.caller?.name  || From;
+        const callerEmail = analysis.caller?.email || null;
+        const intent      = analysis.intent        || "general_enquiry";
+        const summary     = analysis.summary       || "Call received";
+        const action      = analysis.action        || "";
 
-        // Always create a draft email for inbound calls with contact info
         if (callerEmail) {
-          const subject = `Following up on your call${callerName ? ` — ${callerName}` : ""}`;
-          const body = [
-            `Hi${callerName ? ` ${callerName.split(" ")[0]}` : ""},`,
-            ``,
-            `Thank you for calling. ${summary}`,
-            ``,
-            action ? `Next step: ${action}` : "",
-            ``,
-            `Please don't hesitate to reach out if you have any questions.`,
-            ``,
-            `Kind regards`,
-          ].filter(Boolean).join("
-");
+          const firstName = callerName.split(" ")[0];
+          const subject = "Following up on your call" + (callerName ? " — " + callerName : "");
+          const bodyLines = [
+            "Hi " + firstName + ",",
+            "",
+            "Thank you for calling. " + summary,
+            "",
+            action ? "Next step: " + action : "",
+            "",
+            "Please don't hesitate to reach out if you have any questions.",
+            "",
+            "Kind regards",
+          ].filter(Boolean);
+          const body = bodyLines.join("\n");
 
-          await createDraft(CLIENT_ID, { to: callerEmail, subject, body });
-          console.log(`📧 Draft created for ${callerEmail}`);
+          await createDraft(GOOGLE_CLIENT_ID, { to: callerEmail, subject, body });
+          console.log("📧 Draft created for " + callerEmail);
         }
 
-        // Create calendar event if meeting was requested
         if (intent === "schedule_meeting" && analysis.follow_up?.detail) {
-          await createEvent(CLIENT_ID, {
-            title:          `Meeting with ${callerName}`,
-            description:    `${summary}
-
-From call: ${From}
-
-${analysis.follow_up.detail}`,
-            attendeeEmail:  callerEmail || null,
+          const desc = summary + "\n\nFrom call: " + From + "\n\n" + analysis.follow_up.detail;
+          await createEvent(GOOGLE_CLIENT_ID, {
+            title:         "Meeting with " + callerName,
+            description:   desc,
+            attendeeEmail: callerEmail || null,
           });
-          console.log(`📅 Calendar event created for ${callerName}`);
+          console.log("📅 Calendar event created for " + callerName);
         }
       }
     } catch (err) {
-      console.error("⚠️  Gmail/Calendar automation failed (call still saved):", err.message);
+      console.error("⚠️  Gmail/Calendar automation failed:", err.message);
     }
 
-    // ── Send SMS ─────────────────────────────────────────
+    // ── Send notification email ───────────────────────────────
     const duration = formatDuration(RecordingDuration);
-    const contactLabel = direction === "outbound"
-      ? `To: ${To}`
-      : `From: ${From}`;
+    const contactDisplay = direction === "outbound"
+      ? (analysis?.caller?.name || To)
+      : (analysis?.caller?.name || From);
 
-    const header = `📞 ${direction === "outbound" ? "Outbound" : "Inbound"} call (${duration})\n${contactLabel}\n\n`;
-    const body   = analysis?.summary
-      ? `${header}Summary: ${analysis.summary}\n\n${transcript}`
-      : header + transcript;
+    await sendNotification("default", {
+      direction,
+      duration,
+      from:        contactDisplay,
+      summary:     analysis?.summary || null,
+      transcript,
+      dashboardUrl: process.env.BASE_URL,
+    });
 
-    const chunks = chunkText(body, 1500);
-    for (let i = 0; i < chunks.length; i++) {
-      const prefix = chunks.length > 1 ? `[${i + 1}/${chunks.length}] ` : "";
-      await sendSMS(prefix + chunks[i]);
-    }
-
-    console.log(`✅ Transcript sent (${chunks.length} message(s))`);
+    console.log("✅ Notification sent");
 
   } catch (err) {
     console.error("❌ Pipeline error:", err.message);
@@ -192,31 +183,10 @@ ${analysis.follow_up.detail}`,
   }
 });
 
-async function getNotifyEmail() {
-  // Use connected Google account email as notification recipient
-  try {
-    const { getToken } = require("../services/token");
-    const tokenData = await getToken("default", "google");
-    return tokenData?.email || null;
-  } catch {
-    return null;
-  }
-}
-
 function formatDuration(seconds) {
   const s = parseInt(seconds, 10);
   const m = Math.floor(s / 60);
   return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
-}
-
-function chunkText(text, maxLen) {
-  const chunks = [];
-  let pos = 0;
-  while (pos < text.length) {
-    chunks.push(text.slice(pos, pos + maxLen));
-    pos += maxLen;
-  }
-  return chunks;
 }
 
 module.exports = router;
