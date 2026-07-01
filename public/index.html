@@ -1413,7 +1413,7 @@ async function injectBatch(industry, sendEmails = false) {
       const res = await fetch('/test/inject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...call, skip_notify: !sendEmails }),
+        body: JSON.stringify({ ...call, skip_notify: !sendEmails, skip_drafts: !sendEmails }),
       });
       const data = await res.json();
       if (data.success) {
