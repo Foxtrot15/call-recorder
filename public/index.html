@@ -479,27 +479,27 @@
 
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:28px">
 
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('buyers_advocate')">
-        <div class="stat-label">Buyers Advocate</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Sarah, Marcus, James</div>
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('dentist')">
+        <div class="stat-label">🦷 Dentist</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Emma, Greg, Wendy</div>
         <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
       </div>
 
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('conveyancer')">
-        <div class="stat-label">Conveyancer</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Tom, Lisa, David & Rebecca</div>
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('accountant')">
+        <div class="stat-label">🧾 Accountant</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Michael, Lisa, Robert & Helen</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
+      </div>
+
+      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('saas')">
+        <div class="stat-label">💻 SaaS</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Natalie, Tom, Priya</div>
         <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
       </div>
 
       <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('plumber')">
-        <div class="stat-label">Plumber</div>
+        <div class="stat-label">🔧 Plumber</div>
         <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Kevin, Sandra, Paul</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
-      </div>
-
-      <div class="stat-card" style="cursor:pointer;border-color:var(--border2)" onclick="injectBatch('mortgage_broker')">
-        <div class="stat-label">Mortgage Broker</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px">3 callers — Amy, Chris, Raj</div>
         <button class="btn btn-primary btn-sm" style="margin-top:14px">Inject 3 calls →</button>
       </div>
 
@@ -1232,25 +1232,25 @@ document.addEventListener('change', (e) => {
 
 // ── TEST INJECTION ───────────────────────────────────────────
 const TEST_SCENARIOS = {
-  buyers_advocate: [
-    { from_number: "+61411111001", duration: 45, transcript: "Speaker 0: Hi there, I found your number online. My name's Sarah Chen. I'm looking to buy my first home in the inner east, probably around Fitzroy or Collingwood. My budget is around $900,000. I've got pre-approval from ANZ. Could someone give me a callback? My email is sarah.chen@gmail.com. Thanks." },
-    { from_number: "+61411111002", duration: 62, transcript: "Speaker 0: Hello, this is Marcus Webb calling. I'm an investor looking to purchase a second property. I'm interested in the Bayside area, thinking Mount Eliza or Frankston South. Budget is flexible, probably up to $1.5 million. My email is marcus.webb@webbinvestments.com.au. Please call me back when you get a chance." },
-    { from_number: "+61411111003", duration: 38, transcript: "Speaker 0: Hi, James Nguyen here. My wife and I are relocating from Sydney in about 3 months and we need to buy quickly. We're looking in the Doncaster or Manningham area. We have a budget of about $1.1 million and we're pre-approved. Can someone call me back urgently? james.nguyen@hotmail.com. Thanks." }
+  dentist: [
+    { from_number: "+61411111001", duration: 32, transcript: "Speaker 0: Hi, my name is Emma Lawson. I'm looking for a new dentist in the area. I need a general checkup and clean, and I think I might have a cavity in my back molar. I have Medibank private cover. Can I book an appointment? My email is emma.lawson@gmail.com. Thanks." },
+    { from_number: "+61411111002", duration: 45, transcript: "Speaker 0: Hello, this is Greg Papadopoulos. My son Jake is 8 years old and needs his first proper dental checkup. He's a bit nervous about dentists. Do you see kids? We're in the area. Can someone call me back on this number or email greg.papadopoulos@outlook.com." },
+    { from_number: "+61411111003", duration: 38, transcript: "Speaker 0: Hi, Wendy here. I'm interested in teeth whitening and I've also been told I might need a crown on my upper left tooth. Can I get a consultation? I have HCF extras cover. My email is wendy.richardson@icloud.com. Looking forward to hearing from you." }
   ],
-  conveyancer: [
-    { from_number: "+61422222001", duration: 55, transcript: "Speaker 0: Hi, my name is Tom Bradley. I'm purchasing a property at 14 Elm Street in Ringwood. The purchase price is $785,000 and settlement is in 60 days. My solicitor said I need a conveyancer. Can you help? My email is tom.bradley@outlook.com." },
-    { from_number: "+61422222002", duration: 40, transcript: "Speaker 0: Hello, Lisa Park calling. I'm selling my investment property in Box Hill. The sale price is $650,000. The buyer's solicitor has already been in touch. I need a conveyancer on my end. Settlement is 45 days away. You can email me at lisa.park@gmail.com." },
-    { from_number: "+61422222003", duration: 70, transcript: "Speaker 0: Hi there, David and Rebecca Morrison here. We're buying a house in Thornbury, $920,000, and we also need to sell our current home in Preston at the same time. Both settlements need to line up. Can you handle both? Our email is david.morrison@morrisonfamily.com." }
+  accountant: [
+    { from_number: "+61422222001", duration: 55, transcript: "Speaker 0: Hi there, Michael Chen calling. I run a small IT consulting business, been operating for 3 years as a sole trader. Turnover is about $280,000 this year. I think I need to switch to a company structure. Can someone help me with that and also do my tax return? michael.chen@techsolutions.com.au." },
+    { from_number: "+61422222002", duration: 42, transcript: "Speaker 0: Hello, Lisa from Northcote. I'm a freelance graphic designer and I'm terrible with my books. I haven't lodged a tax return in 2 years. I know I'm behind and I need help getting caught up. Can someone call me back? lisa.design@gmail.com. I'm a bit stressed about it." },
+    { from_number: "+61422222003", duration: 60, transcript: "Speaker 0: Hi, Robert and Helen Burgess here. We have a self-managed super fund and a couple of investment properties. We need someone to handle the SMSF audit and our personal tax returns. Our previous accountant retired. Can you help? robert.burgess@burgessgroup.com.au." }
+  ],
+  saas: [
+    { from_number: "+61433333001", duration: 48, transcript: "Speaker 0: Hi, I'm calling about your project management software. I run a marketing agency with 12 staff. We're currently using Asana but it's getting expensive. Can I get a demo and find out about pricing for a team our size? My name is Natalie Forbes, natalie@forbesmarketing.com.au." },
+    { from_number: "+61433333002", duration: 35, transcript: "Speaker 0: Hey, Tom here from BuildRight Construction. We saw your software at a trade show. We need something to manage our job scheduling and invoicing. We have about 25 tradies in the field. Does your system integrate with Xero? tom.smith@buildright.com.au." },
+    { from_number: "+61433333003", duration: 52, transcript: "Speaker 0: Hi, this is Priya from the accounts team at Sunrise Aged Care. We're looking to replace our current rostering software. We have 3 facilities and about 200 staff. We need something with compliance reporting for aged care standards. priya.kumar@sunriseagedcare.com.au." }
   ],
   plumber: [
-    { from_number: "+61433333001", duration: 35, transcript: "Speaker 0: Yeah hi, Kevin here from 23 Rosewood Drive Dandenong. Got a burst pipe under the kitchen sink, there's water everywhere. Need someone out urgently today if possible. My number is 0433 333 001. Please call me back." },
-    { from_number: "+61433333002", duration: 48, transcript: "Speaker 0: Hi, Sandra calling from Cheltenham. I need a hot water system replaced. The old one is about 12 years old and it's not heating properly. It's a gas system, 250 litre. Can I get a quote? My email is sandra.mills@gmail.com." },
-    { from_number: "+61433333003", duration: 52, transcript: "Speaker 0: Hi there, I'm calling about a bathroom renovation quote. We want to move the toilet and add a second vanity. Property is in Hawthorn. I'm flexible on timing, not urgent. Can someone come out for a quote? Name's Paul Georgiou, paul@georgioudesign.com.au." }
-  ],
-  mortgage_broker: [
-    { from_number: "+61444444001", duration: 58, transcript: "Speaker 0: Hi, Amy Walsh here. My husband and I are looking to refinance our home loan. Current loan is with CBA, about $480,000 outstanding. We've been in the property for 5 years in Essendon. Our fixed rate is ending in 3 months. Can someone call me back to discuss options? amy.walsh@gmail.com." },
-    { from_number: "+61444444002", duration: 43, transcript: "Speaker 0: Hello, Chris Tan calling. First home buyer here. Looking at properties around $700,000 in the western suburbs. I'm self-employed, been running my business for 2 years. I've heard it's harder to get loans when self-employed. Can someone help me understand my options? chris.tan@tanelectrical.com.au." },
-    { from_number: "+61444444003", duration: 67, transcript: "Speaker 0: Hi, Raj Patel here. I'm looking to buy an investment property. Already own my home in Glen Waverley, about $800,000 equity. Looking to use equity to fund a deposit on a unit in the CBD, probably around $550,000. Need to understand how to structure it. raj.patel@patelfamily.net." }
+    { from_number: "+61444444001", duration: 35, transcript: "Speaker 0: Yeah hi, Kevin here from 23 Rosewood Drive Dandenong. Got a burst pipe under the kitchen sink, there's water everywhere. Need someone out urgently today if possible. My number is 0444 444 001. Please call me back." },
+    { from_number: "+61444444002", duration: 48, transcript: "Speaker 0: Hi, Sandra calling from Cheltenham. I need a hot water system replaced. The old one is about 12 years old and it's not heating properly. It's a gas system, 250 litre Rheem. Can I get a quote? My email is sandra.mills@gmail.com." },
+    { from_number: "+61444444003", duration: 52, transcript: "Speaker 0: Hi there, I'm calling about a bathroom renovation quote. We want to move the toilet and add a second vanity. Property is in Hawthorn. I'm flexible on timing, not urgent. Can someone come out for a quote? Name's Paul Georgiou, paul@georgioudesign.com.au." }
   ]
 };
 
