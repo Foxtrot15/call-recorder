@@ -1,14 +1,8 @@
-
+const axios = require("axios");
 const supabase = require("./supabase");
 
-/**
- * Get or create a contact profile by phone number.
- * Returns the contact record and their full call history.
- */
 async function getOrCreateContact(clientId, phone) {
   if (!phone) return null;
-
-  // Normalise phone
   const normPhone = phone.replace(/\s/g, "");
 
   const { data: existing } = await supabase
@@ -20,7 +14,6 @@ async function getOrCreateContact(clientId, phone) {
 
   if (existing) return existing;
 
-  // Create new contact
   const { data } = await supabase
     .from("contacts")
     .insert({ client_id: clientId, phone: normPhone })
@@ -30,18 +23,13 @@ async function getOrCreateContact(clientId, phone) {
   return data;
 }
 
-/**
- * Get full call history for a contact (last 20 calls).
- */
 async function getContactHistory(clientId, phone) {
   if (!phone) return [];
-
   const normPhone = phone.replace(/\s/g, "");
 
   const { data } = await supabase
     .from("calls")
-    .select("recorded_at, direction, duration, summary, intent, caller_name, caller_company, transcript")
-    .eq("client_id", clientId)
+    .select("recorded_at, direction, duration, summary, intent, caller_name, caller_company")
     .eq("from_number", normPhone)
     .eq("status", "complete")
     .order("recorded_at", { ascending: false })
@@ -50,15 +38,10 @@ async function getContactHistory(clientId, phone) {
   return data || [];
 }
 
-/**
- * Update contact profile after a call is analysed.
- */
 async function updateContactFromCall(clientId, phone, analysis, callDate) {
   if (!phone || !analysis) return;
-
   const normPhone = phone.replace(/\s/g, "");
 
-  // Get existing contact
   const { data: existing } = await supabase
     .from("contacts")
     .select("*")
@@ -67,8 +50,6 @@ async function updateContactFromCall(clientId, phone, analysis, callDate) {
     .single();
 
   const existingFacts = existing?.facts || {};
-
-  // Merge new facts extracted from this call
   const newFacts = analysis.facts || {};
   const mergedFacts = { ...existingFacts, ...newFacts };
 
@@ -79,15 +60,19 @@ async function updateContactFromCall(clientId, phone, analysis, callDate) {
     updated_at: new Date().toISOString(),
   };
 
-  // Only update name/email/company if we have better data
-  if (analysis.caller?.name && !existing?.name) {
-    updates.name = analysis.caller.name;
-  }
-  if (analysis.caller?.email && !existing?.email) {
-    updates.email = analysis.caller.email;
-  }
-  if (analysis.caller?.company && !existing?.company) {
-    updates.company = analysis.caller.company;
+  if (analysis.caller?.name    && !existing?.name)    updates.name    = analysis.caller.name;
+  if (analysis.caller?.email   && !existing?.email)   updates.email   = analysis.caller.email;
+  if (analysis.caller?.company && !existing?.company) updates.company = analysis.caller.company;
+
+  // Update rolling summary if contact has multiple calls
+  const callCount = (existing?.call_count || 0) + 1;
+  if (callCount >= 2) {
+    try {
+      const history = await getContactHistory(clientId, phone);
+      updates.context_summary = await generateRollingSummary(existing, history, analysis);
+    } catch (err) {
+      console.error("⚠️  Rolling summary failed:", err.message);
+    }
   }
 
   if (existing) {
@@ -104,39 +89,81 @@ async function updateContactFromCall(clientId, phone, analysis, callDate) {
   }
 }
 
-/**
- * Build a context summary string for Claude from call history.
- */
+async function generateRollingSummary(contact, history, latestAnalysis) {
+  const existingSummary = contact?.context_summary || "";
+  const recentCalls = history.slice(0, 3).map((c, i) =>
+    `${i + 1}. ${new Date(c.recorded_at).toLocaleDateString("en-AU")}: ${c.summary || "No summary"}`
+  ).join("\n");
+
+  const response = await axios.post(
+    "https://api.anthropic.com/v1/messages",
+    {
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      system: `You are maintaining a concise contact history summary for a business CRM. 
+Respond with ONLY a 2-3 sentence plain text summary. No JSON, no markdown.
+The summary should capture: who this person is, what they want, where they are in the journey, and any key facts.`,
+      messages: [{
+        role: "user",
+        content: `Update this contact summary based on their call history.
+
+EXISTING SUMMARY:
+${existingSummary || "No previous summary."}
+
+RECENT CALLS:
+${recentCalls}
+
+LATEST CALL SUMMARY:
+${latestAnalysis.summary || ""}
+
+KEY FACTS KNOWN:
+${JSON.stringify(contact?.facts || {})}
+
+Write an updated 2-3 sentence summary of this contact.`,
+      }],
+    },
+    {
+      headers: {
+        "x-api-key":         process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type":      "application/json",
+      },
+    }
+  );
+
+  return response.data?.content?.[0]?.text?.trim() || existingSummary;
+}
+
 function buildContactContext(contact, history) {
   if (!contact && !history?.length) return null;
-
   const lines = [];
 
-  if (contact?.name) {
-    lines.push(`Contact: ${contact.name}${contact.company ? ` from ${contact.company}` : ""}`);
-  }
-
-  if (history?.length) {
+  // Use rolling summary if available (cheap, concise)
+  if (contact?.context_summary) {
+    lines.push("CONTACT SUMMARY:");
+    lines.push(contact.context_summary);
+  } else if (history?.length) {
     lines.push(`Previous calls: ${history.length}`);
     lines.push(`First contact: ${new Date(history[history.length - 1].recorded_at).toLocaleDateString("en-AU")}`);
-    lines.push(`Last contact: ${new Date(history[0].recorded_at).toLocaleDateString("en-AU")}`);
-    lines.push("");
-    lines.push("Call history (most recent first):");
-    history.slice(0, 5).forEach((call, i) => {
+    history.slice(0, 3).forEach((call, i) => {
       const date = new Date(call.recorded_at).toLocaleDateString("en-AU");
-      lines.push(`${i + 1}. ${date} — ${call.intent || "enquiry"}: ${call.summary || "No summary"}`);
+      lines.push(`${i + 1}. ${date}: ${call.summary || "No summary"}`);
     });
   }
 
   if (contact?.facts && Object.keys(contact.facts).length) {
-    lines.push("");
-    lines.push("Known facts about this contact:");
+    lines.push("\nKEY FACTS:");
     Object.entries(contact.facts).forEach(([k, v]) => {
-      lines.push(`- ${k}: ${v}`);
+      lines.push(`- ${k.replace(/_/g, " ")}: ${v}`);
     });
   }
 
   return lines.join("\n");
 }
 
-module.exports = { getOrCreateContact, getContactHistory, updateContactFromCall, buildContactContext };
+module.exports = {
+  getOrCreateContact,
+  getContactHistory,
+  updateContactFromCall,
+  buildContactContext,
+};
