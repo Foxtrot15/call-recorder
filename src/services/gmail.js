@@ -1,5 +1,4 @@
 const axios = require("axios");
-const { google } = require("googleapis");
 const { getToken, storeToken } = require("./token");
 
 async function refreshAccessToken(tokenData) {
@@ -13,89 +12,88 @@ async function refreshAccessToken(tokenData) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     timeout: 10000,
   });
-
   return res.data.access_token;
 }
 
-async function getAuthClient(clientId) {
+async function getAccessToken(clientId) {
   const tokenData = await getToken(clientId, "google");
   if (!tokenData) throw new Error("No Google token found for client " + clientId);
 
-  // Check if token is expired or about to expire
-  let accessToken = tokenData.accessToken;
   const expiry = tokenData.expiry ? new Date(tokenData.expiry).getTime() : 0;
-  const now = Date.now();
+  let accessToken = tokenData.accessToken;
 
-  if (!expiry || expiry < now + 60000) {
-    // Refresh the token
+  if (!expiry || expiry < Date.now() + 60000) {
     accessToken = await refreshAccessToken(tokenData);
     await storeToken(clientId, "google", {
       accessToken,
       refreshToken: tokenData.refreshToken,
-      expiry:       new Date(now + 3600000).toISOString(),
+      expiry:       new Date(Date.now() + 3600000).toISOString(),
       email:        tokenData.email,
     });
   }
+  return { accessToken, email: tokenData.email };
+}
 
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    `${process.env.BASE_URL}/auth/google/callback`
-  );
-  oauth2Client.setCredentials({ access_token: accessToken });
-
-  return { oauth2Client, email: tokenData.email };
+function buildRaw(to, subject, body) {
+  const emailLines = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    `Content-Type: text/plain; charset=utf-8`,
+    ``,
+    body,
+  ];
+  return Buffer.from(emailLines.join("\r\n"))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 async function createDraft(clientId, { to, subject, body }) {
-  const { oauth2Client } = await getAuthClient(clientId);
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+  const { accessToken } = await getAccessToken(clientId);
 
-  const emailLines = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `Content-Type: text/plain; charset=utf-8`,
-    ``,
-    body,
-  ];
-  const raw = Buffer.from(emailLines.join("\r\n"))
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const res = await axios.post(
+    "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+    { message: { raw: buildRaw(to, subject, body) } },
+    {
+      headers: {
+        Authorization:  `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    }
+  );
 
-  const draft = await gmail.users.drafts.create({
-    userId: "me",
-    requestBody: { message: { raw } },
-  });
-
-  console.log(`📧 Gmail draft created: ${draft.data.id}`);
-  return draft.data.id;
+  console.log("📧 Gmail draft created:", res.data.id);
+  return res.data.id;
 }
 
 async function sendEmail(clientId, { to, subject, body }) {
-  const { oauth2Client } = await getAuthClient(clientId);
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+  const { accessToken } = await getAccessToken(clientId);
 
-  const emailLines = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `Content-Type: text/plain; charset=utf-8`,
-    ``,
-    body,
-  ];
-  const raw = Buffer.from(emailLines.join("\r\n"))
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  await axios.post(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    { raw: buildRaw(to, subject, body) },
+    {
+      headers: {
+        Authorization:  `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    }
+  );
 
-  await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw },
-  });
+  console.log("📧 Email sent to", to);
+}
 
-  console.log(`📧 Email sent to ${to}`);
+async function getAuthClient(clientId) {
+  const { accessToken, email } = await getAccessToken(clientId);
+  // Lightweight wrapper for notify.js compatibility
+  return {
+    email,
+    sendEmail: (to, subject, body) => sendEmail(clientId, { to, subject, body }),
+    accessToken,
+  };
 }
 
 module.exports = { createDraft, sendEmail, getAuthClient };
