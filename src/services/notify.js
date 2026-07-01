@@ -1,13 +1,41 @@
-const { getAuthClient } = require("./gmail");
-const { google } = require("googleapis");
+const axios = require("axios");
+const { getToken, storeToken } = require("./token");
+
+async function refreshAccessToken(tokenData) {
+  const params = new URLSearchParams();
+  params.append("client_id",     process.env.GOOGLE_CLIENT_ID);
+  params.append("client_secret", process.env.GOOGLE_CLIENT_SECRET);
+  params.append("refresh_token", tokenData.refreshToken);
+  params.append("grant_type",    "refresh_token");
+
+  const res = await axios.post("https://oauth2.googleapis.com/token", params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeout: 10000,
+  });
+  return res.data.access_token;
+}
 
 async function sendNotification(clientId, { direction, duration, from, summary, transcript, dashboardUrl }) {
   try {
-    const { oauth2Client, email } = await getAuthClient(clientId);
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const tokenData = await getToken(clientId, "google");
+    if (!tokenData) throw new Error("No Google token");
 
+    const expiry = tokenData.expiry ? new Date(tokenData.expiry).getTime() : 0;
+    let accessToken = tokenData.accessToken;
+
+    if (!expiry || expiry < Date.now() + 60000) {
+      accessToken = await refreshAccessToken(tokenData);
+      await storeToken(clientId, "google", {
+        accessToken,
+        refreshToken: tokenData.refreshToken,
+        expiry:       new Date(Date.now() + 3600000).toISOString(),
+        email:        tokenData.email,
+      });
+    }
+
+    const email = tokenData.email;
     const subject = `📞 ${direction === "outbound" ? "Outbound" : "Inbound"} call (${duration}) — ${from}`;
-    const bodyLines = [
+    const body = [
       `${direction === "outbound" ? "Outbound" : "Inbound"} call (${duration})`,
       `Contact: ${from}`,
       ``,
@@ -17,9 +45,7 @@ async function sendNotification(clientId, { direction, duration, from, summary, 
       ``,
       `--- Transcript ---`,
       transcript,
-    ].filter(l => l !== undefined);
-
-    const body = bodyLines.join("\n");
+    ].filter(l => l !== undefined).join("\n");
 
     const emailLines = [
       `To: ${email}`,
@@ -35,10 +61,17 @@ async function sendNotification(clientId, { direction, duration, from, summary, 
       .replace(/\//g, "_")
       .replace(/=+$/, "");
 
-    await gmail.users.messages.send({
-      userId: "me",
-      requestBody: { raw },
-    });
+    await axios.post(
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+      { raw },
+      {
+        headers: {
+          Authorization:  `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 10000,
+      }
+    );
 
     console.log(`📧 Notification email sent to ${email}`);
   } catch (err) {
