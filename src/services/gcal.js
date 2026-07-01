@@ -1,41 +1,42 @@
-
-const { google } = require("googleapis");
+const axios   = require("axios");
 const { getToken, storeToken } = require("./token");
 
-const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI  = `${process.env.BASE_URL}/auth/google/callback`;
+async function refreshAccessToken(tokenData) {
+  const params = new URLSearchParams();
+  params.append("client_id",     process.env.GOOGLE_CLIENT_ID);
+  params.append("client_secret", process.env.GOOGLE_CLIENT_SECRET);
+  params.append("refresh_token", tokenData.refreshToken);
+  params.append("grant_type",    "refresh_token");
 
-async function getAuthClient(clientId) {
+  const res = await axios.post("https://oauth2.googleapis.com/token", params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeout: 10000,
+  });
+  return res.data.access_token;
+}
+
+async function getAccessToken(clientId) {
   const tokenData = await getToken(clientId, "google");
   if (!tokenData) throw new Error("No Google token found for client " + clientId);
 
-  const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-  oauth2Client.setCredentials({
-    access_token:  tokenData.accessToken,
-    refresh_token: tokenData.refreshToken,
-    expiry_date:   tokenData.expiry ? new Date(tokenData.expiry).getTime() : null,
-  });
+  const expiry = tokenData.expiry ? new Date(tokenData.expiry).getTime() : 0;
+  let accessToken = tokenData.accessToken;
 
-  oauth2Client.on("tokens", async (tokens) => {
-    if (tokens.refresh_token || tokens.access_token) {
-      await storeToken(clientId, "google", {
-        accessToken:  tokens.access_token || tokenData.accessToken,
-        refreshToken: tokens.refresh_token || tokenData.refreshToken,
-        expiry:       tokens.expiry_date,
-        email:        tokenData.email,
-      });
-    }
-  });
-
-  return oauth2Client;
+  if (!expiry || expiry < Date.now() + 60000) {
+    accessToken = await refreshAccessToken(tokenData);
+    await storeToken(clientId, "google", {
+      accessToken,
+      refreshToken: tokenData.refreshToken,
+      expiry:       new Date(Date.now() + 3600000).toISOString(),
+      email:        tokenData.email,
+    });
+  }
+  return accessToken;
 }
 
 async function createEvent(clientId, { title, description, startTime, endTime, attendeeEmail }) {
-  const auth     = await getAuthClient(clientId);
-  const calendar = google.calendar({ version: "v3", auth });
+  const accessToken = await getAccessToken(clientId);
 
-  // Default to 1 hour meeting if no end time
   const start = startTime ? new Date(startTime) : new Date(Date.now() + 24 * 60 * 60 * 1000);
   const end   = endTime   ? new Date(endTime)   : new Date(start.getTime() + 60 * 60 * 1000);
 
@@ -47,14 +48,20 @@ async function createEvent(clientId, { title, description, startTime, endTime, a
     attendees: attendeeEmail ? [{ email: attendeeEmail }] : [],
   };
 
-  const result = await calendar.events.insert({
-    calendarId: "primary",
-    requestBody: event,
-    sendUpdates: attendeeEmail ? "all" : "none",
-  });
+  const res = await axios.post(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=none",
+    event,
+    {
+      headers: {
+        Authorization:  `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    }
+  );
 
-  console.log(`📅 Calendar event created: ${result.data.id}`);
-  return result.data.id;
+  console.log("📅 Calendar event created:", res.data.id);
+  return res.data.id;
 }
 
 module.exports = { createEvent };
