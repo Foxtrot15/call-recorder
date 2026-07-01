@@ -12,6 +12,11 @@ const {
   updateContactFromCall,
   buildContactContext,
 } = require("../services/contacts");
+const {
+  getBusinessProfile,
+  shouldUpdateProfile,
+  generateBusinessProfile,
+} = require("../services/business-profile");
 
 router.post("/complete", async (req, res) => {
   res.sendStatus(200);
@@ -77,10 +82,18 @@ router.post("/complete", async (req, res) => {
       console.error("⚠️  Contact history lookup failed:", err.message);
     }
 
+    // ── Load business profile ────────────────────────────────
+    let businessProfile = null;
+    try {
+      businessProfile = await getBusinessProfile(GOOGLE_CLIENT_ID);
+    } catch (err) {
+      console.error("⚠️  Business profile lookup failed:", err.message);
+    }
+
     // ── Analyse with Claude (with contact context) ────────────
     let analysis = null;
     try {
-      analysis = await analyseCall(transcript, contactContext);
+      analysis = await analyseCall(transcript, contactContext, businessProfile);
       console.log(`🤖 Analysis complete for ${CallSid}`);
     } catch (err) {
       console.error("⚠️  Analysis failed (call still saved):", err.message);
@@ -143,6 +156,16 @@ router.post("/complete", async (req, res) => {
     }
 
     console.log(`💾 Call saved: ${savedId}`);
+
+    // ── Update business profile if needed ────────────────────
+    try {
+      const needsUpdate = await shouldUpdateProfile(GOOGLE_CLIENT_ID);
+      if (needsUpdate) {
+        await generateBusinessProfile(GOOGLE_CLIENT_ID);
+      }
+    } catch (err) {
+      console.error("⚠️  Business profile update failed:", err.message);
+    }
 
     // ── Gmail draft + Calendar event ─────────────────────────
     try {
