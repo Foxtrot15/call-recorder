@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const transcribeAudio = require("../services/transcribe");
 const analyseCall     = require("../services/analyse");
-const sendSMS         = require("../services/sms");
+const sendNotification = require("../services/notify");
 const supabase        = require("../services/supabase");
 const { createDraft } = require("../services/gmail");
 const { createEvent } = require("../services/gcal");
@@ -191,6 +191,17 @@ ${analysis.follow_up.detail}`,
       .eq("call_sid", CallSid);
   }
 });
+
+async function getNotifyEmail() {
+  // Use connected Google account email as notification recipient
+  try {
+    const { getToken } = require("../services/token");
+    const tokenData = await getToken("default", "google");
+    return tokenData?.email || null;
+  } catch {
+    return null;
+  }
+}
 
 function formatDuration(seconds) {
   const s = parseInt(seconds, 10);
