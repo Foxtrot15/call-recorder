@@ -12,7 +12,11 @@ async function analyseCall(transcript, contactContext = null, businessProfile = 
       .join("\n");
     factsInstruction = `- facts: extract these business-specific facts if mentioned (omit if not mentioned):\n${fields}`;
   } else {
-    factsInstruction = `- facts: extract any specific business facts mentioned (property, budget, timeline, job type, location etc). Use snake_case keys.`;
+    factsInstruction = `- facts: extract any specific business facts mentioned. Use snake_case keys. Always extract timing facts if mentioned:
+  - For meetings/consultations/site visits: "appointment_date" (e.g. "Friday", "Thursday 2pm", "July 14") and "appointment_time" (e.g. "2pm", "10am")
+  - For trade jobs/projects: "job_start_date" (e.g. "July 14", "Monday") and "job_duration_days" (e.g. "5", "7") 
+  - For quotes/deposits: "quote_amount", "deposit_amount", "deposit_due"
+  - Other: property_suburb, budget, job_type, urgency, system_type etc`;
   }
 
   const businessContext = businessProfile
@@ -52,6 +56,8 @@ Rules:
 - summary: 1-2 sentences, plain English. If returning contact, reference previous interactions.
 - action: the single most important next step, or null
 - suggested_actions: 2-3 short action labels e.g. ["Send quote", "Book callback", "Schedule meeting"] — max 5 words each
+- follow_up.type: use "meeting" whenever a specific appointment, site visit, consultation, or callback time was agreed on in the call
+- follow_up.detail: include the specific date/time/location agreed if mentioned
 - email_confidence: "low" if email was spelled out phonetically or uncertain
 ${factsInstruction}${contextSection}`,
 
