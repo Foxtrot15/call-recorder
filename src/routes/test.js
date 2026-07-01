@@ -9,6 +9,8 @@ const {
   updateContactFromCall,
   buildContactContext,
 } = require("../services/contacts");
+const { createDraft }  = require("../services/gmail");
+const { createEvent }  = require("../services/gcal");
 const {
   getBusinessProfile,
   shouldUpdateProfile,
@@ -94,7 +96,50 @@ router.post("/inject", async (req, res) => {
       console.log("🏢 Business profile updated");
     }
 
-    // Send notification (optional)
+    // ── Gmail draft + Calendar event ─────────────────────────
+    try {
+      if (analysis && direction === "inbound") {
+        const callerName  = analysis.caller?.name  || From;
+        const callerEmail = analysis.caller?.email || null;
+        const intent      = analysis.intent        || "general_enquiry";
+        const summary     = analysis.summary       || "Call received";
+        const action      = analysis.action        || "";
+        const isReturning = contactContext !== null;
+
+        if (callerEmail) {
+          const firstName = callerName.split(" ")[0];
+          const subject = "Following up on your call" + (callerName ? " — " + callerName : "");
+          const bodyLines = [
+            "Hi " + firstName + ",",
+            "",
+            isReturning ? "Great to hear from you again. " + summary : "Thank you for calling. " + summary,
+            "",
+            action ? "Next step: " + action : "",
+            "",
+            "Please don't hesitate to reach out if you have any questions.",
+            "",
+            "Kind regards",
+          ].filter(Boolean);
+
+          await createDraft(clientId, { to: callerEmail, subject, body: bodyLines.join("\n") });
+          console.log("📧 Draft created for " + callerEmail);
+        }
+
+        if (intent === "schedule_meeting" && analysis.follow_up?.detail) {
+          const desc = summary + "\n\nFrom call: " + From + "\n\n" + analysis.follow_up.detail;
+          await createEvent(clientId, {
+            title:         "Meeting with " + callerName,
+            description:   desc,
+            attendeeEmail: callerEmail || null,
+          });
+          console.log("📅 Calendar event created for " + callerName);
+        }
+      }
+    } catch (err) {
+      console.error("⚠️  Gmail/Calendar failed:", err.message);
+    }
+
+    // ── Send notification email ───────────────────────────────
     if (!skip_notify) {
       try {
         await sendNotification(clientId, {
