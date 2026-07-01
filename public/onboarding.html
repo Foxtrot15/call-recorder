@@ -1,1 +1,818 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aida — Get Started</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #080c14;
+  --surface: #0f1520;
+  --surface2: #161e2e;
+  --border: #1e2d45;
+  --border2: #263548;
+  --text: #e8edf5;
+  --muted: #5a7090;
+  --accent: #4f8ef7;
+  --accent-dim: rgba(79,142,247,0.12);
+  --green: #22c55e;
+  --green-dim: rgba(34,197,94,0.1);
+  --amber: #f59e0b;
+  --display: 'Space Grotesk', sans-serif;
+  --body: 'Inter', sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 20px 80px;
+}
+
+/* ── Header ── */
+.header {
+  width: 100%;
+  max-width: 640px;
+  padding: 36px 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.logo {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+
+.logo span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 10px; }
+
+.step-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Progress ── */
+.progress-track {
+  width: 100%;
+  max-width: 640px;
+  margin-bottom: 40px;
+}
+
+.progress-steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.progress-pip {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.3s;
+}
+
+.progress-pip.done { background: var(--accent); }
+.progress-pip.active { background: var(--accent); opacity: 0.5; }
+
+.progress-labels {
+  display: flex;
+  justify-content: space-between;
+}
+
+.progress-labels span {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* ── Card ── */
+.card {
+  width: 100%;
+  max-width: 640px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 36px;
+  display: none;
+}
+
+.card.active { display: block; }
+
+.card-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.card-title {
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+  line-height: 1.2;
+}
+
+.card-sub {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 32px;
+  line-height: 1.5;
+}
+
+/* ── Fields ── */
+.field { margin-bottom: 20px; }
+
+.field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 7px;
+}
+
+.field label .optional {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 14px;
+  padding: 11px 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus { border-color: var(--accent); }
+
+.field textarea { resize: vertical; min-height: 80px; }
+
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* ── Chip selectors ── */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.chip {
+  padding: 7px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.chip:hover { border-color: var(--accent); color: var(--text); }
+.chip.selected { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+/* ── Buttons ── */
+.btn-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 32px;
+  gap: 12px;
+}
+
+.btn {
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 24px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { opacity: 0.88; }
+.btn-ghost { background: var(--surface2); color: var(--muted); border: 1px solid var(--border2); }
+.btn-ghost:hover { color: var(--text); border-color: var(--border); }
+
+/* ── Info box ── */
+.info-box {
+  background: var(--accent-dim);
+  border: 1px solid rgba(79,142,247,0.2);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.info-box strong { color: var(--accent); }
+
+/* ── Setup instructions (final step) ── */
+.setup-section {
+  margin-bottom: 28px;
+}
+
+.setup-section h3 {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.setup-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.code-block {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 16px;
+  color: var(--green);
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.copy-btn {
+  font-family: var(--body);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.copy-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.step-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-list li {
+  font-size: 14px;
+  color: var(--muted);
+  padding-left: 20px;
+  position: relative;
+  line-height: 1.5;
+}
+
+.step-list li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.step-list li strong { color: var(--text); }
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.summary-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.summary-item .s-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.summary-item .s-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 28px 0;
+}
+
+@media (max-width: 480px) {
+  .card { padding: 24px 20px; }
+  .field-row { grid-template-columns: 1fr; }
+  .summary-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Aida <span>Setup</span></div>
+  <div class="step-label" id="step-label">Step 1 of 5</div>
+</div>
+
+<div class="progress-track">
+  <div class="progress-steps">
+    <div class="progress-pip active" id="pip-1"></div>
+    <div class="progress-pip" id="pip-2"></div>
+    <div class="progress-pip" id="pip-3"></div>
+    <div class="progress-pip" id="pip-4"></div>
+    <div class="progress-pip" id="pip-5"></div>
+  </div>
+  <div class="progress-labels">
+    <span>Business</span>
+    <span>Calls</span>
+    <span>Email</span>
+    <span>Tools</span>
+    <span>Setup</span>
+  </div>
+</div>
+
+<!-- Step 1: Business -->
+<div class="card active" id="step-1">
+  <div class="card-eyebrow">Step 1 — About you</div>
+  <div class="card-title">Tell us about your business</div>
+  <div class="card-sub">Aida learns from your context — the more detail, the smarter it gets from day one.</div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>Your name</label>
+      <input type="text" id="contact-name" placeholder="Jane Smith">
+    </div>
+    <div class="field">
+      <label>Business name</label>
+      <input type="text" id="business-name" placeholder="Smith Property Group">
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Industry / business type</label>
+    <div class="chips" id="industry-chips">
+      <div class="chip" onclick="toggleChip(this,'industry')">Buyers Advocate</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Conveyancer</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Mortgage Broker</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Real Estate Agent</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Plumber</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Electrician</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Builder</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Accountant</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Dentist</div>
+      <div class="chip" onclick="toggleChip(this,'industry')">Other</div>
+    </div>
+  </div>
+
+  <div class="field" id="other-industry-field" style="display:none">
+    <label>Describe your business</label>
+    <input type="text" id="other-industry" placeholder="e.g. Landscape gardener, Financial planner...">
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>Number of staff <span class="optional">incl. yourself</span></label>
+      <select id="staff-count">
+        <option value="">Select...</option>
+        <option>Just me</option>
+        <option>2–5</option>
+        <option>6–15</option>
+        <option>16–50</option>
+        <option>50+</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Years in business</label>
+      <select id="years-biz">
+        <option value="">Select...</option>
+        <option>Less than 1 year</option>
+        <option>1–3 years</option>
+        <option>3–10 years</option>
+        <option>10+ years</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>What does a typical week look like? <span class="optional">optional</span></label>
+    <textarea id="typical-week" placeholder="e.g. Monday inspections, Tuesday client calls, Wednesday admin..."></textarea>
+  </div>
+
+  <div class="btn-row">
+    <div></div>
+    <button class="btn btn-primary" onclick="next()">Continue →</button>
+  </div>
+</div>
+
+<!-- Step 2: Calls -->
+<div class="card" id="step-2">
+  <div class="card-eyebrow">Step 2 — Your calls</div>
+  <div class="card-title">How do calls work for you?</div>
+  <div class="card-sub">Aida captures every call on your existing mobile — no number change required.</div>
+
+  <div class="field">
+    <label>Your mobile number <span class="optional">this stays the same</span></label>
+    <input type="tel" id="mobile" placeholder="+61 400 000 000">
+  </div>
+
+  <div class="field">
+    <label>Roughly how many inbound calls do you get per day?</label>
+    <div class="chips" id="call-volume-chips">
+      <div class="chip" onclick="toggleChip(this,'call-volume')">1–5</div>
+      <div class="chip" onclick="toggleChip(this,'call-volume')">5–15</div>
+      <div class="chip" onclick="toggleChip(this,'call-volume')">15–30</div>
+      <div class="chip" onclick="toggleChip(this,'call-volume')">30+</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>What do people usually call about?</label>
+    <div class="chips" id="call-type-chips">
+      <div class="chip" onclick="toggleChip(this,'call-type')">New enquiries</div>
+      <div class="chip" onclick="toggleChip(this,'call-type')">Booking appointments</div>
+      <div class="chip" onclick="toggleChip(this,'call-type')">Quotes</div>
+      <div class="chip" onclick="toggleChip(this,'call-type')">Follow-ups</div>
+      <div class="chip" onclick="toggleChip(this,'call-type')">Existing clients</div>
+      <div class="chip" onclick="toggleChip(this,'call-type')">Complaints</div>
+      <div class="chip" onclick="toggleChip(this,'call-type')">Referrals</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>What happens to missed calls right now?</label>
+    <div class="chips" id="missed-chips">
+      <div class="chip" onclick="toggleChip(this,'missed')">Voicemail — I call back</div>
+      <div class="chip" onclick="toggleChip(this,'missed')">They call back themselves</div>
+      <div class="chip" onclick="toggleChip(this,'missed')">Often lost</div>
+      <div class="chip" onclick="toggleChip(this,'missed')">Staff handle it</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Biggest frustration with calls today? <span class="optional">optional</span></label>
+    <textarea id="call-frustration" placeholder="e.g. Always on site so I miss calls. Can't remember what was discussed. Spend hours returning calls..."></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-ghost" onclick="back()">← Back</button>
+    <button class="btn btn-primary" onclick="next()">Continue →</button>
+  </div>
+</div>
+
+<!-- Step 3: Email & Calendar -->
+<div class="card" id="step-3">
+  <div class="card-eyebrow">Step 3 — Email & calendar</div>
+  <div class="card-title">Where do you work from?</div>
+  <div class="card-sub">Aida drafts follow-up emails and books calendar appointments automatically after every call.</div>
+
+  <div class="field">
+    <label>Email provider</label>
+    <div class="chips" id="email-provider-chips">
+      <div class="chip" onclick="toggleChip(this,'email-provider')">Gmail (personal)</div>
+      <div class="chip" onclick="toggleChip(this,'email-provider')">Google Workspace (business)</div>
+      <div class="chip" onclick="toggleChip(this,'email-provider')">Outlook / Microsoft 365</div>
+      <div class="chip" onclick="toggleChip(this,'email-provider')">Other</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Business email address</label>
+    <input type="email" id="business-email" placeholder="you@yourbusiness.com.au">
+  </div>
+
+  <div class="field">
+    <label>Calendar</label>
+    <div class="chips" id="calendar-chips">
+      <div class="chip" onclick="toggleChip(this,'calendar')">Google Calendar</div>
+      <div class="chip" onclick="toggleChip(this,'calendar')">Outlook Calendar</div>
+      <div class="chip" onclick="toggleChip(this,'calendar')">Apple Calendar</div>
+      <div class="chip" onclick="toggleChip(this,'calendar')">I don't use one</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>How do you prefer to be notified after a call?</label>
+    <div class="chips" id="notify-chips">
+      <div class="chip" onclick="toggleChip(this,'notify')">Email to me</div>
+      <div class="chip" onclick="toggleChip(this,'notify')">SMS</div>
+      <div class="chip" onclick="toggleChip(this,'notify')">WhatsApp</div>
+      <div class="chip" onclick="toggleChip(this,'notify')">Just the dashboard</div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-ghost" onclick="back()">← Back</button>
+    <button class="btn btn-primary" onclick="next()">Continue →</button>
+  </div>
+</div>
+
+<!-- Step 4: Tools & Admin -->
+<div class="card" id="step-4">
+  <div class="card-eyebrow">Step 4 — Your tools</div>
+  <div class="card-title">What software do you use?</div>
+  <div class="card-sub">Aida can connect to your existing tools to close the loop — from call to invoice.</div>
+
+  <div class="field">
+    <label>Job management / CRM</label>
+    <div class="chips" id="job-mgmt-chips">
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">Fergus</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">ServiceM8</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">Tradify</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">Jobber</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">HubSpot</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">Salesforce</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">Spreadsheets</div>
+      <div class="chip" onclick="toggleChip(this,'job-mgmt')">Nothing yet</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Accounting / invoicing</label>
+    <div class="chips" id="accounting-chips">
+      <div class="chip" onclick="toggleChip(this,'accounting')">Xero</div>
+      <div class="chip" onclick="toggleChip(this,'accounting')">MYOB</div>
+      <div class="chip" onclick="toggleChip(this,'accounting')">QuickBooks</div>
+      <div class="chip" onclick="toggleChip(this,'accounting')">Reckon</div>
+      <div class="chip" onclick="toggleChip(this,'accounting')">My accountant handles it</div>
+      <div class="chip" onclick="toggleChip(this,'accounting')">Nothing</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Where do most leads come from?</label>
+    <div class="chips" id="leads-chips">
+      <div class="chip" onclick="toggleChip(this,'leads')">Word of mouth</div>
+      <div class="chip" onclick="toggleChip(this,'leads')">Google / SEO</div>
+      <div class="chip" onclick="toggleChip(this,'leads')">Social media</div>
+      <div class="chip" onclick="toggleChip(this,'leads')">Referral partners</div>
+      <div class="chip" onclick="toggleChip(this,'leads')">Website</div>
+      <div class="chip" onclick="toggleChip(this,'leads')">Repeat clients</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Where does admin time go? <span class="optional">optional</span></label>
+    <textarea id="admin-pain" placeholder="e.g. Chasing quotes, following up unpaid invoices, scheduling jobs, updating spreadsheets..."></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-ghost" onclick="back()">← Back</button>
+    <button class="btn btn-primary" onclick="next()">Continue →</button>
+  </div>
+</div>
+
+<!-- Step 5: Setup Instructions -->
+<div class="card" id="step-5">
+  <div class="card-eyebrow">Step 5 — You're almost live</div>
+  <div class="card-title">Your personalised setup</div>
+  <div class="card-sub">One step on your phone and Aida starts capturing every call automatically.</div>
+
+  <div class="summary-grid" id="summary-grid"></div>
+
+  <hr class="divider">
+
+  <div class="setup-section">
+    <h3><span class="setup-num">1</span> Activate call forwarding</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:12px;line-height:1.5">Open your phone's <strong style="color:var(--text)">dialler</strong> (not a call, the keypad) and type this exactly, then press call:</p>
+    <div class="code-block" id="forward-code">
+      <span>**21*+61344224989#</span>
+      <button class="copy-btn" onclick="copyCode('**21*+61344224989#')">Copy</button>
+    </div>
+    <ul class="step-list">
+      <li>Your number stays the same — callers dial you as normal</li>
+      <li>Calls forward through Aida for recording, then ring your phone</li>
+      <li>To turn off forwarding later: dial <strong>##21#</strong></li>
+    </ul>
+  </div>
+
+  <hr class="divider">
+
+  <div class="setup-section">
+    <h3><span class="setup-num">2</span> Connect your email</h3>
+    <ul class="step-list">
+      <li>Go to your <strong>Aida dashboard → Connections</strong></li>
+      <li>Click <strong>Set up Gmail / Outlook</strong> and sign in</li>
+      <li>Aida will draft follow-up emails after every call — you review and send</li>
+    </ul>
+  </div>
+
+  <hr class="divider">
+
+  <div class="setup-section">
+    <h3><span class="setup-num">3</span> Make a test call</h3>
+    <ul class="step-list">
+      <li>Ask someone to call your mobile number</li>
+      <li>Answer and have a short conversation</li>
+      <li>Within 2 minutes, check your <strong>Aida dashboard</strong> — the call will appear with a transcript, summary, and draft email</li>
+    </ul>
+  </div>
+
+  <hr class="divider">
+
+  <div class="info-box">
+    <strong>What happens next:</strong> Your onboarding summary has been prepared below. Peter will be in touch within 24 hours to confirm everything is working and walk you through the dashboard.
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-ghost" onclick="back()">← Back</button>
+    <button class="btn btn-primary" onclick="submitForm()">Submit & finish ✓</button>
+  </div>
+</div>
+
+<!-- Complete -->
+<div class="card" id="step-complete">
+  <div style="text-align:center;padding:20px 0">
+    <div style="font-size:48px;margin-bottom:20px">⚡</div>
+    <div class="card-title" style="text-align:center;margin-bottom:10px">You're all set</div>
+    <div class="card-sub" style="text-align:center;max-width:400px;margin:0 auto 28px">
+      Aida is ready to go. Activate call forwarding on your phone and your first call will be captured automatically.
+    </div>
+    <div style="background:var(--green-dim);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:16px;text-align:left;margin-bottom:20px">
+      <div style="font-size:12px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Dial this on your phone now</div>
+      <div style="font-family:monospace;font-size:20px;color:var(--green);letter-spacing:0.05em">**21*+61344224989#</div>
+    </div>
+    <p style="font-size:13px;color:var(--muted)">Peter will follow up within 24 hours. Questions? Reply to the confirmation email.</p>
+  </div>
+</div>
+
+<script>
+let currentStep = 1;
+const totalSteps = 5;
+const chipSelections = {};
+
+function toggleChip(el, group) {
+  // Single select for most groups
+  const singleSelect = ['industry','email-provider','call-volume','calendar'].includes(group);
+  if (singleSelect) {
+    el.closest('.chips').querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+  }
+  el.classList.toggle('selected');
+  if (!chipSelections[group]) chipSelections[group] = new Set();
+  if (el.classList.contains('selected')) {
+    if (singleSelect) chipSelections[group].clear();
+    chipSelections[group].add(el.textContent);
+  } else {
+    chipSelections[group].delete(el.textContent);
+  }
+  // Show other industry field
+  if (group === 'industry') {
+    const otherField = document.getElementById('other-industry-field');
+    otherField.style.display = chipSelections['industry']?.has('Other') ? 'block' : 'none';
+  }
+}
+
+function getChips(group) {
+  return [...(chipSelections[group] || [])];
+}
+
+function updateProgress() {
+  document.getElementById('step-label').textContent = `Step ${currentStep} of ${totalSteps}`;
+  for (let i = 1; i <= totalSteps; i++) {
+    const pip = document.getElementById(`pip-${i}`);
+    pip.className = 'progress-pip' + (i < currentStep ? ' done' : i === currentStep ? ' active' : '');
+  }
+}
+
+function next() {
+  document.getElementById(`step-${currentStep}`).classList.remove('active');
+  currentStep++;
+  if (currentStep === 5) buildSummary();
+  document.getElementById(`step-${currentStep}`).classList.add('active');
+  updateProgress();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function back() {
+  document.getElementById(`step-${currentStep}`).classList.remove('active');
+  currentStep--;
+  document.getElementById(`step-${currentStep}`).classList.add('active');
+  updateProgress();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function buildSummary() {
+  const name = document.getElementById('contact-name').value || 'You';
+  const biz  = document.getElementById('business-name').value || 'Your business';
+  const industry = getChips('industry')[0] || document.getElementById('other-industry').value || '—';
+  const mobile = document.getElementById('mobile').value || '—';
+  const email = document.getElementById('business-email').value || '—';
+  const emailProvider = getChips('email-provider')[0] || '—';
+  const callVol = getChips('call-volume')[0] || '—';
+  const staff = document.getElementById('staff-count').value || '—';
+
+  document.getElementById('summary-grid').innerHTML = `
+    <div class="summary-item"><div class="s-label">Name</div><div class="s-value">${name}</div></div>
+    <div class="summary-item"><div class="s-label">Business</div><div class="s-value">${biz}</div></div>
+    <div class="summary-item"><div class="s-label">Industry</div><div class="s-value">${industry}</div></div>
+    <div class="summary-item"><div class="s-label">Mobile</div><div class="s-value">${mobile}</div></div>
+    <div class="summary-item"><div class="s-label">Email</div><div class="s-value">${email}</div></div>
+    <div class="summary-item"><div class="s-label">Email provider</div><div class="s-value">${emailProvider}</div></div>
+    <div class="summary-item"><div class="s-label">Daily calls</div><div class="s-value">${callVol}</div></div>
+    <div class="summary-item"><div class="s-label">Staff</div><div class="s-value">${staff}</div></div>
+  `;
+}
+
+function copyCode(code) {
+  navigator.clipboard.writeText(code).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    btn.style.color = 'var(--green)';
+    setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 2000);
+  });
+}
+
+function submitForm() {
+  const data = {
+    contact_name:   document.getElementById('contact-name').value,
+    business_name:  document.getElementById('business-name').value,
+    industry:       getChips('industry')[0] || document.getElementById('other-industry').value,
+    staff:          document.getElementById('staff-count').value,
+    years:          document.getElementById('years-biz').value,
+    typical_week:   document.getElementById('typical-week').value,
+    mobile:         document.getElementById('mobile').value,
+    call_volume:    getChips('call-volume')[0],
+    call_types:     getChips('call-type'),
+    missed_calls:   getChips('missed')[0],
+    call_frustration: document.getElementById('call-frustration').value,
+    email_provider: getChips('email-provider')[0],
+    business_email: document.getElementById('business-email').value,
+    calendar:       getChips('calendar')[0],
+    notify_pref:    getChips('notify')[0],
+    job_mgmt:       getChips('job-mgmt'),
+    accounting:     getChips('accounting')[0],
+    lead_sources:   getChips('leads'),
+    admin_pain:     document.getElementById('admin-pain').value,
+    submitted_at:   new Date().toISOString(),
+  };
+
+  // Store locally
+  localStorage.setItem('aida_onboarding', JSON.stringify(data));
+  console.log('Onboarding data:', data);
+
+  // Show complete screen
+  document.getElementById('step-5').classList.remove('active');
+  document.getElementById('step-complete').classList.add('active');
+  document.getElementById('step-label').textContent = 'Complete ✓';
+  document.querySelectorAll('.progress-pip').forEach(p => p.classList.add('done'));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+</script>
+</body>
+</html>
