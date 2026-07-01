@@ -34,16 +34,21 @@ async function getAccessToken(clientId) {
   return accessToken;
 }
 
-// Parse day names into next occurrence of that day
+// Parse day names into next occurrence of that day (Melbourne time)
 function nextDayOfWeek(dayName) {
   const days = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
   const target = days[dayName.toLowerCase()];
   if (target === undefined) return null;
-  const now = new Date();
-  const result = new Date(now);
-  result.setHours(9, 0, 0, 0);
-  const diff = (target - now.getDay() + 7) % 7 || 7; // at least 1 day ahead
+  
+  // Work in Melbourne local time
+  const nowMelb = new Date(new Date().toLocaleString("en-AU", { timeZone: "Australia/Melbourne" }));
+  const currentDay = nowMelb.getDay();
+  let diff = (target - currentDay + 7) % 7;
+  if (diff === 0) diff = 7; // If today, go to next week
+  
+  const result = new Date(nowMelb);
   result.setDate(result.getDate() + diff);
+  result.setHours(9, 0, 0, 0); // Default 9am, overridden by appointment_time
   return result;
 }
 
@@ -171,32 +176,28 @@ async function createEvent(clientId, {
 
     if (start && !isNaN(start.getTime())) {
       const durationHours = (title.toLowerCase().includes("visit") || title.toLowerCase().includes("quote")) ? 2 : 1;
-      const end = endTime ? new Date(endTime) : new Date(start.getTime() + durationHours * 3600000);
+      
+      // Build local datetime string to avoid UTC offset issues
+      // Format: "2026-07-04T14:00:00"
+      const pad = n => String(n).padStart(2,"0");
+      const localDT = dt => `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}:00`;
+      
+      const endDT = new Date(start.getTime() + durationHours * 3600000);
       event = {
         summary:     title,
         description,
-        start: { dateTime: start.toISOString(), timeZone: "Australia/Melbourne" },
-        end:   { dateTime: end.toISOString(),   timeZone: "Australia/Melbourne" },
+        start: { dateTime: localDT(start), timeZone: "Australia/Melbourne" },
+        end:   { dateTime: localDT(endDT), timeZone: "Australia/Melbourne" },
         attendees: attendeeEmail ? [{ email: attendeeEmail }] : [],
       };
-      console.log(`📅 Appointment: ${start.toLocaleString("en-AU")}`);
+      console.log(`📅 Appointment: ${start.toLocaleString("en-AU")} (local: ${localDT(start)})`);
     }
   }
 
-  // ── Fallback: tomorrow 9am with warning ───────────────────
+  // No date found — skip rather than creating a misleading event
   if (!event) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-    const end = new Date(tomorrow.getTime() + 3600000);
-    event = {
-      summary:     title,
-      description: description + "\n\n⚠️ Date not found — please reschedule.",
-      start: { dateTime: tomorrow.toISOString(), timeZone: "Australia/Melbourne" },
-      end:   { dateTime: end.toISOString(),      timeZone: "Australia/Melbourne" },
-      attendees: attendeeEmail ? [{ email: attendeeEmail }] : [],
-    };
-    console.log("📅 Fallback: tomorrow 9am");
+    console.log("📅 No date found in facts — skipping calendar event");
+    return null;
   }
 
   const res = await axios.post(
