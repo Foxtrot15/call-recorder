@@ -7,6 +7,7 @@ const sendNotification = require("../services/notify");
 const supabase         = require("../services/supabase");
 const { createDraft }  = require("../services/gmail");
 const { createEvent }  = require("../services/gcal");
+const { isPersonalCall } = require("../services/personal-filter");
 const {
   getOrCreateContact,
   getContactHistory,
@@ -83,6 +84,39 @@ router.post("/complete", async (req, res) => {
     if (!transcript) {
       console.error("⚠️  Empty transcript returned");
       return;
+    }
+
+    // ── Personal call check — log it, but skip AI analysis, drafts,
+    // calendar, and notification. Now that every missed call reaches Aida
+    // voicemail (conditional forwarding), this stops family/friends'
+    // messages from generating business follow-up emails.
+    if (direction === "inbound") {
+      let isPersonal = false;
+      try {
+        isPersonal = await isPersonalCall(GOOGLE_CLIENT_ID, From);
+      } catch (err) {
+        console.error("⚠️  Personal contact check failed:", err.message);
+      }
+      if (isPersonal) {
+        console.log(`👪 Personal contact — logging only, skipping automation: ${From}`);
+        const { error: personalErr } = await supabase
+          .from("calls")
+          .upsert({
+            call_sid:      CallSid,
+            recording_sid: RecordingSid,
+            from_number:   From,
+            to_number:     To,
+            direction,
+            duration:      parseInt(RecordingDuration, 10),
+            transcript,
+            intent:        "personal",
+            crm_verified:  true,
+            status:        "complete",
+            recorded_at:   new Date().toISOString(),
+          }, { onConflict: "call_sid" });
+        if (personalErr) console.error("⚠️  Failed to save personal call:", personalErr.message);
+        return;
+      }
     }
 
     // ── Load contact history for context ─────────────────────
