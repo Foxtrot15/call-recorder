@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -630,15 +629,38 @@ body {
 
   <div class="setup-section">
     <h3><span class="setup-num">1</span> Activate call forwarding</h3>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:12px;line-height:1.5">Open your phone's <strong style="color:var(--text)">dialler</strong> (not a call, the keypad) and type this exactly, then press call:</p>
-    <div class="code-block" id="forward-code">
-      <span>**21*+61344224989#</span>
-      <button class="copy-btn" onclick="copyCode('**21*+61344224989#')">Copy</button>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:12px;line-height:1.5">Your phone keeps ringing as normal. Aida only picks up calls you <strong style="color:var(--text)">miss</strong> — no answer, phone off, or you're already on another call. Tap each code below on this phone to turn that on (three separate codes, one per situation):</p>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">No answer</div>
+      <div class="code-block">
+        <a href="tel:**61*+61344224989**15%23" style="color:inherit;text-decoration:none;flex:1"><span>**61*+61344224989**15#</span></a>
+        <button class="copy-btn" onclick="copyCode('**61*+61344224989**15#', this)">Copy</button>
+      </div>
     </div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">Phone off / unreachable</div>
+      <div class="code-block">
+        <a href="tel:**62*+61344224989%23" style="color:inherit;text-decoration:none;flex:1"><span>**62*+61344224989#</span></a>
+        <button class="copy-btn" onclick="copyCode('**62*+61344224989#', this)">Copy</button>
+      </div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">Busy / already on a call</div>
+      <div class="code-block">
+        <a href="tel:**67*+61344224989%23" style="color:inherit;text-decoration:none;flex:1"><span>**67*+61344224989#</span></a>
+        <button class="copy-btn" onclick="copyCode('**67*+61344224989#', this)">Copy</button>
+      </div>
+    </div>
+
     <ul class="step-list">
-      <li>Your number stays the same — callers dial you as normal</li>
-      <li>Calls forward through Aida for recording, then ring your phone</li>
-      <li>To turn off forwarding later: dial <strong>##21#</strong></li>
+      <li>Your number stays the same — callers dial you as normal, and answered calls never touch Aida</li>
+      <li>Only missed calls get forwarded to Aida's voicemail, which becomes a transcribed lead automatically</li>
+      <li>Tap each code above to dial it directly (it'll show a short confirmation from your carrier)</li>
+      <li>To turn a code off later, dial: <strong>##61#</strong>, <strong>##62#</strong>, <strong>##67#</strong></li>
+      <li style="color:var(--muted)">These codes work on Telstra, Optus and Vodafone postpaid mobiles. Some prepaid or MVNO plans use different codes — if a code doesn't confirm, let us know your carrier and we'll find the right one.</li>
     </ul>
   </div>
 
@@ -658,8 +680,9 @@ body {
   <div class="setup-section">
     <h3><span class="setup-num">3</span> Make a test call</h3>
     <ul class="step-list">
-      <li>Ask someone to call your mobile number</li>
-      <li>Answer and have a short conversation</li>
+      <li>Ask someone to call your mobile number from a different phone</li>
+      <li><strong>Don't answer it</strong> — let it ring out (or switch to flight mode first to test the unreachable code)</li>
+      <li>You should hear your Aida greeting, then be able to leave a message</li>
       <li>Within 2 minutes, check your <strong>Aida dashboard</strong> — the call will appear with a transcript, summary, and draft email</li>
     </ul>
   </div>
@@ -685,8 +708,12 @@ body {
       Aida is ready to go. Activate call forwarding on your phone and your first call will be captured automatically.
     </div>
     <div style="background:var(--green-dim);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:16px;text-align:left;margin-bottom:20px">
-      <div style="font-size:12px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Dial this on your phone now</div>
-      <div style="font-family:monospace;font-size:20px;color:var(--green);letter-spacing:0.05em">**21*+61344224989#</div>
+      <div style="font-size:12px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Dial these on your phone now</div>
+      <div style="font-family:monospace;font-size:15px;color:var(--green);letter-spacing:0.02em;line-height:1.8">
+        **61*+61344224989**15#<br>
+        **62*+61344224989#<br>
+        **67*+61344224989#
+      </div>
     </div>
     <p style="font-size:13px;color:var(--muted)">Peter will follow up within 24 hours. Questions? Reply to the confirmation email.</p>
   </div>
@@ -769,12 +796,12 @@ function buildSummary() {
   `;
 }
 
-function copyCode(code) {
+function copyCode(code, btn) {
   navigator.clipboard.writeText(code).then(() => {
-    const btn = document.querySelector('.copy-btn');
+    const original = btn.textContent;
     btn.textContent = 'Copied!';
     btn.style.color = 'var(--green)';
-    setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 2000);
+    setTimeout(() => { btn.textContent = original; btn.style.color = ''; }, 2000);
   });
 }
 
