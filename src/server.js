@@ -5,14 +5,18 @@ const app     = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../public")));
-app.use("/inbound",           require("./routes/inbound"));
-app.use("/outbound",          require("./routes/outbound"));
-app.use("/recording",         require("./routes/recording"));
+app.set("trust proxy", true);
+
+const { twilioWebhook } = require("./middleware/auth");
+
+app.use("/inbound",           twilioWebhook, require("./routes/inbound"));
+app.use("/outbound",          twilioWebhook, require("./routes/outbound"));
+app.use("/recording",         twilioWebhook, require("./routes/recording"));
 app.use("/call",              require("./routes/call"));
 app.use("/auth",              require("./routes/auth"));
-app.use("/test",              require("./routes/test"));
+app.use("/test",              require("./routes/test")); // TODO: needs dashboard login, see note
 app.use("/personal-contacts", require("./routes/personal-contacts"));
-app.use("/voicemail",         require("./routes/voicemail"));
+app.use("/voicemail",         require("./routes/voicemail")); // TODO: needs dashboard login, see note
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
