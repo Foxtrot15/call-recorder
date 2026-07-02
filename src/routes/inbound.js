@@ -3,6 +3,7 @@ const router = express.Router();
 const twilio = require("twilio");
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const { createClient } = require("@supabase/supabase-js");
+const { isPersonalCall } = require("../services/personal-filter");
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -21,9 +22,21 @@ router.post("/voice", async (req, res) => {
 
   const caller  = From;
   const isYou   = caller === process.env.CLIENT_REAL_NUMBER;
+  const CLIENT_ID = "default"; // per-client in future
 
-  // Save call record immediately (before recording completes)
+  // Check if this is a known personal contact — skip recording if so
+  let skipRecording = false;
   if (!isYou) {
+    try {
+      skipRecording = await isPersonalCall(CLIENT_ID, caller);
+      if (skipRecording) console.log(`👪 Personal contact detected: ${caller} — skipping recording`);
+    } catch (err) {
+      console.error("⚠️  Personal contact check failed:", err.message);
+    }
+  }
+
+  // Save call record immediately (before recording completes) — skip for personal calls
+  if (!isYou && !skipRecording) {
     await supabase.from("calls").insert({
       call_sid:           CallSid,
       caller_number:      From,
@@ -50,18 +63,88 @@ router.post("/voice", async (req, res) => {
     );
     twiml.say("No number entered. Goodbye.");
     twiml.hangup();
+  } else if (skipRecording) {
+    // ── PERSONAL CALL — connect without recording ────────────
+    const dial = twiml.dial({ callerId: caller });
+    dial.number(process.env.CLIENT_REAL_NUMBER);
   } else {
-    // ── INBOUND ──────────────────────────────────────────────
+    // ── INBOUND (business) — dial with voicemail fallback ─────
     const dial = twiml.dial({
       callerId: caller,
       record: "record-from-answer-dual",
       recordingStatusCallback: `${process.env.BASE_URL}/recording/complete`,
       recordingStatusCallbackMethod: "POST",
       trim: "trim-silence",
+      timeout: 12,
+      action: `${process.env.BASE_URL}/inbound/no-answer`,
+      method: "POST",
     });
     dial.number(process.env.CLIENT_REAL_NUMBER);
   }
 
+  res.type("text/xml").send(twiml.toString());
+});
+
+// If the client doesn't answer within the timeout, fall through here
+router.post("/no-answer", async (req, res) => {
+  const { DialCallStatus, CallSid, From } = req.body;
+  const twiml = new VoiceResponse();
+
+  // If the call was actually answered and completed normally, do nothing extra
+  if (DialCallStatus === "completed") {
+    twiml.hangup();
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  console.log(`📭 No answer (${DialCallStatus}) — routing to Aida voicemail: ${From}`);
+
+  // Check for a custom recorded greeting
+  let greetingUrl = null;
+  try {
+    const { data } = await supabase
+      .from("client_settings")
+      .select("voicemail_url")
+      .eq("client_id", "default")
+      .single();
+    greetingUrl = data?.voicemail_url || null;
+  } catch (err) {
+    console.error("⚠️  Could not load custom greeting:", err.message);
+  }
+
+  if (greetingUrl) {
+    twiml.play(greetingUrl);
+  } else {
+    const fallbackGreeting = process.env.VOICEMAIL_GREETING ||
+      "Sorry, I can't get to the phone right now. Please leave a message with your name, number, and reason for calling, and I'll get back to you as soon as possible.";
+    twiml.say({ voice: "Polly.Amy", language: "en-AU" }, fallbackGreeting);
+  }
+
+  twiml.record({
+    maxLength: 180,           // auto-hangup safety net at 3 minutes
+    playBeep: true,
+    trim: "trim-silence",
+    recordingStatusCallback: `${process.env.BASE_URL}/recording/complete`,
+    recordingStatusCallbackMethod: "POST",
+    action: `${process.env.BASE_URL}/inbound/voicemail-complete`,
+    // No explicit finishOnKey — caller controls when they're done by hanging up.
+    // Twilio's <Record> also ends automatically on ~4s of silence.
+  });
+  twiml.say(
+    { voice: "Polly.Amy", language: "en-AU" },
+    "Sorry, I didn't catch that. Goodbye."
+  );
+
+  res.type("text/xml").send(twiml.toString());
+});
+
+// After the voicemail recording finishes
+router.post("/voicemail-complete", (req, res) => {
+  const twiml = new VoiceResponse();
+  twiml.say(
+    { voice: "Polly.Amy", language: "en-AU" },
+    "Thanks, your message has been received. Goodbye."
+  );
+  twiml.hangup();
   res.type("text/xml").send(twiml.toString());
 });
 
