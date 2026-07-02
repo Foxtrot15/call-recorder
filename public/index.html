@@ -863,6 +863,24 @@ function openCall(id) {
   openModal('modal-call');
 }
 
+async function flagAsPersonal() {
+  const c = allCalls.find(x => x.id === currentCallId);
+  if (!c) return;
+  if (!confirm(`Mark ${c.caller_name || c.from_number} as a personal contact? Aida won't record future calls from this number.`)) return;
+
+  try {
+    await fetch('/personal-contacts/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: c.from_number, label: c.caller_name || null }),
+    });
+    alert('Done — this number will be excluded from recording going forward.');
+    closeModal('modal-call');
+  } catch (err) {
+    alert('Failed to update: ' + err.message);
+  }
+}
+
 async function saveCallDetails() {
   const instruction = document.getElementById('detail-instruction').value;
   const status = document.getElementById('detail-status').value;
