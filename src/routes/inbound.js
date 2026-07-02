@@ -3,7 +3,6 @@ const router = express.Router();
 const twilio = require("twilio");
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const { createClient } = require("@supabase/supabase-js");
-const { isPersonalCall } = require("../services/personal-filter");
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -24,30 +23,6 @@ router.post("/voice", async (req, res) => {
   const isYou   = caller === process.env.CLIENT_REAL_NUMBER;
   const CLIENT_ID = "default"; // per-client in future
 
-  // Check if this is a known personal contact — skip recording if so
-  let skipRecording = false;
-  if (!isYou) {
-    try {
-      skipRecording = await isPersonalCall(CLIENT_ID, caller);
-      if (skipRecording) console.log(`👪 Personal contact detected: ${caller} — skipping recording`);
-    } catch (err) {
-      console.error("⚠️  Personal contact check failed:", err.message);
-    }
-  }
-
-  // Save call record immediately (before recording completes) — skip for personal calls
-  if (!isYou && !skipRecording) {
-    await supabase.from("calls").insert({
-      call_sid:           CallSid,
-      caller_number:      From,
-      twilio_number:      To,
-      client_real_number: ForwardedFrom || null,
-      direction:          Direction,
-      status:             "in-progress",
-      started_at:         new Date().toISOString(),
-    });
-  }
-
   if (isYou) {
     // ── OUTBOUND BRIDGE ──────────────────────────────────────
     const gather = twiml.gather({
@@ -63,40 +38,26 @@ router.post("/voice", async (req, res) => {
     );
     twiml.say("No number entered. Goodbye.");
     twiml.hangup();
-  } else if (skipRecording) {
-    // ── PERSONAL CALL — connect without recording ────────────
-    const dial = twiml.dial({ callerId: caller });
-    dial.number(process.env.CLIENT_REAL_NUMBER);
-  } else {
-    // ── INBOUND (business) — dial with voicemail fallback ─────
-    const dial = twiml.dial({
-      callerId: caller,
-      record: "record-from-answer-dual",
-      recordingStatusCallback: `${process.env.BASE_URL}/recording/complete`,
-      recordingStatusCallbackMethod: "POST",
-      trim: "trim-silence",
-      timeout: 12,
-      action: `${process.env.BASE_URL}/inbound/no-answer`,
-      method: "POST",
-    });
-    dial.number(process.env.CLIENT_REAL_NUMBER);
-  }
-
-  res.type("text/xml").send(twiml.toString());
-});
-
-// If the client doesn't answer within the timeout, fall through here
-router.post("/no-answer", async (req, res) => {
-  const { DialCallStatus, CallSid, From } = req.body;
-  const twiml = new VoiceResponse();
-
-  // If the call was actually answered and completed normally, do nothing extra
-  if (DialCallStatus === "completed") {
-    twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
 
-  console.log(`📭 No answer (${DialCallStatus}) — routing to Aida voicemail: ${From}`);
+  // ── MISSED CALL — with conditional call forwarding (**61*/**62*/**67*),
+  // Twilio only ever receives calls the client didn't answer. There is no
+  // live dial-through to the client's mobile, so every call reaching here
+  // goes straight to Aida voicemail. (This also means the forwarding-loop
+  // risk that existed with unconditional **21* forwarding cannot occur —
+  // Twilio never dials the client's phone.)
+  console.log(`📭 Missed call reaching Aida voicemail: ${caller}`);
+
+  await supabase.from("calls").insert({
+    call_sid:           CallSid,
+    caller_number:      From,
+    twilio_number:      To,
+    client_real_number: ForwardedFrom || null,
+    direction:          Direction || "inbound",
+    status:             "in-progress",
+    started_at:         new Date().toISOString(),
+  });
 
   // Check for a custom recorded greeting
   let greetingUrl = null;
@@ -104,7 +65,7 @@ router.post("/no-answer", async (req, res) => {
     const { data } = await supabase
       .from("client_settings")
       .select("voicemail_url")
-      .eq("client_id", "default")
+      .eq("client_id", CLIENT_ID)
       .single();
     greetingUrl = data?.voicemail_url || null;
   } catch (err) {
