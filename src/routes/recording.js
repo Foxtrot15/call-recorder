@@ -28,6 +28,24 @@ router.post("/complete", async (req, res) => {
     return;
   }
 
+  // Idempotency claim — only the first delivery of this recording proceeds.
+  // Blocks duplicate Twilio webhook retries and replayed/forged requests.
+  const { data: claimed, error: claimErr } = await supabase
+    .rpc("claim_recording", { p_call_sid: CallSid, p_recording_sid: RecordingSid });
+  if (claimErr) {
+    console.error("⚠️  Claim check failed:", claimErr.message);
+    return;
+  }
+  if (!claimed) {
+    console.log(`↩️  Duplicate/late recording callback ignored: ${RecordingSid}`);
+    return;
+  }
+
+  // Persist the recording URL immediately so a crashed pipeline is recoverable later
+  await supabase.from("calls")
+    .update({ recording_url: RecordingUrl })
+    .eq("call_sid", CallSid);
+
   console.log(`📼 Recording complete: ${RecordingSid} (${RecordingDuration}s)`);
 
   try {
@@ -130,31 +148,13 @@ router.post("/complete", async (req, res) => {
       recorded_at:        new Date().toISOString(),
     };
 
-    const { data: existing } = await supabase
+    const { data, error } = await supabase
       .from("calls")
-      .select("id")
-      .eq("call_sid", CallSid)
+      .upsert({ call_sid: CallSid, ...payload }, { onConflict: "call_sid" })
+      .select()
       .single();
-
-    let savedId;
-    if (existing) {
-      const { data, error } = await supabase
-        .from("calls")
-        .update(payload)
-        .eq("call_sid", CallSid)
-        .select()
-        .single();
-      if (error) throw error;
-      savedId = data.id;
-    } else {
-      const { data, error } = await supabase
-        .from("calls")
-        .insert({ call_sid: CallSid, ...payload })
-        .select()
-        .single();
-      if (error) throw error;
-      savedId = data.id;
-    }
+    if (error) throw error;
+    const savedId = data.id;
 
     console.log(`💾 Call saved: ${savedId}`);
 
@@ -243,21 +243,25 @@ Write a SHORT, natural, professional email directly to the client.
     }
 
     // ── Send notification email ───────────────────────────────
-    const duration = formatDuration(RecordingDuration);
-    const contactDisplay = direction === "outbound"
-      ? (analysis?.caller?.name || To)
-      : (analysis?.caller?.name || From);
+    try {
+      const duration = formatDuration(RecordingDuration);
+      const contactDisplay = direction === "outbound"
+        ? (analysis?.caller?.name || To)
+        : (analysis?.caller?.name || From);
 
-    await sendNotification(GOOGLE_CLIENT_ID, {
-      direction,
-      duration,
-      from:        contactDisplay,
-      summary:     analysis?.summary || null,
-      transcript,
-      dashboardUrl: process.env.BASE_URL,
-    });
+      await sendNotification(GOOGLE_CLIENT_ID, {
+        direction,
+        duration,
+        from:        contactDisplay,
+        summary:     analysis?.summary || null,
+        transcript,
+        dashboardUrl: process.env.BASE_URL,
+      });
 
-    console.log("✅ Notification sent");
+      console.log("✅ Notification sent");
+    } catch (err) {
+      console.error("⚠️  Notification failed (call still saved):", err.message);
+    }
 
   } catch (err) {
     console.error("❌ Pipeline error:", err.message);
