@@ -158,6 +158,21 @@ router.post("/connect", (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
   const e164 = normaliseAU(destination);
+
+  // Only allow dialing Australian mobiles/landlines — blocks toll-fraud abuse
+  // of this bridge via spoofed caller ID (defense-in-depth alongside Twilio's
+  // Geo Permissions, which restrict this at the account level too).
+  const AU_MOBILE_OR_LANDLINE = /^\+61[2378]\d{8}$|^\+614\d{8}$/;
+  if (!AU_MOBILE_OR_LANDLINE.test(e164)) {
+    console.log(`🚫 Blocked outbound dial to non-AU/invalid number: ${destination}`);
+    twiml.say(
+      { voice: "Polly.Amy", language: "en-AU" },
+      "Sorry, only Australian numbers can be dialled. Goodbye."
+    );
+    twiml.hangup();
+    return res.type("text/xml").send(twiml.toString());
+  }
+
   twiml.say(
     { voice: "Polly.Amy", language: "en-AU" },
     "Connecting your call now."
@@ -174,10 +189,10 @@ router.post("/connect", (req, res) => {
 
 function normaliseAU(number) {
   const digits = number.replace(/\D/g, "");
-  if (digits.startsWith("04") && digits.length === 10) return "+61" + digits.slice(1);
-  if (digits.startsWith("61")) return "+" + digits;
-  if (digits.startsWith("+"))  return digits;
-  return "+" + digits;
+  if (digits.startsWith("04") && digits.length === 10) return "+61" + digits.slice(1); // mobile: 04xx xxx xxx
+  if (digits.startsWith("0")  && digits.length === 10) return "+61" + digits.slice(1); // landline: 0[2378] xxxx xxxx
+  if (digits.startsWith("61") && digits.length === 11) return "+" + digits;            // already has country code, no leading 0
+  return "+" + digits; // malformed — will fail the AU_MOBILE_OR_LANDLINE check above, which is intentional
 }
 
 module.exports = router;
