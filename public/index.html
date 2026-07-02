@@ -195,6 +195,34 @@
       </div>
       <button class="btn btn-primary" onclick="refreshCalls()">↻ Refresh</button>
     </div>
+
+    <div style="background:var(--surface,#161616);border:1px solid var(--border,#2a2a2a);border-radius:10px;padding:16px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px">📞 Aida call forwarding</div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.5">
+        Tapping a code opens your phone's dialler with it ready to go — you still need to tap Call to confirm. There's no way to check from here whether forwarding is currently on; if you're unsure, dial <strong>*#61#</strong> to check "no answer" status on most carriers.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--green,#22c55e);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Turn Aida on</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <a href="tel:**61*+61344224989**15%23" class="btn btn-ghost btn-sm" style="justify-content:flex-start;text-decoration:none">No answer</a>
+            <a href="tel:**62*+61344224989%23" class="btn btn-ghost btn-sm" style="justify-content:flex-start;text-decoration:none">Unreachable</a>
+            <a href="tel:**67*+61344224989%23" class="btn btn-ghost btn-sm" style="justify-content:flex-start;text-decoration:none">Busy</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Turn Aida off</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <a href="tel:%23%2361%23" class="btn btn-ghost btn-sm" style="justify-content:flex-start;text-decoration:none">No answer</a>
+            <a href="tel:%23%2362%23" class="btn btn-ghost btn-sm" style="justify-content:flex-start;text-decoration:none">Unreachable</a>
+            <a href="tel:%23%2367%23" class="btn btn-ghost btn-sm" style="justify-content:flex-start;text-decoration:none">Busy</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="stats-bar">
       <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value accent" id="stat-total">—</div></div>
       <div class="stat-card"><div class="stat-label">New</div><div class="stat-value" id="stat-new">—</div></div>
