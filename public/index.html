@@ -290,6 +290,9 @@
         <button id="quick-play-btn" onclick="event.stopPropagation();quickPlayVoicemail()" style="display:none;margin-top:10px;width:100%;background:var(--surface2);border:1px solid var(--border2);border-radius:6px;padding:8px;color:var(--text);font-family:var(--body);font-size:12px;cursor:pointer;align-items:center;justify-content:center;gap:6px">
           ▶ Play current greeting
         </button>
+        <button id="quick-delete-btn" onclick="event.stopPropagation();deleteVoicemail()" style="display:none;margin-top:8px;width:100%;background:var(--surface2);border:1px solid var(--border2);border-radius:6px;padding:8px;color:var(--red,#ef4444);font-family:var(--body);font-size:12px;cursor:pointer;align-items:center;justify-content:center;gap:6px">
+          🗑 Remove greeting
+        </button>
         <audio id="quick-play-audio" style="display:none"></audio>
         <div class="conn-body" id="body-voicemail">
           <div class="conn-steps">
@@ -305,7 +308,6 @@
           <div style="display:flex;gap:8px;margin-top:4px">
             <button class="btn btn-primary btn-sm" id="save-voicemail-btn" onclick="saveVoicemail()" style="display:none">Save greeting</button>
             <button class="btn btn-ghost btn-sm" onclick="reRecordVoicemail()" id="rerecord-btn" style="display:none">Re-record</button>
-            <button class="btn btn-ghost btn-sm" onclick="deleteVoicemail()" id="delete-voicemail-btn" style="display:none;color:var(--red,#ef4444)">Remove greeting</button>
           </div>
         </div>
         <button class="conn-toggle-btn" id="toggle-voicemail" onclick="toggleConnCard('voicemail')">Set up →</button>
@@ -810,7 +812,7 @@ async function saveVoicemail() {
       document.getElementById('toggle-voicemail').classList.remove('open');
       currentVoicemailUrl = data.url;
       document.getElementById('quick-play-btn').style.display = 'flex';
-      document.getElementById('delete-voicemail-btn').style.display = 'inline-flex';
+      document.getElementById('quick-delete-btn').style.display = 'flex';
       alert('Voicemail greeting saved! Aida will play this for every missed call.');
     } else {
       alert('Failed to save: ' + (data.error || 'Unknown error'));
@@ -844,7 +846,7 @@ async function loadVoicemailStatus() {
 
         const quickBtn = document.getElementById('quick-play-btn');
         quickBtn.style.display = 'flex';
-        document.getElementById('delete-voicemail-btn').style.display = 'inline-flex';
+        document.getElementById('quick-delete-btn').style.display = 'flex';
       }
     }
   } catch {}
@@ -852,7 +854,7 @@ async function loadVoicemailStatus() {
 
 async function deleteVoicemail() {
   if (!confirm('Remove your saved greeting? Callers will hear the default message until you record a new one.')) return;
-  const btn = document.getElementById('delete-voicemail-btn');
+  const btn = document.getElementById('quick-delete-btn');
   btn.textContent = 'Removing...';
   btn.disabled = true;
 
@@ -882,7 +884,7 @@ async function deleteVoicemail() {
   } catch (err) {
     alert('Remove failed: ' + err.message);
   } finally {
-    btn.textContent = 'Remove greeting';
+    btn.textContent = '🗑 Remove greeting';
     btn.disabled = false;
   }
 }
