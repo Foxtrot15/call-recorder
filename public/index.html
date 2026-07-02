@@ -274,6 +274,41 @@
       </div>
     </div>
 
+    <div class="section-title" style="margin-bottom:14px">🎙️ Aida Voice Setup</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-bottom:32px">
+
+      <!-- Voicemail Greeting -->
+      <div class="conn-card" id="card-voicemail">
+        <div class="conn-header">
+          <div class="conn-icon" style="background:#7c3aed">🎙️</div>
+          <div class="conn-info">
+            <div class="conn-name">Your voicemail greeting</div>
+            <div class="conn-desc">Record what callers hear when you can't answer</div>
+          </div>
+          <div class="conn-status" id="voicemail-status">Not recorded</div>
+        </div>
+        <div class="conn-body" id="body-voicemail">
+          <div class="conn-steps">
+            Record a short greeting in your own voice. Aida plays this back for every missed call, then asks the caller to leave a message — just like your normal voicemail, but the message becomes a transcribed lead automatically.
+          </div>
+          <div id="voicemail-recorder" style="margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+              <button class="btn btn-primary" id="record-btn" onclick="toggleRecording()">🔴 Record greeting</button>
+              <span id="record-timer" style="font-family:var(--mono);font-size:13px;color:var(--muted)"></span>
+            </div>
+            <audio id="voicemail-playback" controls style="width:100%;display:none;margin-top:10px"></audio>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-primary btn-sm" id="save-voicemail-btn" onclick="saveVoicemail()" style="display:none">Save greeting</button>
+            <button class="btn btn-ghost btn-sm" onclick="reRecordVoicemail()" id="rerecord-btn" style="display:none">Re-record</button>
+          </div>
+        </div>
+        <button class="conn-toggle-btn" id="toggle-voicemail" onclick="toggleConnCard('voicemail')">Set up →</button>
+      </div>
+
+    </div>
+
+    <div class="section-title" style="margin-bottom:14px">🔌 Software Connections</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
 
       <!-- Gmail -->
@@ -633,7 +668,7 @@ function showPage(name, btn) {
   btn.classList.add('active');
   if (name === 'calls') refreshCalls();
   if (name === 'contacts') refreshContacts();
-  if (name === 'connections') loadConnections();
+  if (name === 'connections') { loadConnections(); loadVoicemailStatus(); }
   if (name === 'test') document.getElementById('test-log').textContent = 'Ready to inject calls...';
   if (name === 'profile') loadProfile();
 }
@@ -683,6 +718,121 @@ function connectService(id) {
     updateConnectionStatuses(data);
     return;
   }
+}
+
+// ── VOICEMAIL RECORDING ──────────────────────────────────────
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingSeconds = 0;
+let recordingTimerInterval = null;
+let recordedBlob = null;
+
+async function toggleRecording() {
+  const btn = document.getElementById('record-btn');
+
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    recordingSeconds = 0;
+
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.onstop = () => {
+      recordedBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const url = URL.createObjectURL(recordedBlob);
+      const player = document.getElementById('voicemail-playback');
+      player.src = url;
+      player.style.display = 'block';
+      document.getElementById('save-voicemail-btn').style.display = 'inline-flex';
+      document.getElementById('rerecord-btn').style.display = 'inline-flex';
+      clearInterval(recordingTimerInterval);
+      document.getElementById('record-timer').textContent = '';
+      btn.textContent = '🔴 Record greeting';
+      btn.style.display = 'inline-flex';
+      stream.getTracks().forEach(t => t.stop());
+    };
+
+    mediaRecorder.start();
+    btn.textContent = '⏹ Stop recording';
+    recordingTimerInterval = setInterval(() => {
+      recordingSeconds++;
+      const m = Math.floor(recordingSeconds / 60);
+      const s = recordingSeconds % 60;
+      document.getElementById('record-timer').textContent = `${m}:${String(s).padStart(2,'0')}`;
+      if (recordingSeconds >= 60) mediaRecorder.stop(); // 60s max
+    }, 1000);
+
+  } catch (err) {
+    alert('Microphone access denied or unavailable. Please allow microphone permissions and try again.');
+  }
+}
+
+function reRecordVoicemail() {
+  document.getElementById('voicemail-playback').style.display = 'none';
+  document.getElementById('save-voicemail-btn').style.display = 'none';
+  document.getElementById('rerecord-btn').style.display = 'none';
+  recordedBlob = null;
+}
+
+async function saveVoicemail() {
+  if (!recordedBlob) return;
+  const btn = document.getElementById('save-voicemail-btn');
+  btn.textContent = 'Uploading...';
+  btn.disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append('audio', recordedBlob, 'voicemail-greeting.webm');
+
+    const res = await fetch('/voicemail/upload', {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      const status = document.getElementById('voicemail-status');
+      status.textContent = '✓ Recorded';
+      status.style.background = 'rgba(16,185,129,0.1)';
+      status.style.color = 'var(--green)';
+      document.getElementById('card-voicemail').classList.add('connected');
+      document.getElementById('body-voicemail').classList.remove('open');
+      document.getElementById('toggle-voicemail').classList.remove('open');
+      alert('Voicemail greeting saved! Aida will play this for every missed call.');
+    } else {
+      alert('Failed to save: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Upload failed: ' + err.message);
+  } finally {
+    btn.textContent = 'Save greeting';
+    btn.disabled = false;
+  }
+}
+
+async function loadVoicemailStatus() {
+  try {
+    const res = await fetch('/voicemail/status?clientId=default');
+    const data = await res.json();
+    if (data.hasGreeting) {
+      const status = document.getElementById('voicemail-status');
+      status.textContent = '✓ Recorded';
+      status.style.background = 'rgba(16,185,129,0.1)';
+      status.style.color = 'var(--green)';
+      document.getElementById('card-voicemail').classList.add('connected');
+      if (data.url) {
+        const player = document.getElementById('voicemail-playback');
+        player.src = data.url;
+        player.style.display = 'block';
+        document.getElementById('rerecord-btn').style.display = 'inline-flex';
+      }
+    }
+  } catch {}
 }
 
 function saveConnections() {
