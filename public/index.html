@@ -287,6 +287,10 @@
           </div>
           <div class="conn-status" id="voicemail-status">Not recorded</div>
         </div>
+        <button id="quick-play-btn" onclick="event.stopPropagation();quickPlayVoicemail()" style="display:none;margin-top:10px;width:100%;background:var(--surface2);border:1px solid var(--border2);border-radius:6px;padding:8px;color:var(--text);font-family:var(--body);font-size:12px;cursor:pointer;align-items:center;justify-content:center;gap:6px">
+          ▶ Play current greeting
+        </button>
+        <audio id="quick-play-audio" style="display:none"></audio>
         <div class="conn-body" id="body-voicemail">
           <div class="conn-steps">
             Record a short greeting in your own voice. Aida plays this back for every missed call, then asks the caller to leave a message — just like your normal voicemail, but the message becomes a transcribed lead automatically.
@@ -803,6 +807,8 @@ async function saveVoicemail() {
       document.getElementById('card-voicemail').classList.add('connected');
       document.getElementById('body-voicemail').classList.remove('open');
       document.getElementById('toggle-voicemail').classList.remove('open');
+      currentVoicemailUrl = data.url;
+      document.getElementById('quick-play-btn').style.display = 'flex';
       alert('Voicemail greeting saved! Aida will play this for every missed call.');
     } else {
       alert('Failed to save: ' + (data.error || 'Unknown error'));
@@ -815,6 +821,8 @@ async function saveVoicemail() {
   }
 }
 
+let currentVoicemailUrl = null;
+
 async function loadVoicemailStatus() {
   try {
     const res = await fetch('/voicemail/status?clientId=default');
@@ -825,14 +833,37 @@ async function loadVoicemailStatus() {
       status.style.background = 'rgba(16,185,129,0.1)';
       status.style.color = 'var(--green)';
       document.getElementById('card-voicemail').classList.add('connected');
+      currentVoicemailUrl = data.url;
       if (data.url) {
         const player = document.getElementById('voicemail-playback');
         player.src = data.url;
         player.style.display = 'block';
         document.getElementById('rerecord-btn').style.display = 'inline-flex';
+
+        const quickBtn = document.getElementById('quick-play-btn');
+        quickBtn.style.display = 'flex';
       }
     }
   } catch {}
+}
+
+function quickPlayVoicemail() {
+  if (!currentVoicemailUrl) return;
+  const audio = document.getElementById('quick-play-audio');
+  const btn = document.getElementById('quick-play-btn');
+
+  if (!audio.paused) {
+    audio.pause();
+    audio.currentTime = 0;
+    btn.textContent = '▶ Play current greeting';
+    return;
+  }
+
+  audio.src = currentVoicemailUrl;
+  audio.play();
+  btn.textContent = '⏸ Playing...';
+
+  audio.onended = () => { btn.textContent = '▶ Play current greeting'; };
 }
 
 function saveConnections() {
