@@ -76,4 +76,22 @@ router.get("/status", async (req, res) => {
   }
 });
 
+// POST /voicemail/delete — remove the saved greeting, falls back to TTS
+router.post("/delete", async (req, res) => {
+  const clientId = req.body.clientId || "default";
+
+  try {
+    await supabase
+      .from("client_settings")
+      .update({ voicemail_url: null, voicemail_updated_at: new Date().toISOString() })
+      .eq("client_id", clientId);
+
+    console.log(`🗑️  Voicemail greeting cleared for ${clientId}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("⚠️  Voicemail delete failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
