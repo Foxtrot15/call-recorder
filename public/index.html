@@ -196,6 +196,69 @@
       <button class="btn btn-primary" onclick="refreshCalls()">↻ Refresh</button>
     </div>
 
+    <div style="background:var(--surface,#161616);border:1px solid var(--border,#2a2a2a);border-radius:10px;padding:16px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">🤖 Aida processing</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.4">
+          When off, missed calls still play your voicemail greeting as normal, but nothing is transcribed, analysed, or emailed — the call is just logged. Use this to pause costs without touching your phone.
+        </div>
+      </div>
+      <div style="flex-shrink:0">
+        <div id="pipeline-toggle" onclick="togglePipeline()" style="width:52px;height:28px;border-radius:14px;position:relative;cursor:pointer;background:var(--border2,#333);transition:background 0.15s">
+          <div id="pipeline-toggle-knob" style="width:22px;height:22px;border-radius:50%;background:#fff;position:absolute;top:3px;left:3px;transition:left 0.15s"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let pipelineEnabled = true; // optimistic default; corrected by loadPipelineStatus()
+
+      function renderPipelineToggle() {
+        const track = document.getElementById('pipeline-toggle');
+        const knob  = document.getElementById('pipeline-toggle-knob');
+        if (!track || !knob) return;
+        track.style.background = pipelineEnabled ? 'var(--green,#22c55e)' : 'var(--border2,#333)';
+        knob.style.left = pipelineEnabled ? '27px' : '3px';
+      }
+
+      async function loadPipelineStatus() {
+        try {
+          const res = await fetch('/settings/pipeline?clientId=default');
+          const data = await res.json();
+          pipelineEnabled = data.enabled !== false;
+        } catch {
+          pipelineEnabled = true;
+        }
+        renderPipelineToggle();
+      }
+
+      async function togglePipeline() {
+        const next = !pipelineEnabled;
+        if (!next) {
+          const ok = confirm('Turn Aida processing off?\n\nMissed calls will still play your voicemail greeting, but nothing will be transcribed, analysed, or emailed until you turn it back on.');
+          if (!ok) return;
+        }
+        pipelineEnabled = next;
+        renderPipelineToggle(); // optimistic UI update
+
+        try {
+          const res = await fetch('/settings/pipeline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientId: 'default', enabled: next }),
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || 'Unknown error');
+        } catch (err) {
+          alert('Failed to update: ' + err.message);
+          pipelineEnabled = !next; // revert on failure
+          renderPipelineToggle();
+        }
+      }
+
+      loadPipelineStatus();
+    </script>
+
     <div style="background:var(--surface,#161616);border:1px solid var(--border,#2a2a2a);border-radius:10px;padding:16px;margin-bottom:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
         <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px">📞 Aida call forwarding</div>
