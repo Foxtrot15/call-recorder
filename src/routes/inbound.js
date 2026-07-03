@@ -2,12 +2,8 @@ const express = require("express");
 const router = express.Router();
 const twilio = require("twilio");
 const VoiceResponse = twilio.twiml.VoiceResponse;
-const { createClient } = require("@supabase/supabase-js");
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const supabase = require("../services/supabase");
+const { getClientByTwilioNumber } = require("../services/clients");
 
 router.post("/voice", async (req, res) => {
   const twiml = new VoiceResponse();
@@ -19,9 +15,30 @@ router.post("/voice", async (req, res) => {
     Direction,
   } = req.body;
 
+  // Resolve which client this call belongs to, based on the Twilio number
+  // that was actually dialed — this works the same for both the missed-call
+  // path and the outbound-bridge path, since To is always the Twilio number
+  // on this first webhook either way.
+  let client = await getClientByTwilioNumber(To);
+  if (!client) {
+    // No matching client row — this means a Twilio number is live and
+    // receiving calls but isn't registered in the clients table. That's a
+    // real misconfiguration, not a normal runtime condition, so it's
+    // logged loudly. Falling back to 'default' rather than hanging up on
+    // the caller — a possibly-misattributed call beats a dead line — but
+    // this should never happen in practice once clients are set up
+    // correctly, and seeing this log means something needs fixing.
+    console.error(`🚨 No client found for Twilio number ${To} — falling back to 'default'. Check the clients table.`);
+    client = {
+      slug: "default",
+      real_number: process.env.CLIENT_REAL_NUMBER,
+      twilio_number: To,
+    };
+  }
+  const CLIENT_ID = client.slug;
+
   const caller  = From;
-  const isYou   = caller === process.env.CLIENT_REAL_NUMBER;
-  const CLIENT_ID = "default"; // per-client in future
+  const isYou   = caller === client.real_number;
 
   if (isYou) {
     // ── OUTBOUND BRIDGE ──────────────────────────────────────
@@ -54,6 +71,7 @@ router.post("/voice", async (req, res) => {
     caller_number:      From,
     twilio_number:      To,
     client_real_number: ForwardedFrom || null,
+    client_id:          CLIENT_ID,
     direction:          Direction || "inbound",
     status:             "in-progress",
     started_at:         new Date().toISOString(),
