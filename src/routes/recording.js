@@ -54,14 +54,23 @@ router.post("/complete", async (req, res) => {
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const call = await client.calls(CallSid).fetch();
 
-    const CLIENT_REAL = process.env.CLIENT_REAL_NUMBER;
-    const GOOGLE_CLIENT_ID = "default";
-
     const { data: existingRecord } = await supabase
       .from("calls")
-      .select("direction, from_number, to_number")
+      .select("direction, from_number, to_number, client_id, caller_number, twilio_number, client_real_number")
       .eq("call_sid", CallSid)
       .single();
+
+    // client_id was resolved and stamped onto the calls row by /voice at
+    // the moment the call came in. Falling back to 'default' only covers
+    // rows created before this column existed — any new call should
+    // always have a real value here.
+    const CLIENT_ID = existingRecord?.client_id || "default";
+    // NOTE: existingRecord.client_real_number actually stores Twilio's
+    // ForwardedFrom header (unreliable across AU carriers, per earlier
+    // testing) — not the client's real number. Kept on the env var here
+    // deliberately; giving this its own proper per-client lookup is part
+    // of the fuller pipeline thread-through pass, not this one.
+    const CLIENT_REAL = process.env.CLIENT_REAL_NUMBER;
 
     let From, To, direction;
 
@@ -76,6 +85,44 @@ router.post("/complete", async (req, res) => {
     }
 
     console.log(`📞 ${direction}: ${From} → ${To}`);
+
+    // ── Pipeline pause check — if Aida is switched off in the dashboard,
+    // skip transcription/analysis/drafts/calendar/notification entirely
+    // (saves Deepgram + Claude cost, not just the email). The call is
+    // still logged so nothing is silently lost, and the raw recording
+    // stays available via recording_url if you want to review it later.
+    if (direction === "inbound") {
+      let pipelineEnabled = true;
+      try {
+        const { data: settings } = await supabase
+          .from("client_settings")
+          .select("pipeline_enabled")
+          .eq("client_id", CLIENT_ID)
+          .single();
+        pipelineEnabled = settings?.pipeline_enabled !== false;
+      } catch (err) {
+        console.error("⚠️  Pipeline setting lookup failed, defaulting to enabled:", err.message);
+      }
+      if (!pipelineEnabled) {
+        console.log(`⏸️  Aida paused — logging call without processing: ${From}`);
+        const { error: pausedErr } = await supabase
+          .from("calls")
+          .upsert({
+            call_sid:      CallSid,
+            recording_sid: RecordingSid,
+            from_number:   From,
+            to_number:     To,
+            direction,
+            duration:      parseInt(RecordingDuration, 10),
+            summary:       "Aida was paused when this call came in — not transcribed or processed.",
+            crm_verified:  false,
+            status:        "new",
+            recorded_at:   new Date().toISOString(),
+          }, { onConflict: "call_sid" });
+        if (pausedErr) console.error("⚠️  Failed to save paused call:", pausedErr.message);
+        return;
+      }
+    }
 
     // ── Transcribe ────────────────────────────────────────────
     const audioUrl   = `${RecordingUrl}.mp3`;
@@ -93,7 +140,7 @@ router.post("/complete", async (req, res) => {
     if (direction === "inbound") {
       let isPersonal = false;
       try {
-        isPersonal = await isPersonalCall(GOOGLE_CLIENT_ID, From);
+        isPersonal = await isPersonalCall(CLIENT_ID, From);
       } catch (err) {
         console.error("⚠️  Personal contact check failed:", err.message);
       }
@@ -124,8 +171,8 @@ router.post("/complete", async (req, res) => {
     let contact = null;
     try {
       if (direction === "inbound") {
-        contact = await getOrCreateContact(GOOGLE_CLIENT_ID, From);
-        const history = await getContactHistory(GOOGLE_CLIENT_ID, From);
+        contact = await getOrCreateContact(CLIENT_ID, From);
+        const history = await getContactHistory(CLIENT_ID, From);
         if (history.length > 0) {
           contactContext = buildContactContext(contact, history);
           console.log(`👤 Found ${history.length} previous calls from ${From}`);
@@ -138,7 +185,7 @@ router.post("/complete", async (req, res) => {
     // ── Load business profile ────────────────────────────────
     let businessProfile = null;
     try {
-      businessProfile = await getBusinessProfile(GOOGLE_CLIENT_ID);
+      businessProfile = await getBusinessProfile(CLIENT_ID);
     } catch (err) {
       console.error("⚠️  Business profile lookup failed:", err.message);
     }
@@ -155,7 +202,7 @@ router.post("/complete", async (req, res) => {
     // ── Update contact profile ────────────────────────────────
     try {
       if (direction === "inbound" && analysis) {
-        await updateContactFromCall(GOOGLE_CLIENT_ID, From, analysis, new Date().toISOString());
+        await updateContactFromCall(CLIENT_ID, From, analysis, new Date().toISOString());
         console.log(`👤 Contact profile updated for ${From}`);
       }
     } catch (err) {
@@ -194,9 +241,9 @@ router.post("/complete", async (req, res) => {
 
     // ── Update business profile if needed ────────────────────
     try {
-      const needsUpdate = await shouldUpdateProfile(GOOGLE_CLIENT_ID);
+      const needsUpdate = await shouldUpdateProfile(CLIENT_ID);
       if (needsUpdate) {
-        await generateBusinessProfile(GOOGLE_CLIENT_ID);
+        await generateBusinessProfile(CLIENT_ID);
       }
     } catch (err) {
       console.error("⚠️  Business profile update failed:", err.message);
@@ -251,7 +298,7 @@ Write a SHORT, natural, professional email directly to the client.
             ? `Following up — ${callerName}`
             : `Great speaking with you today, ${firstName}`;
 
-          await createDraft(GOOGLE_CLIENT_ID, { to: callerEmail, subject, body: emailBody });
+          await createDraft(CLIENT_ID, { to: callerEmail, subject, body: emailBody });
           console.log("📧 Draft created for " + callerEmail);
         }
 
@@ -263,7 +310,7 @@ Write a SHORT, natural, professional email directly to the client.
         if (needsCalendar && (analysis.follow_up?.detail || analysis.action)) {
           const eventDetail = analysis.follow_up?.detail || analysis.action || summary;
           const desc = summary + "\n\nContact: " + From + (callerEmail ? " | " + callerEmail : "") + "\n\n" + eventDetail;
-          await createEvent(GOOGLE_CLIENT_ID, {
+          await createEvent(CLIENT_ID, {
             title:         callerName + (analysis.facts?.job_start_date ? " — Job" : " — Appointment"),
             description:   desc,
             attendeeEmail: callerEmail || null,
@@ -283,7 +330,7 @@ Write a SHORT, natural, professional email directly to the client.
         ? (analysis?.caller?.name || To)
         : (analysis?.caller?.name || From);
 
-      await sendNotification(GOOGLE_CLIENT_ID, {
+      await sendNotification(CLIENT_ID, {
         direction,
         duration,
         from:        contactDisplay,
