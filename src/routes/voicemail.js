@@ -1,11 +1,55 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
+const ffmpeg = require("fluent-ffmpeg");
 const supabase = require("../services/supabase");
+
+ffmpeg.setFfmpegPath(require("@ffmpeg-installer/ffmpeg").path);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-// POST /voicemail/upload — client records their greeting in the browser
+// Converts a webm audio buffer to an mp3 buffer via temp files (fluent-ffmpeg
+// needs real file paths, not streams, for reliable format detection).
+function convertWebmToMp3(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    const tmpId = crypto.randomBytes(8).toString("hex");
+    const inputPath = path.join(os.tmpdir(), `vm-in-${tmpId}.webm`);
+    const outputPath = path.join(os.tmpdir(), `vm-out-${tmpId}.mp3`);
+
+    const cleanup = () => {
+      fs.unlink(inputPath, () => {});
+      fs.unlink(outputPath, () => {});
+    };
+
+    fs.writeFile(inputPath, inputBuffer, (writeErr) => {
+      if (writeErr) return reject(writeErr);
+
+      ffmpeg(inputPath)
+        .audioCodec("libmp3lame")
+        .audioBitrate("64k")
+        .format("mp3")
+        .on("error", (err) => {
+          cleanup();
+          reject(err);
+        })
+        .on("end", () => {
+          fs.readFile(outputPath, (readErr, mp3Buffer) => {
+            cleanup();
+            if (readErr) return reject(readErr);
+            resolve(mp3Buffer);
+          });
+        })
+        .save(outputPath);
+    });
+  });
+}
+
+// POST /voicemail/upload — client records their greeting in the browser (webm),
+// converted server-side to mp3 before storage (Twilio's <Play> doesn't support webm).
 router.post("/upload", upload.single("audio"), async (req, res) => {
   const clientId = req.body.clientId || "default";
 
@@ -14,12 +58,15 @@ router.post("/upload", upload.single("audio"), async (req, res) => {
   }
 
   try {
-    const fileName = `voicemail-${clientId}-${Date.now()}.webm`;
+    console.log(`🎙️ Converting greeting to mp3 for ${clientId}...`);
+    const mp3Buffer = await convertWebmToMp3(req.file.buffer);
+
+    const fileName = `voicemail-${clientId}-${Date.now()}.mp3`;
 
     const { data, error } = await supabase.storage
       .from("voicemail-greetings")
-      .upload(fileName, req.file.buffer, {
-        contentType: "audio/webm",
+      .upload(fileName, mp3Buffer, {
+        contentType: "audio/mpeg",
         upsert: true,
       });
 
