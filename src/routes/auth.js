@@ -2,6 +2,7 @@ const express = require("express");
 const router  = express.Router();
 const axios   = require("axios");
 const { storeToken, getToken } = require("../services/token");
+const { requireLogin } = require("../middleware/auth");
 
 const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -78,7 +79,7 @@ router.get("/google/callback", async (req, res) => {
 });
 
 // ── Check connection status ──────────────────────────────────
-router.get("/status", async (req, res) => {
+router.get("/status", requireLogin, async (req, res) => {
   const clientId = req.query.clientId || "default";
   const tokenData = await getToken(clientId, "google");
   res.json({
@@ -87,7 +88,7 @@ router.get("/status", async (req, res) => {
 });
 
 // ── Disconnect ───────────────────────────────────────────────
-router.post("/disconnect", async (req, res) => {
+router.post("/disconnect", requireLogin, async (req, res) => {
   const { clientId, provider } = req.body;
   const supabase = require("../services/supabase");
   await supabase.from("connections").delete()
