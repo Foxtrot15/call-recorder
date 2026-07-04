@@ -1,1 +1,121 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aida — Sign in</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --surface: #161616;
+    --border: #2a2a2a;
+    --text: #eee;
+    --muted: #999;
+    --accent: #6366f1;
+    --accent2: #4f46e5;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .card {
+    width: 100%;
+    max-width: 340px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 28px;
+    margin: 16px;
+  }
+  .title { font-size: 20px; font-weight: 600; margin-bottom: 4px; text-align: center; }
+  .subtitle { font-size: 13px; color: var(--muted); margin-bottom: 24px; text-align: center; }
+  input {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #0f0f0f;
+    color: var(--text);
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button:hover { background: var(--accent2); }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .error {
+    color: var(--red);
+    font-size: 13px;
+    margin-bottom: 12px;
+    text-align: center;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">🤖 Aida</div>
+    <div class="subtitle">Sign in to your dashboard</div>
+    <div class="error" id="error"></div>
+    <form id="login-form">
+      <input type="password" id="password" placeholder="Password" autofocus required>
+      <button type="submit" id="submit-btn">Sign in</button>
+    </form>
+  </div>
+
+  <script>
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('submit-btn');
+      const errorEl = document.getElementById('error');
+      const password = document.getElementById('password').value;
+
+      errorEl.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+
+      try {
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          window.location.href = '/';
+        } else {
+          errorEl.textContent = data.error || 'Something went wrong';
+          errorEl.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = 'Sign in';
+        }
+      } catch (err) {
+        errorEl.textContent = 'Network error — try again';
+        errorEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>
