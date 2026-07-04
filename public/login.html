@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -77,12 +76,24 @@
     <div class="subtitle">Sign in to your dashboard</div>
     <div class="error" id="error"></div>
     <form id="login-form">
-      <input type="password" id="password" placeholder="Password" autofocus required>
+      <div style="position: relative;">
+        <input type="password" id="password" placeholder="Password" autofocus required style="padding-right: 44px;">
+        <button type="button" id="toggle-visibility" aria-label="Show password" style="position: absolute; right: 6px; top: 6px; bottom: 6px; width: 32px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0;">Show</button>
+      </div>
       <button type="submit" id="submit-btn">Sign in</button>
     </form>
   </div>
 
   <script>
+    document.getElementById('toggle-visibility').addEventListener('click', () => {
+      const input = document.getElementById('password');
+      const btn = document.getElementById('toggle-visibility');
+      const isHidden = input.type === 'password';
+      input.type = isHidden ? 'text' : 'password';
+      btn.textContent = isHidden ? 'Hide' : 'Show';
+      btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+    });
+
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = document.getElementById('submit-btn');
