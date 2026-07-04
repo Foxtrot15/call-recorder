@@ -31,6 +31,7 @@ async function getContactHistory(clientId, phone) {
     .from("calls")
     .select("recorded_at, direction, duration, summary, intent, caller_name, caller_company")
     .eq("from_number", normPhone)
+    .eq("client_id", clientId)
     .eq("status", "complete")
     .order("recorded_at", { ascending: false })
     .limit(20);
