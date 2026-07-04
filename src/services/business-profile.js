@@ -1,4 +1,3 @@
-
 const axios = require("axios");
 const supabase = require("./supabase");
 
@@ -24,7 +23,8 @@ async function shouldUpdateProfile(clientId) {
   const { count } = await supabase
     .from("calls")
     .select("*", { count: "exact", head: true })
-    .eq("status", "complete");
+    .eq("status", "complete")
+    .eq("client_id", clientId);
 
   const profile = await getBusinessProfile(clientId);
 
@@ -39,11 +39,13 @@ async function shouldUpdateProfile(clientId) {
 async function generateBusinessProfile(clientId) {
   console.log("🏢 Generating business profile...");
 
-  // Fetch last 10 completed calls
+  // Fetch last 10 completed calls — scoped to this client only, or the
+  // profile ends up built from a mix of everyone's transcripts.
   const { data: calls } = await supabase
     .from("calls")
     .select("transcript, summary, intent, analysis")
     .eq("status", "complete")
+    .eq("client_id", clientId)
     .order("recorded_at", { ascending: false })
     .limit(10);
 
@@ -111,11 +113,12 @@ Rules:
     profile = JSON.parse(clean);
   }
 
-  // Get total call count
+  // Get total call count — scoped to this client
   const { count } = await supabase
     .from("calls")
     .select("*", { count: "exact", head: true })
-    .eq("status", "complete");
+    .eq("status", "complete")
+    .eq("client_id", clientId);
 
   // Store/update in Supabase
   const { data: existing } = await supabase
