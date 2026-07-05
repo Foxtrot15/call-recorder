@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "npm run smoke",
+    "test": "node --test \"test/**/*.test.js\"",
     "smoke": "node --test \"smoke/**/*.test.js\"",
     "smoke:preflight": "node smoke/preflight.js"
   },

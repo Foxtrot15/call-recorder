@@ -35,6 +35,8 @@ jobs:
           echo "OK — $count JS files parse."
       - name: Validate package.json
         run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json is valid JSON')"
+      - name: Unit tests (self-contained, no deps)
+        run: npm test
 
   smoke:
     name: Smoke (staging, if configured)
