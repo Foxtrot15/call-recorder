@@ -39,7 +39,7 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 |---|---|---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | ✅ | How the current system works end-to-end: routes, services, data model, pipeline | Current system structure, data model |
 | [../EXECUTIVE_SUMMARY.md](../EXECUTIVE_SUMMARY.md) | ✅ | One-page status: what was fixed, what's risky, what's next | Executive status |
-| [../README.md](../README.md) | 🔴 | Original MVP readme — describes the old SMS-transcript / UK-number model | *Nothing current — see DOCS_AUDIT.md, slated for rewrite* |
+| [../README.md](../README.md) | ✅ | Project orientation → points into `docs/` | Repo entry point |
 
 ### Operations
 | Doc | Status | Purpose | Owns |

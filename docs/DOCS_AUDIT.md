@@ -17,17 +17,17 @@ Scanned: `README.md`, `EXECUTIVE_SUMMARY.md`, `DEPLOYMENT.md`,
 
 ## 1. Obsolete (highest priority)
 
-| # | Doc | Problem | Recommendation |
+| # | Doc | Problem | Status |
 |---|---|---|---|
-| O1 | `README.md` | Describes the original MVP: SMS's transcripts to a recipient number, UK numbers (`+447`, `normaliseUK`), unconditional `*21*` forwarding. The live system emails via Gmail, uses AU numbers (`normaliseAU`), and uses **conditional** forwarding (and explicitly warns against `*21*`). This is the repo's front door and it's wrong. | **Rewrite** `README.md` as a short project intro that points to `docs/INDEX.md` and `docs/ARCHITECTURE.md`. Draft-ready proposal in §6 below. |
-| O2 | `README.md` env table | Lists `TRANSCRIPT_RECIPIENT_NUMBER` as core; it's only used by dead `sms.js`. Omits `SESSION_SECRET`, `OPERATOR_CLIENT_ID`, `ENCRYPTION_KEY`, `SUPABASE_*`, `ANTHROPIC_API_KEY`. | Fold into the rewrite; defer to `DEPLOYMENT.md` as the env source of truth. |
+| O1 | `README.md` | Described the original MVP: SMS'd transcripts, UK numbers (`normaliseUK`), unconditional `*21*` forwarding — while the live system emails via Gmail, uses AU numbers, and conditional forwarding. | ✅ **Resolved** — README rewritten to describe the current system and point into `docs/`. |
+| O2 | `README.md` env table | Listed `TRANSCRIPT_RECIPIENT_NUMBER` as core (only used by dead `sms.js`); omitted the real critical vars. | ✅ **Resolved** — README now defers env to `DEPLOYMENT.md` / `.env.example`. |
 
 ## 2. Contradictions
 
 | # | Between | Contradiction | Resolution |
 |---|---|---|---|
-| C1 | `README.md` ↔ `ARCHITECTURE.md`/code | Forwarding model: unconditional (README) vs conditional (reality). Note: VoIP v2 *will* reintroduce `*21*` deliberately — so this must be stated carefully to avoid future confusion. | Fix in README rewrite; `ARCHITECTURE.md` is authoritative for v1, `VOIP_V2_ARCHITECTURE.md` for the deliberate `*21*` change. |
-| C2 | `README.md` ↔ `DEPLOYMENT.md` | `TRANSCRIPT_RECIPIENT_NUMBER` "required" vs "legacy/unused". | `DEPLOYMENT.md` wins. |
+| C1 | `README.md` ↔ `ARCHITECTURE.md`/code | Forwarding model: unconditional (README) vs conditional (reality). | ✅ **Resolved** — README now states conditional forwarding; `ARCHITECTURE.md` authoritative for v1, `VOIP_V2_ARCHITECTURE.md` for the deliberate future `*21*`. |
+| C2 | `README.md` ↔ `DEPLOYMENT.md` | `TRANSCRIPT_RECIPIENT_NUMBER` "required" vs "legacy/unused". | ✅ **Resolved** — README defers to `DEPLOYMENT.md`. |
 | C3 | Multiple ↔ each other | The RLS "apply only after browser Supabase access removed" rule and the anon-key/service-key co-rotation caveat are restated in ≥5 docs; risk that one is updated and others drift. | Designate `RLS_APPLY_CHECKLIST.md` as owner; others link. (Now recorded in INDEX single-source-of-truth table.) |
 
 ## 3. Duplication / overlap
@@ -78,9 +78,10 @@ Apply on approval.
 
 ## 7. Applied vs proposed
 
-| Applied this pass (new files only) | Proposed (needs approval) |
+| Applied | Still proposed (needs approval) |
 |---|---|
-| `docs/INDEX.md`, `docs/ARCHITECTURE.md`, `docs/DOCS_AUDIT.md`, `docs/ENGINEERING_BACKLOG.md` | README rewrite (O1/O2/C1/C2); TEST_PLAN reposition (D1); DEPLOYMENT/ROLLOUT de-dup (D2); schema file (G3); CONTRIBUTING (G4); ADR folder (G5); glossary (G6) |
+| `docs/INDEX.md`, `docs/ARCHITECTURE.md`, `docs/DOCS_AUDIT.md`, `docs/ENGINEERING_BACKLOG.md` (new); **README rewrite (O1/O2/C1/C2)** — low-risk doc accuracy fix applied during autonomous hardening | TEST_PLAN reposition (D1); DEPLOYMENT/ROLLOUT de-dup (D2); schema file (G3); CONTRIBUTING (G4); ADR folder (G5); glossary (G6) |
 
-No existing document was modified in this pass — only new documents were added,
-so the audit is fully reversible and every rewrite remains yours to approve.
+The README rewrite was applied because it's pure documentation accuracy (no
+runtime effect) and was an explicit objective. The remaining proposals touch
+multiple existing docs and are left for review.

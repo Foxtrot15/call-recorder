@@ -1,127 +1,91 @@
-# Call Recorder & Transcriber
+# Aida
 
-Records inbound and outbound calls on a Twilio number, transcribes them with Deepgram, and SMS's the transcript to a recipient number (your AI agent or yourself).
+Multi-tenant **call capture and follow-up** for small businesses. When a
+customer's call goes unanswered, it's routed to a Twilio number, recorded, and
+turned into structured follow-up: a transcript (Deepgram), an AI analysis
+(Claude), a CRM contact, a drafted follow-up email and calendar event (Gmail /
+Google Calendar), and a notification to the business owner.
 
----
-
-## How it works
-
-```
-INBOUND
-  Caller → Twilio number → recorded → forwarded to client's real mobile
-                                    ↓ (on completion)
-                              Deepgram transcribes
-                                    ↓
-                              SMS sent to recipient number
-
-OUTBOUND
-  Client → Twilio bridge number → prompted for destination → recorded → connected
-                                                                       ↓ (on completion)
-                                                                 Deepgram transcribes
-                                                                       ↓
-                                                                 SMS sent to recipient number
-```
+> **Full documentation starts at [`docs/INDEX.md`](docs/INDEX.md).** This README
+> is a short orientation; the index links every operational, security, and
+> architecture document.
 
 ---
 
-## Setup
+## How it works (current system)
 
-### 1. Install dependencies
+```mermaid
+flowchart LR
+    C["Customer calls<br/>business number"] -->|unanswered → carrier<br/>conditional forwarding| TW["Twilio number"]
+    TW --> IB["/inbound/voice<br/>greeting + record"]
+    IB --> RC["/recording/complete"]
+    RC --> DG["Deepgram<br/>transcribe"] --> CL["Claude<br/>analyse"]
+    CL --> OUT["Gmail draft · Calendar event<br/>CRM contact · notification email"]
+    OUT --> DASH["Operator &amp; client<br/>dashboards"]
+```
+
+- Customers keep calling the business's existing number. The client sets up
+  **conditional** call forwarding (`**61*` / `**62*` / `**67*`) so only
+  unanswered/busy/unreachable calls reach Aida — see
+  [`CLIENT_ONBOARDING_RUNBOOK.md`](CLIENT_ONBOARDING_RUNBOOK.md).
+- The whole recording→follow-up pipeline is described in
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+Two future capabilities are **designed but not built**: capturing *answered*
+calls ([`docs/VOIP_V2_ARCHITECTURE.md`](docs/VOIP_V2_ARCHITECTURE.md)) and an
+outbound AI BDM ([`docs/OUTBOUND_BDM_ARCHITECTURE.md`](docs/OUTBOUND_BDM_ARCHITECTURE.md)).
+
+## Tech stack
+
+Node.js / Express · Twilio Programmable Voice · Deepgram · Anthropic Claude ·
+Supabase (Postgres + Auth + Storage) · Google (Gmail + Calendar) · hosted on
+Railway. Frontend is static HTML/JS in `public/`.
+
+## Quick start (local dev)
+
 ```bash
 npm install
+cp .env.example .env        # then fill in — see DEPLOYMENT.md for each var
+npm run dev                 # nodemon on http://localhost:3000
 ```
 
-### 2. Configure environment
+For Twilio to reach local webhooks during development, expose the port (e.g.
+`ngrok http 3000`) and set `BASE_URL` to the public URL.
+
+- **Environment variables:** [`DEPLOYMENT.md`](DEPLOYMENT.md) (authoritative) and
+  [`.env.example`](.env.example). The app **fails closed** at startup if a
+  critical secret (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SESSION_SECRET`,
+  `ENCRYPTION_KEY` ≥ 32 chars) is missing.
+- **Deploy:** [`PRODUCTION_ROLLOUT.md`](PRODUCTION_ROLLOUT.md).
+
+## Testing
+
 ```bash
-cp .env.example .env
-# Fill in all values in .env
+npm run smoke:preflight     # env / config check, no server needed
+npm test                    # == npm run smoke — black-box HTTP checks
 ```
 
-### 3. Expose your server publicly
-During development use [ngrok](https://ngrok.com):
-```bash
-ngrok http 3000
-# Copy the https URL → set as BASE_URL in .env
-```
+Point the suite at any instance with `SMOKE_BASE_URL`; see
+[`smoke/README.md`](smoke/README.md). Live phone-call verification is manual —
+[`smoke/MANUAL_CHECKLIST.md`](smoke/MANUAL_CHECKLIST.md).
 
-### 4. Configure Twilio webhooks
+## Repository layout
 
-In the Twilio Console, for your phone number(s):
-
-| Webhook | URL |
+| Path | What |
 |---|---|
-| Inbound calls "A call comes in" | `https://your-domain.com/inbound/voice` |
-| Outbound bridge "A call comes in" | `https://your-domain.com/outbound/voice` |
+| `src/routes/` | HTTP routes (Twilio webhooks, dashboards, auth) |
+| `src/services/` | Pipeline + integrations (transcribe, analyse, contacts, Google, tokens) |
+| `src/middleware/auth.js` | Operator + client authentication |
+| `src/config/` | Startup config validation |
+| `public/` | Dashboards + onboarding (static) |
+| `smoke/` | Automated smoke-test suite |
+| `docs/` | Architecture, plans, and the documentation index |
+| `supabase/sql/` | RLS + migration scripts (reviewed, applied manually) |
 
-> You can use **one** Twilio number for both by routing based on who's calling,
-> or use **two** separate numbers (simpler). Two numbers is recommended.
+## Contributing / operations
 
-### 5. Set up call forwarding on the client's phone (inbound only)
-
-The client dials this once on their mobile:
-```
-*21*[TWILIO_INBOUND_NUMBER]#
-```
-This unconditionally forwards all inbound calls through Twilio.
-
-To cancel forwarding later:
-```
-##21#
-```
-
-### 6. Save the outbound bridge number
-
-Have the client save the Twilio bridge number as a contact (e.g. "📞 Recorded Call"). 
-When they want to make a recorded outbound call, they:
-1. Call the bridge number
-2. Hear: *"Enter the number you want to call, then press hash"*
-3. Dial destination + `#`
-4. Call connects and is recorded
-
-### 7. Start the server
-```bash
-npm start
-# or for development:
-npm run dev
-```
-
----
-
-## SMS output format
-
-Each call produces an SMS like:
-
-```
-📞 Inbound call (3m 42s)
-From: +447911123456
-To: +447700900000
-
-Speaker 0: Hello, I'm calling about my property purchase.
-Speaker 1: Of course, let me pull up your file.
-Speaker 0: Great, I wanted to check on the exchange date.
-...
-```
-
-For long calls, the transcript is split across multiple SMS messages labeled `[1/3]`, `[2/3]` etc.
-
----
-
-## Environment variables
-
-| Variable | Description |
-|---|---|
-| `TWILIO_ACCOUNT_SID` | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_PHONE_NUMBER` | Your Twilio number (E.164 format) |
-| `CLIENT_REAL_NUMBER` | Client's actual mobile to forward inbound calls to |
-| `DEEPGRAM_API_KEY` | Deepgram API key |
-| `TRANSCRIPT_RECIPIENT_NUMBER` | Number to SMS transcripts to (your agent or yourself) |
-| `PORT` | Server port (default: 3000) |
-| `BASE_URL` | Public URL of your server (for Twilio callbacks) |
-
----
-
-## Deployment
-
-Any Node.js host works: Railway, Render, Fly.io, or your existing VPS.
-Make sure the server is publicly reachable so Twilio can hit the webhooks.
+- Documentation index & roadmap: [`docs/INDEX.md`](docs/INDEX.md)
+- Current architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Security posture: [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md)
+- Engineering backlog: [`docs/ENGINEERING_BACKLOG.md`](docs/ENGINEERING_BACKLOG.md)
+- Incident playbooks: [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md)
