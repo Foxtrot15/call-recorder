@@ -12,6 +12,18 @@ risk register), [ARCHITECTURE.md](ARCHITECTURE.md).
 Priority: **P0** ship before the next client/deploy · **P1** near-term
 (correctness/trust) · **P2** maintainability · **P3** tooling/tests/scale.
 
+> ### ✅ Completed on branch `hardening/p0-autonomous`
+> - **P0-1** `.gitignore` added.
+> - **P0-2** `ENCRYPTION_KEY` fail-closed + startup config validation
+>   (`src/config/startup-check.js`). ⚠️ **Deploy precondition:** `ENCRYPTION_KEY`
+>   must be set (≥32 chars) in Railway or the app now refuses to start; if it was
+>   previously unset, affected clients must reconnect Google.
+> - **P3 tooling:** `.env.example`, `engines` pin, `npm test`, CI workflow.
+> - **P3 tests:** unit tests for invite tokens + startup validation (12/12).
+> - **Docs:** README rewritten; `outbound.js` investigated (below); doc linkcheck clean.
+>
+> Everything below remains open (proposals only — no runtime change made to them).
+
 ---
 
 ## P0 — cheap, high-risk, do first
