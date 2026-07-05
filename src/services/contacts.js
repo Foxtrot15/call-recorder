@@ -162,9 +162,22 @@ function buildContactContext(contact, history) {
   return lines.join("\n");
 }
 
+// List all contacts for a client — used by the client-facing dashboard.
+async function listContacts(clientId) {
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id, phone, name, company, context_summary, updated_at")
+    .eq("client_id", clientId)
+    .order("updated_at", { ascending: false });
+
+  if (error) throw new Error(`Failed to list contacts: ${error.message}`);
+  return data || [];
+}
+
 module.exports = {
   getOrCreateContact,
   getContactHistory,
   updateContactFromCall,
   buildContactContext,
+  listContacts,
 };
