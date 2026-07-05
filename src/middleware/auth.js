@@ -1,5 +1,6 @@
 const twilio = require("twilio");
 const crypto = require("crypto");
+const supabase = require("../services/supabase");
 
 // Validates X-Twilio-Signature on webhook routes.
 // Requires TWILIO_AUTH_TOKEN and BASE_URL env vars (both already exist).
@@ -78,4 +79,39 @@ function requireLogin(req, res, next) {
   return res.status(401).json({ error: "Not authenticated" });
 }
 
-module.exports = { twilioWebhook, requireLogin, issueSessionCookie, clearSessionCookie };
+module.exports = { twilioWebhook, requireLogin, issueSessionCookie, clearSessionCookie, requireClientAuth };
+
+// ── Client-facing session (different from the operator login above) ────
+// Clients authenticate via Supabase Auth (email/password). Their access
+// token is stored in its own cookie, verified against Supabase on every
+// request, and used to resolve their client_id server-side — a client can
+// never claim a different clientId by editing a request themselves.
+const CLIENT_SESSION_COOKIE = "aida_client_session";
+
+async function requireClientAuth(req, res, next) {
+  const token = req.cookies?.[CLIENT_SESSION_COOKIE];
+  if (!token) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser(token);
+  if (userError || !userData?.user) {
+    return res.status(401).json({ error: "Session expired or invalid — please log in again" });
+  }
+
+  const { data: client, error: clientError } = await supabase
+    .from("clients")
+    .select("slug, name, real_number")
+    .eq("auth_user_id", userData.user.id)
+    .single();
+
+  if (clientError || !client) {
+    return res.status(403).json({ error: "No client account linked to this login" });
+  }
+
+  // Downstream routes use req.clientId — resolved here, server-side,
+  // never taken from a query param or request body.
+  req.clientId = client.slug;
+  req.client = client;
+  next();
+}
