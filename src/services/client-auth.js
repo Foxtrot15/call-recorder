@@ -1,45 +1,44 @@
-const express = require("express");
-const router = express.Router();
-const { signupClient, loginClient } = require("../services/client-auth");
+const supabase = require("./supabase");
 
-// POST /client-auth/signup — { clientId, email, password }
-router.post("/signup", async (req, res) => {
-  const { clientId, email, password } = req.body;
+// Sign up a new client account. Links the Auth user to a clients row.
+async function signupClient(email, password, clientId) {
+  // Create the Auth user
+  const { data: authData, error: authError } = await supabase.auth.signUp({
+    email,
+    password,
+  });
 
-  if (!clientId || !email || !password) {
-    return res.status(400).json({ error: "Missing clientId, email, or password" });
-  }
+  if (authError) throw new Error(`Auth signup failed: ${authError.message}`);
+  if (!authData.user) throw new Error("No user returned from signup");
 
-  try {
-    const result = await signupClient(email, password, clientId);
-    res.json({ success: true, userId: result.userId, email: result.email });
-  } catch (err) {
-    console.error("Client signup error:", err.message);
-    res.status(400).json({ error: err.message });
-  }
-});
+  // Link the Auth user to the clients row
+  const { error: updateError } = await supabase
+    .from("clients")
+    .update({ auth_user_id: authData.user.id })
+    .eq("slug", clientId);
 
-// POST /client-auth/login — { email, password }
-// Returns an access token the client uses for subsequent requests
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+  if (updateError) throw new Error(`Failed to link Auth user: ${updateError.message}`);
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Missing email or password" });
-  }
+  return { userId: authData.user.id, email: authData.user.email };
+}
 
-  try {
-    const result = await loginClient(email, password);
-    res.json({
-      success: true,
-      userId: result.userId,
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-    });
-  } catch (err) {
-    console.error("Client login error:", err.message);
-    res.status(401).json({ error: err.message });
-  }
-});
+// Log in an existing client account
+async function loginClient(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
 
-module.exports = router;
+  if (error) throw new Error(`Login failed: ${error.message}`);
+  if (!data.user) throw new Error("No user returned from login");
+  if (!data.session) throw new Error("No session returned from login");
+
+  return {
+    userId: data.user.id,
+    email: data.user.email,
+    accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
+  };
+}
+
+module.exports = { signupClient, loginClient };
