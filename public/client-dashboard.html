@@ -64,18 +64,30 @@
 
 <script>
   async function checkSession() {
-    const res = await fetch('/client-dashboard/contacts');
-    if (res.ok) {
-      const data = await res.json();
-      showDashboard(data);
-    } else {
-      showLogin();
+    try {
+      const res = await fetch('/client-dashboard/contacts');
+      if (res.ok) {
+        const data = await res.json();
+        showDashboard(data);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showLogin(data.error || `Not signed in (${res.status})`);
+      }
+    } catch (err) {
+      showLogin('Network error checking session');
     }
   }
 
-  function showLogin() {
+  function showLogin(errorMessage) {
     document.getElementById('login-view').style.display = 'block';
     document.getElementById('dashboard-view').style.display = 'none';
+    const errorEl = document.getElementById('login-error');
+    if (errorMessage) {
+      errorEl.textContent = errorMessage;
+      errorEl.style.display = 'block';
+    } else {
+      errorEl.style.display = 'none';
+    }
   }
 
   function showDashboard(data) {
