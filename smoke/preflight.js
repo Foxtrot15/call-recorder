@@ -10,6 +10,6 @@ const result = checkEnv();
 console.log(formatReport(result));
 
 const failed = result.missingRunner.length > 0 ||
-  (result.serverPresent && result.serverMissingCritical.length > 0);
+  (result.serverChecked && result.serverMissingCritical.length > 0);
 
 process.exit(failed ? 1 : 0);

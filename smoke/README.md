@@ -30,7 +30,24 @@ into CI or a deploy step.
 | `SMOKE_BASE_URL` | no (default `http://localhost:3000`) | Instance to test |
 | `DASHBOARD_PASSWORD` | for operator checks | Operator login |
 | `SMOKE_CLIENT_EMAIL` / `SMOKE_CLIENT_PASSWORD` | optional | Enables the positive client-login check against a seeded test client |
+| `SMOKE_CHECK_SERVER_ENV` | no (default auto) | Force server-side env checks `on`/`off`. Overrides auto-detection. |
 | `SMOKE_TIMEOUT_MS` | no (default `10000`) | Per-request timeout |
+
+### Server-side env checks
+
+Server env vars (`SUPABASE_URL`, `OPERATOR_CLIENT_ID`, …) are only checked when
+this process actually has the server's environment. That's decided automatically:
+
+- **Local target** (`SMOKE_BASE_URL` is localhost / unset) → **checked**.
+- **`railway run npm run smoke`** (Railway env injected) → **checked**.
+- **Remote target** (any other `SMOKE_BASE_URL`) → **skipped**; the server's config
+  is verified behaviorally by the HTTP suite instead (e.g. `OPERATOR_CLIENT_ID` is
+  proven set when an operator route returns 200 rather than the "not configured"
+  500).
+
+Override with `SMOKE_CHECK_SERVER_ENV=off` (or `on`) if you need to force it either
+way. This prevents a stray var in your shell from causing false "missing server
+var" failures when you're only smoke-testing a remote URL.
 
 ## What it checks
 

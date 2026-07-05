@@ -56,9 +56,9 @@ describe("Aida smoke", () => {
       );
     });
 
-    it("no critical server env missing (only when run with server env)", () => {
-      const { serverPresent, serverMissingCritical } = checkEnv();
-      if (!serverPresent) return; // remote target: verified behaviorally later
+    it("no critical server env missing (only when server env is present)", (t) => {
+      const { serverChecked, serverDecisionReason, serverMissingCritical } = checkEnv();
+      if (!serverChecked) return t.skip(serverDecisionReason); // remote target: verified behaviorally later
       assert.strictEqual(
         serverMissingCritical.length,
         0,
