@@ -1,4 +1,7 @@
 require("dotenv").config();
+// Validate critical config before building the app — fails closed with a clear
+// message if a security-critical env var is missing/invalid (see config/startup-check.js).
+require("./config/startup-check").validateStartupConfig();
 const express = require("express");
 const path    = require("path");
 const cookieParser = require("cookie-parser");
