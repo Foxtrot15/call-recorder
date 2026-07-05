@@ -247,7 +247,7 @@
 
       async function loadPipelineStatus() {
         try {
-          const res = await fetch('/settings/pipeline?clientId=default');
+          const res = await fetch('/settings/pipeline');
           const data = await res.json();
           pipelineEnabled = data.enabled !== false;
         } catch {
@@ -269,7 +269,7 @@
           const res = await fetch('/settings/pipeline', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ clientId: 'default', enabled: next }),
+            body: JSON.stringify({ enabled: next }),
           });
           const data = await res.json();
           if (!data.success) throw new Error(data.error || 'Unknown error');
@@ -805,9 +805,6 @@
 </div>
 
 <script>
-const SUPABASE_URL = 'https://gpyprjesdrcjrhmmprqt.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdweXByamVzZHJjanJobW1wcnF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMjE1OTMsImV4cCI6MjA5NzY5NzU5M30.dzfJtYb4NQRJeiNiPre02xU0_v24ruf81P3EdDw3yCA';
-
 let allCalls = [], allCRMCalls = [], currentCallId = null, pendingDialNumber = null, pendingDialName = null;
 
 // ── PAGE NAV ────────────────────────────────────────────────
@@ -838,9 +835,9 @@ function toggleConnCard(id) {
 
 function connectService(id) {
   if (id === 'gmail' || id === 'gcal') {
-    // OAuth flow — redirect to Google
-    const clientId = 'default';
-    window.location.href = `/auth/google?clientId=${clientId}`;
+    // OAuth flow — redirect to Google. clientId is resolved server-side
+    // from the operator session, not sent from here.
+    window.location.href = '/auth/google';
     return;
   }
   if (id === 'outlook') {
@@ -972,7 +969,7 @@ let currentVoicemailUrl = null;
 
 async function loadVoicemailStatus() {
   try {
-    const res = await fetch('/voicemail/status?clientId=default');
+    const res = await fetch('/voicemail/status');
     const data = await res.json();
     if (data.hasGreeting) {
       const status = document.getElementById('voicemail-status');
@@ -1005,7 +1002,7 @@ async function deleteVoicemail() {
     const res = await fetch('/voicemail/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId: 'default' }),
+      body: JSON.stringify({}),
     });
     const data = await res.json();
 
@@ -1073,7 +1070,7 @@ async function loadConnections() {
 
     // Check live Google status from backend
     try {
-      const res = await fetch('/auth/status?clientId=default');
+      const res = await fetch('/auth/status');
       const status = await res.json();
       if (status.google?.connected) {
         data.googleConnected = true;
@@ -1106,20 +1103,17 @@ function updateConnectionStatuses(data) {
   set('fergus-status',  !!data.fergusKey);
 }
 
-// ── SUPABASE ────────────────────────────────────────────────
-async function supabaseFetch(path, method='GET', body=null) {
-  const opts = {
-    method,
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + SUPABASE_KEY,
-      'Content-Type': 'application/json',
-      'Prefer': method !== 'GET' ? 'return=representation' : '',
-    }
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
-  if (!res.ok) { console.error('Supabase error', res.status, await res.text()); return null; }
+// ── CALLS API ───────────────────────────────────────────────
+// Goes through the server (/calls, session-authenticated), never to
+// Supabase directly — the browser holds no database credentials.
+async function apiFetch(path, method='GET', body=null) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (!res.ok) { console.error('API error', res.status, await res.text()); return null; }
   return res.json();
 }
 
@@ -1140,7 +1134,7 @@ function lookupContactName(number) {
 // ── CALLS PAGE ──────────────────────────────────────────────
 async function refreshCalls() {
   document.getElementById('calls-tbody').innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">⏳</div><h3>Loading…</h3></div></td></tr>';
-  const data = await supabaseFetch('calls?order=recorded_at.desc&limit=200');
+  const data = await apiFetch('/calls?limit=200');
   allCalls = Array.isArray(data) ? data : [];
   updateStats();
   filterCalls();
@@ -1250,7 +1244,7 @@ async function flagAsPersonal() {
 async function saveCallDetails() {
   const instruction = document.getElementById('detail-instruction').value;
   const status = document.getElementById('detail-status').value;
-  await supabaseFetch(`calls?id=eq.${currentCallId}`, 'PATCH', { instruction, status });
+  await apiFetch('/calls/' + encodeURIComponent(currentCallId), 'PATCH', { instruction, status });
   closeModal('modal-call');
   refreshCalls();
 }
@@ -1266,7 +1260,7 @@ function formatTranscript(text) {
 // ── CONTACTS PAGE ────────────────────────────────────────────
 async function refreshContacts() {
   document.getElementById('crm-review-list').innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><h3>Loading…</h3></div>';
-  const data = await supabaseFetch('calls?order=recorded_at.desc&limit=300');
+  const data = await apiFetch('/calls?limit=300');
   allCRMCalls = (Array.isArray(data) ? data : []).filter(c => c.caller_name || c.caller_email || c.caller_company);
   updateCRMBadge(Array.isArray(data) ? data : []);
   renderCRMReview();
@@ -1502,7 +1496,7 @@ async function verifyCard(id) {
     crm_verified:   true,
     crm_verified_at: new Date().toISOString(),
   };
-  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', updates);
+  await apiFetch('/calls/' + encodeURIComponent(id), 'PATCH', updates);
   Object.assign(c, updates);
   c._open = false;
   updateCRMBadge();
@@ -1511,7 +1505,7 @@ async function verifyCard(id) {
 }
 
 async function dismissCard(id) {
-  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', { crm_verified: true, crm_verified_at: new Date().toISOString() });
+  await apiFetch('/calls/' + encodeURIComponent(id), 'PATCH', { crm_verified: true, crm_verified_at: new Date().toISOString() });
   const c = allCRMCalls.find(x => x.id === id);
   if (c) { c.crm_verified = true; c._open = false; }
   updateCRMBadge();
@@ -1521,7 +1515,7 @@ async function dismissCard(id) {
 
 async function deleteContact(id) {
   if (!confirm('Remove this contact? The call record stays but contact details will be cleared.')) return;
-  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', {
+  await apiFetch('/calls/' + encodeURIComponent(id), 'PATCH', {
     crm_verified:   false,
     caller_name:    null,
     caller_email:   null,
@@ -1541,7 +1535,7 @@ async function deleteContact(id) {
 }
 
 async function unverifyCard(id) {
-  await supabaseFetch(`calls?id=eq.${id}`, 'PATCH', { crm_verified: false });
+  await apiFetch('/calls/' + encodeURIComponent(id), 'PATCH', { crm_verified: false });
   const c = allCRMCalls.find(x => x.id === id);
   if (c) { c.crm_verified = false; c._open = true; }
   updateCRMBadge();
@@ -1859,7 +1853,7 @@ async function injectSingle() {
   }
   // Check live status from backend
   try {
-    const res = await fetch('/auth/status?clientId=default');
+    const res = await fetch('/auth/status');
     const status = await res.json();
     if (status.google?.connected) {
       const data = JSON.parse(localStorage.getItem('ci_connections') || '{}');
@@ -1876,7 +1870,7 @@ refreshCalls();
 // so it shows the real pending count immediately instead of staying empty.
 (async () => {
   try {
-    const data = await supabaseFetch('calls?order=recorded_at.desc&limit=300');
+    const data = await apiFetch('/calls?limit=300');
     updateCRMBadge(Array.isArray(data) ? data : []);
   } catch {}
 })();

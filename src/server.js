@@ -30,7 +30,8 @@ app.use("/inbound",           twilioWebhook, require("./routes/inbound"));
 app.use("/outbound",          twilioWebhook, require("./routes/outbound"));
 app.use("/recording",         twilioWebhook, require("./routes/recording"));
 app.use("/call",              requireLogin, require("./routes/call"));
-app.use("/auth",              require("./routes/auth")); // login gating applied selectively inside — /google and /google/callback must stay public for the OAuth redirect
+app.use("/calls",             requireLogin, require("./routes/calls"));
+app.use("/auth",              require("./routes/auth")); // login gating applied selectively inside — only /google/callback stays public, for the OAuth redirect
 app.use("/test",              requireLogin, require("./routes/test"));
 app.use("/personal-contacts", requireLogin, require("./routes/personal-contacts"));
 app.use("/voicemail",         requireLogin, require("./routes/voicemail"));

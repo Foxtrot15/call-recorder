@@ -5,7 +5,8 @@ const { addPersonalContact, removePersonalContact, getPersonalContacts } = requi
 
 // POST /personal-contacts/add
 router.post("/add", async (req, res) => {
-  const { phone, label, clientId = "default" } = req.body;
+  const { phone, label } = req.body;
+  const clientId = req.clientId;
   if (!phone) return res.status(400).json({ error: "phone is required" });
 
   try {
@@ -18,7 +19,8 @@ router.post("/add", async (req, res) => {
 
 // POST /personal-contacts/remove
 router.post("/remove", async (req, res) => {
-  const { phone, clientId = "default" } = req.body;
+  const { phone } = req.body;
+  const clientId = req.clientId;
   if (!phone) return res.status(400).json({ error: "phone is required" });
 
   try {
@@ -29,9 +31,9 @@ router.post("/remove", async (req, res) => {
   }
 });
 
-// GET /personal-contacts/list
+// GET /personal-contacts/list — clientId comes from the operator session (req.clientId)
 router.get("/list", async (req, res) => {
-  const clientId = req.query.clientId || "default";
+  const clientId = req.clientId;
   try {
     const contacts = await getPersonalContacts(clientId);
     res.json({ contacts });

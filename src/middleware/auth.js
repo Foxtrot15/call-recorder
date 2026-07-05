@@ -68,15 +68,26 @@ function isValidSession(req) {
 }
 
 function requireLogin(req, res, next) {
-  if (isValidSession(req)) return next();
-
-  // Page navigation (browser asking for HTML) -> redirect to login page.
-  // API/fetch call -> 401 JSON, so the dashboard's own fetch() calls fail
-  // cleanly instead of receiving an HTML redirect body as "data".
-  if (req.method === "GET" && req.headers.accept && req.headers.accept.includes("text/html")) {
-    return res.redirect("/login.html");
+  if (!isValidSession(req)) {
+    // Page navigation (browser asking for HTML) -> redirect to login page.
+    // API/fetch call -> 401 JSON, so the dashboard's own fetch() calls fail
+    // cleanly instead of receiving an HTML redirect body as "data".
+    if (req.method === "GET" && req.headers.accept && req.headers.accept.includes("text/html")) {
+      return res.redirect("/login.html");
+    }
+    return res.status(401).json({ error: "Not authenticated" });
   }
-  return res.status(401).json({ error: "Not authenticated" });
+
+  // The operator dashboard manages exactly one client (this deployment's
+  // business) — OPERATOR_CLIENT_ID is that client's slug, resolved here
+  // server-side so downstream routes never trust a client-supplied clientId.
+  const clientId = process.env.OPERATOR_CLIENT_ID;
+  if (!clientId) {
+    console.error("⚠️  OPERATOR_CLIENT_ID is not set — refusing to resolve the operator session's client");
+    return res.status(500).json({ error: "Operator dashboard is not configured (missing OPERATOR_CLIENT_ID)" });
+  }
+  req.clientId = clientId;
+  next();
 }
 
 module.exports = { twilioWebhook, requireLogin, issueSessionCookie, clearSessionCookie, requireClientAuth };

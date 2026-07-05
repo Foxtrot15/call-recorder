@@ -16,8 +16,11 @@ const SCOPES = [
 ].join(" ");
 
 // ── Start Google OAuth flow ──────────────────────────────────
-router.get("/google", (req, res) => {
-  const clientId = req.query.clientId || "default";
+// Gated by requireLogin so clientId always comes from the authenticated
+// operator session (req.clientId), never a client-suppliable query param.
+// It's carried across the redirect through Google via `state`, since that's
+// the only way to get a value back to the public callback below.
+router.get("/google", requireLogin, (req, res) => {
   const params = new URLSearchParams({
     client_id:     CLIENT_ID,
     redirect_uri:  REDIRECT_URI,
@@ -25,12 +28,15 @@ router.get("/google", (req, res) => {
     scope:         SCOPES,
     access_type:   "offline",
     prompt:        "consent",
-    state:         clientId,
+    state:         req.clientId,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
 });
 
 // ── Google OAuth callback ────────────────────────────────────
+// Must stay public — Google redirects here directly, outside any session.
+// clientId comes from `state`, which /google above only ever sets from an
+// authenticated req.clientId, so it can't be forged into a different tenant.
 router.get("/google/callback", async (req, res) => {
   const { code, state: clientId, error } = req.query;
 
@@ -80,8 +86,7 @@ router.get("/google/callback", async (req, res) => {
 
 // ── Check connection status ──────────────────────────────────
 router.get("/status", requireLogin, async (req, res) => {
-  const clientId = req.query.clientId || "default";
-  const tokenData = await getToken(clientId, "google");
+  const tokenData = await getToken(req.clientId, "google");
   res.json({
     google: tokenData ? { connected: true, email: tokenData.email } : { connected: false },
   });
@@ -89,10 +94,13 @@ router.get("/status", requireLogin, async (req, res) => {
 
 // ── Disconnect ───────────────────────────────────────────────
 router.post("/disconnect", requireLogin, async (req, res) => {
-  const { clientId, provider } = req.body;
+  // clientId comes from req.clientId, not the request body — previously this
+  // trusted a client-supplied clientId directly, letting any operator-
+  // authenticated caller disconnect a different tenant's connection.
+  const { provider } = req.body;
   const supabase = require("../services/supabase");
   await supabase.from("connections").delete()
-    .eq("client_id", clientId)
+    .eq("client_id", req.clientId)
     .eq("provider", provider);
   res.json({ success: true });
 });

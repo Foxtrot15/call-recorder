@@ -2,9 +2,9 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../services/supabase");
 
-// GET /settings/pipeline?clientId=default
+// GET /settings/pipeline — clientId comes from the operator session (req.clientId)
 router.get("/pipeline", async (req, res) => {
-  const clientId = req.query.clientId || "default";
+  const clientId = req.clientId;
   try {
     const { data } = await supabase
       .from("client_settings")
@@ -20,9 +20,9 @@ router.get("/pipeline", async (req, res) => {
   }
 });
 
-// POST /settings/pipeline  { clientId, enabled }
+// POST /settings/pipeline  { enabled }
 router.post("/pipeline", async (req, res) => {
-  const clientId = req.body.clientId || "default";
+  const clientId = req.clientId;
   const enabled = !!req.body.enabled;
 
   try {

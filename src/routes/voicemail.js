@@ -51,7 +51,7 @@ function convertWebmToMp3(inputBuffer) {
 // POST /voicemail/upload — client records their greeting in the browser (webm),
 // converted server-side to mp3 before storage (Twilio's <Play> doesn't support webm).
 router.post("/upload", upload.single("audio"), async (req, res) => {
-  const clientId = req.body.clientId || "default";
+  const clientId = req.clientId;
 
   if (!req.file) {
     return res.status(400).json({ error: "No audio file provided" });
@@ -104,9 +104,9 @@ router.post("/upload", upload.single("audio"), async (req, res) => {
   }
 });
 
-// GET /voicemail/status?clientId=default
+// GET /voicemail/status — clientId comes from the operator session (req.clientId)
 router.get("/status", async (req, res) => {
-  const clientId = req.query.clientId || "default";
+  const clientId = req.clientId;
   try {
     const { data } = await supabase
       .from("client_settings")
@@ -125,7 +125,7 @@ router.get("/status", async (req, res) => {
 
 // POST /voicemail/delete — remove the saved greeting, falls back to TTS
 router.post("/delete", async (req, res) => {
-  const clientId = req.body.clientId || "default";
+  const clientId = req.clientId;
 
   try {
     await supabase
