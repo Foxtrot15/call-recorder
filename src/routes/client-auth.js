@@ -20,7 +20,6 @@ router.post("/signup", async (req, res) => {
 });
 
 // POST /client-auth/login — { email, password }
-// Returns an access token the client uses for subsequent requests
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -30,16 +29,22 @@ router.post("/login", async (req, res) => {
 
   try {
     const result = await loginClient(email, password);
-    res.json({
-      success: true,
-      userId: result.userId,
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
+    res.cookie("aida_client_session", result.accessToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days — Supabase refresh handles longer sessions later if needed
     });
+    res.json({ success: true, email: result.email });
   } catch (err) {
     console.error("Client login error:", err.message);
     res.status(401).json({ error: err.message });
   }
+});
+
+router.post("/logout", (req, res) => {
+  res.clearCookie("aida_client_session");
+  res.json({ success: true });
 });
 
 module.exports = router;
