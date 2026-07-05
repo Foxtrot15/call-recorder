@@ -35,6 +35,7 @@ app.use("/test",              requireLogin, require("./routes/test"));
 app.use("/personal-contacts", requireLogin, require("./routes/personal-contacts"));
 app.use("/voicemail",         requireLogin, require("./routes/voicemail"));
 app.use("/settings",          requireLogin, require("./routes/settings"));
+app.use("/client-dashboard",  require("./routes/client-dashboard")); // gated internally via requireClientAuth
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
