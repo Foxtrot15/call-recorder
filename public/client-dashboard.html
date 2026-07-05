@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aida — Your Contacts</title>
+<style>
+  :root {
+    --bg: #0a0a0a; --surface: #161616; --border: #2a2a2a;
+    --text: #eee; --muted: #999; --accent: #6366f1; --accent2: #4f46e5;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between;
+    padding:14px 20px; border-bottom:1px solid var(--border); }
+  .biz-name { font-size:15px; font-weight:600; }
+  button.linklike { background:none; border:none; color:var(--muted);
+    font-size:13px; cursor:pointer; }
+  main { padding:16px; max-width:480px; margin:0 auto; }
+  .login-card { max-width:340px; margin:60px auto; padding:28px;
+    background:var(--surface); border:1px solid var(--border); border-radius:12px; }
+  .login-card h2 { margin:0 0 20px; font-size:18px; text-align:center; }
+  input { width:100%; padding:12px 14px; border-radius:8px; border:1px solid var(--border);
+    background:#0f0f0f; color:var(--text); font-size:15px; margin-bottom:12px; }
+  input:focus { outline:none; border-color:var(--accent); }
+  button.primary { width:100%; padding:12px; border-radius:8px; border:none;
+    background:var(--accent); color:#fff; font-size:15px; font-weight:500; cursor:pointer; }
+  button.primary:hover { background:var(--accent2); }
+  .error { color:var(--red); font-size:13px; margin-bottom:12px; text-align:center; display:none; }
+  .contact-card { background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:14px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .contact-name { font-size:14px; font-weight:500; margin:0 0 2px; }
+  .contact-phone { font-size:13px; color:var(--muted); margin:0; }
+  .contact-summary { font-size:12px; color:var(--muted); margin-top:6px; line-height:1.4; }
+  a.call-btn { flex-shrink:0; width:38px; height:38px; border-radius:50%;
+    background:var(--accent); display:flex; align-items:center; justify-content:center;
+    text-decoration:none; }
+  .empty { text-align:center; color:var(--muted); font-size:13px; margin-top:60px; }
+</style>
+</head>
+<body>
+
+<div id="login-view" class="login-card" style="display:none;">
+  <h2>🤖 Aida — Sign in</h2>
+  <div class="error" id="login-error"></div>
+  <form id="login-form">
+    <input type="email" id="email" placeholder="Email" autofocus required>
+    <input type="password" id="password" placeholder="Password" required>
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+</div>
+
+<div id="dashboard-view" style="display:none;">
+  <header>
+    <div class="biz-name" id="biz-name">Your contacts</div>
+    <button class="linklike" onclick="signOut()">Sign out</button>
+  </header>
+  <main>
+    <div id="contacts-list"></div>
+  </main>
+</div>
+
+<script>
+  async function checkSession() {
+    const res = await fetch('/client-dashboard/contacts');
+    if (res.ok) {
+      const data = await res.json();
+      showDashboard(data);
+    } else {
+      showLogin();
+    }
+  }
+
+  function showLogin() {
+    document.getElementById('login-view').style.display = 'block';
+    document.getElementById('dashboard-view').style.display = 'none';
+  }
+
+  function showDashboard(data) {
+    document.getElementById('login-view').style.display = 'none';
+    document.getElementById('dashboard-view').style.display = 'block';
+    document.getElementById('biz-name').textContent = data.businessName || 'Your contacts';
+
+    const list = document.getElementById('contacts-list');
+    if (!data.contacts.length) {
+      list.innerHTML = '<div class="empty">No contacts yet — they\'ll show up here after your first calls.</div>';
+      return;
+    }
+    list.innerHTML = data.contacts.map(c => `
+      <div class="contact-card">
+        <div>
+          <p class="contact-name">${escapeHtml(c.name || c.phone)}</p>
+          <p class="contact-phone">${escapeHtml(c.phone)}${c.company ? ' · ' + escapeHtml(c.company) : ''}</p>
+          ${c.context_summary ? `<p class="contact-summary">${escapeHtml(c.context_summary)}</p>` : ''}
+        </div>
+        <a class="call-btn" href="tel:${escapeHtml(c.phone)}" aria-label="Call ${escapeHtml(c.name || c.phone)}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5l-2.5 1.5a11 11 0 0 0 5 5l1.5 -2.5l5 2v4a2 2 0 0 1 -2 2a16 16 0 0 1 -15 -15a2 2 0 0 1 2 -2" /></svg>
+        </a>
+      </div>
+    `).join('');
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    const errorEl = document.getElementById('login-error');
+    errorEl.style.display = 'none';
+
+    try {
+      const res = await fetch('/client-auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        checkSession();
+      } else {
+        errorEl.textContent = data.error || 'Something went wrong';
+        errorEl.style.display = 'block';
+      }
+    } catch {
+      errorEl.textContent = 'Network error — try again';
+      errorEl.style.display = 'block';
+    }
+  });
+
+  async function signOut() {
+    await fetch('/client-auth/logout', { method: 'POST' });
+    showLogin();
+  }
+
+  checkSession();
+</script>
+</body>
+</html>
