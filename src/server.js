@@ -13,6 +13,7 @@ const { twilioWebhook, requireLogin } = require("./middleware/auth");
 // Public: login page + the login/logout endpoints themselves.
 // Must be registered before the gated "/" route below.
 app.use("/login", require("./routes/login"));
+app.use("/client-auth", require("./routes/client-auth")); // Client signup/login, also public
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.
