@@ -59,22 +59,12 @@ Scanned: `README.md`, `EXECUTIVE_SUMMARY.md`, `DEPLOYMENT.md`,
 - **Deploy docs:** keep `PRODUCTION_ROLLOUT.md` (procedure) and `DEPLOYMENT.md`
   (reference) separate but de-duplicate rollback per D2.
 
-## 6. Proposed README.md rewrite (for approval — not yet applied)
+## 6. README.md rewrite — ✅ applied
 
-> Aida — multi-tenant call-capture & follow-up for small businesses.
-> Records missed calls via Twilio, transcribes (Deepgram), analyses (Claude),
-> and drives follow-up (Gmail/Calendar/CRM/notifications).
->
-> **Docs:** start at [`docs/INDEX.md`](docs/INDEX.md).
-> **Architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-> **Deploy:** [`PRODUCTION_ROLLOUT.md`](PRODUCTION_ROLLOUT.md) ·
-> **Env:** [`DEPLOYMENT.md`](DEPLOYMENT.md) · **Test:** `npm run smoke`.
->
-> Quick start: `npm install` → set env (see DEPLOYMENT.md) → `npm run dev`.
-
-Because rewriting `README.md` touches the repo's front door and the task scope is
-"document proposals, don't rewrite without review," this is left as a proposal.
-Apply on approval.
+The root `README.md` has been rewritten to accurately describe the current
+system (email/CRM pipeline, AU conditional forwarding, correct quick-start) and
+now points into the documentation index. This resolves O1/O2/C1/C2 above. See
+the current `README.md`.
 
 ## 7. Applied vs proposed
 
