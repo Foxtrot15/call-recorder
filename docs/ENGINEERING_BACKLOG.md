@@ -74,7 +74,38 @@ Confirmed zero references via full-tree grep:
 - `gmail.js:89` `getAuthClient` (+ transitively `sendEmail`).
 - `personal-filter.js:61` `looksPersonalFromAnalysis`.
 - `business-profile.js:154` `buildExtractionPrompt` (and `analyse.js` re-implements it inline — drifted).
-- `routes/outbound.js` — legacy UK bridge; confirm no live Twilio number points at `/outbound/voice`, then delete (PHASE_5 item 8). ⚠️ If it *is* live, it lacks the toll-fraud allow-list `inbound.js` has (`outbound.js` dials whatever `normaliseUK` returns) — that would upgrade it from cleanup to a **P1 security item**.
+- `routes/outbound.js` — legacy UK bridge; see the dedicated investigation below.
+
+---
+
+## Investigation: `routes/outbound.js` — live, dead, or partial?
+
+_Requested finding. Traced via full-repo grep of `/outbound`, `outbound/voice`,
+`outbound/connect` and cross-check against `inbound.js`._
+
+**Verdict: mounted and reachable, but orphaned in the current product — not
+safe to auto-delete, and not confirmable as fully dead from the repo alone.**
+
+| Question | Finding |
+|---|---|
+| Is it wired up? | **Yes.** `server.js:33` mounts it: `app.use("/outbound", twilioWebhook, require("./routes/outbound"))`. So `POST /outbound/voice` + `/outbound/connect` are live endpoints (Twilio-signature gated). |
+| Does any app code route a caller to it? | **No.** Grep finds only the mount, the route's own internal `action:"/outbound/connect"`, and doc mentions. No dashboard, onboarding, or other route sends a caller there. |
+| Where's the real outbound bridge? | In **`inbound.js`** — the `isYou` branch (`inbound.js:43-58`) implements the AU outbound bridge. `outbound.js` is a separate, older UK-hardcoded copy. |
+| Is it correct for this product? | **No.** It uses `normaliseUK` / `en-GB`, does no client resolution, and never stamps `client_id` on the call. |
+| Security concern? | It dials whatever `normaliseUK` returns with **no destination allow-list**, unlike `inbound.js/connect` which enforces an AU-only regex (toll-fraud guard). It's Twilio-signature-gated, so only a configured Twilio number could invoke it — but *if* such a number exists, a caller controlling the DTMF digits could bridge to arbitrary (premium/international) numbers. |
+
+**Why it can't be declared dead from the repo:** whether a live Twilio number's
+voice webhook points at `<BASE_URL>/outbound/voice` is console-only
+configuration, invisible to the codebase. So "unquestionably dead and isolated"
+is not satisfied — **do not delete it autonomously** (also: it's Twilio routing).
+
+**Recommendation (needs approval — touches Twilio routing):**
+1. Check the Twilio console for any number whose voice webhook is `/outbound/voice`.
+2. **If none:** remove the `server.js:33` mount + the file (Phase 5 cleanup).
+3. **If one exists:** repoint it to `/inbound/voice`, *or* add the AU allow-list
+   to `outbound.js`'s `/connect` first — the missing guard is a real toll-fraud
+   exposure while the endpoint is reachable. This would be a **P1 security item**,
+   not cleanup.
 
 ---
 
