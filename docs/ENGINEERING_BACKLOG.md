@@ -45,9 +45,11 @@ PHASE_5_PLAN item 6; P0-1 is new.
 | P1-3 | **`crm_notes` never saved** | `index.html` CRM card refs `crm-notes-${id}` that the template never renders (`renderCRMReview`) | The notes field the PATCH sends is always null; "suggested action" clicks no-op. | Medium — worth a 2-min UI check |
 | P1-4 | **`/test/inject-batch` is dead *and* broken** | `routes/test.js:209` | Self-`fetch`es its own gated endpoint without the session cookie → 401, but never checks `injRes.ok` and reports `{success:true}` regardless. Harmless while unused; a trap if someone wires it up. | High |
 | P1-5 | **Core pipeline has no retry / dead-letter** | `routes/recording.js:23-354` | The transcribe→analyse→draft→calendar→notify chain runs once, in-process; a transient Deepgram/Claude/Gmail outage drops that lead permanently (`status:"error"`, no retry). It *does* ack Twilio immediately (good — no retry storm), but the work itself has no resilience. | High — this is the core value path |
+| P1-6 | **Personal-contacts feature silently broken — table doesn't exist** | `services/personal-filter.js` + `routes/personal-contacts.js` + `recording.js:143` + `index.html:1226` | The `public.personal_contacts` table was never created (proven by RLS apply error 42P01), and the service discards every Supabase error — so the UI's privacy promise ("Aida won't record future calls from this number") is confirmed with `{success:true}` while nothing is saved, and flagged callers are still recorded/transcribed/emailed. See the dedicated investigation below. | High — proven by DB error |
 
-P1-1/P1-2/P1-3 are "looks-built-but-isn't" gaps — highest trust risk. Decide per
-item: implement the backend, or remove the UI so it doesn't imply a feature.
+P1-1/P1-2/P1-3/P1-6 are "looks-built-but-isn't" gaps — highest trust risk (P1-6
+especially: it's a *privacy* promise). Decide per item: implement the backend,
+or remove the UI so it doesn't imply a feature.
 
 ## P2 — maintainability (duplication & fragility)
 
@@ -160,6 +162,84 @@ premium/international numbers).
 
 **Net:** the safe default is **remove after the console check**; the only reason
 to touch it sooner is if the check finds it live, which flips it to a security fix.
+
+---
+
+## Investigation: `services/personal-filter.js` — live, dead, or broken?
+
+_Requested finding, triggered by the Phase 2 RLS apply failing with
+`42P01: relation "public.personal_contacts" does not exist`. Every consumer
+traced with file:line evidence. Read-only; no runtime change; no SQL run._
+
+**Verdict: live-but-silently-broken.** The feature is fully wired at every
+layer — UI, route, production pipeline — but its table was never created, and
+because the service discards every Supabase error, it fails silently at all
+four call sites. This is the **inverse of `outbound.js`** (mounted but
+orphaned): here everything points at it, and only the storage is missing.
+
+### A. It is fully wired (not dead code)
+
+| Layer | Evidence |
+|---|---|
+| Server mount | `server.js:39` — `app.use("/personal-contacts", requireLogin, require("./routes/personal-contacts"))` |
+| Routes | `routes/personal-contacts.js` — `/add`, `/remove`, `/list`, tenant-scoped via `req.clientId` |
+| Production pipeline | `recording.js:10,143` — `isPersonalCall(CLIENT_ID, From)` runs for **every inbound recording**, gating all automation |
+| Dashboard UI | `index.html:1226-1232` — `flagAsPersonal()` posts to `/personal-contacts/add` and tells the user *“Aida won't record future calls from this number.”* |
+
+One exception: `looksPersonalFromAnalysis` (`personal-filter.js:61`) is
+exported but imported **nowhere** — that single function is dead code (already
+listed under Dead code above).
+
+### B. The table doesn't exist — and why the failure is invisible
+
+The RLS transaction abort (42P01) proves `public.personal_contacts` is absent
+from the live database, and no `CREATE TABLE` for it exists anywhere in the
+repo (there are no schema migrations for the base tables at all — doc-audit
+gap G3).
+
+supabase-js does **not throw** on query errors; it returns `{ data, error }`.
+`personal-filter.js` destructures only `data` and ignores `error` in all four
+functions, so:
+
+| Call site | What actually happens today |
+|---|---|
+| `isPersonalCall` (`recording.js:143`) | Returns `false` for every call. The `try/catch` and the `⚠️ Personal contact check failed` log at `recording.js:145` **never fire** — no throw means no log. Fail-open, invisibly. |
+| `addPersonalContact` (`/add`) | Upsert error discarded → route replies `{ success: true }` while saving **nothing**. The dashboard confirms success to the user. |
+| `removePersonalContact` (`/remove`) | Same — silent no-op reporting success. |
+| `getPersonalContacts` (`/list`) | Returns `[]` — indistinguishable from “no personal contacts yet.” |
+
+### C. Why this is P1, not cleanup
+
+The UI makes an explicit privacy promise and the pipeline comment
+(`recording.js:137-139`) states the intent: stop family/friends' calls
+generating business follow-up. In reality every call from a “flagged” number
+is still **recorded, transcribed, sent to Claude, saved to the CRM, and turned
+into follow-up email** — while the owner believes otherwise, because `/add`
+reported success. Filed as **P1-6** above.
+
+### D. Recommendation — create the missing table (needs approval: SQL)
+
+The smallest fix needs **zero code change**: create the table and the feature
+works exactly as written. A reviewed, **not-applied** script is provided at
+[`../supabase/sql/create_personal_contacts.sql`](../supabase/sql/create_personal_contacts.sql).
+It encodes three non-negotiables:
+
+1. **Unique constraint on `(client_id, phone)`** — mandatory: `addPersonalContact`
+   upserts with `onConflict: "client_id,phone"`, which errors (42P10) without it.
+2. **`enable row level security` in the same transaction** — this table was
+   skipped by the Phase 2 apply (didn't exist); it must not be born as the one
+   unprotected table.
+3. The exact columns the code touches: `id`, `client_id`, `phone`, `label`,
+   `created_at` (ordered on by `/list`).
+
+Code follow-ups (separate approval):
+- **Stop discarding errors** in `personal-filter.js`: capture `error`, log it,
+  and make add/remove throw so `/add` can't report false success — this is the
+  change that would have surfaced the missing table months ago.
+- Delete or wire up `looksPersonalFromAnalysis`.
+- Normalise `phone` with the same E.164 logic as owner recognition (currently
+  only strips spaces; works today because both sides originate from Twilio's
+  E.164 `From`, but breaks the moment someone types a local-format number).
 
 ---
 

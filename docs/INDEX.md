@@ -58,6 +58,7 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 | [../supabase/sql/RLS_APPLY_CHECKLIST.md](../supabase/sql/RLS_APPLY_CHECKLIST.md) | ✅ | Gated RLS application + negative proof | **RLS procedure** |
 | [../supabase/sql/phase2_enable_rls.sql](../supabase/sql/phase2_enable_rls.sql) | ✅📐 | The RLS enable script (not yet applied) | RLS SQL |
 | [../supabase/sql/phase5_backfill_default.sql](../supabase/sql/phase5_backfill_default.sql) | ✅📐 | The `'default'` tenant backfill (not yet applied) | Backfill SQL |
+| [../supabase/sql/create_personal_contacts.sql](../supabase/sql/create_personal_contacts.sql) | ✅📐 | Creates the missing `personal_contacts` table (P1-6, not yet applied) | personal_contacts schema |
 
 ### Onboarding
 | Doc | Status | Purpose | Owns |
