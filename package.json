@@ -1,11 +1,15 @@
 {
   "name": "call-recorder",
   "version": "1.0.0",
-  "description": "Twilio call recording + Deepgram transcription + SMS summary pipeline",
+  "description": "Aida — multi-tenant call capture, transcription (Deepgram), AI analysis (Claude), and follow-up (Gmail/Calendar/CRM) on Twilio",
   "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "test": "node --test \"test/**/*.test.js\"",
     "smoke": "node --test \"smoke/**/*.test.js\"",
     "smoke:preflight": "node smoke/preflight.js"
   },

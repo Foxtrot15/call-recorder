@@ -38,7 +38,30 @@ router.post("/voice", async (req, res) => {
   const CLIENT_ID = client.slug;
 
   const caller  = From;
-  const isYou   = caller === client.real_number;
+  // Owner recognition normalises BOTH sides to E.164 before comparing, so a
+  // format difference (Twilio sends From as +61.. E.164, while real_number may
+  // be stored as 04.. local or with spaces) no longer breaks the bridge. This
+  // is the durable fix for the strict `caller === client.real_number` that
+  // regressed when real_number moved from the CLIENT_REAL_NUMBER env var to the
+  // clients table. Call flow is unchanged: isYou still selects bridge vs voicemail.
+  const normCaller = normaliseForMatch(caller);
+  const normOwner  = normaliseForMatch(client.real_number);
+  const isYou = normCaller !== null && normCaller === normOwner;
+
+  // Near-miss diagnostic: fires only when the call was NOT recognised as the
+  // owner yet the last 8 digits match — i.e. it's almost certainly the owner in
+  // a format normaliseForMatch didn't reconcile. This stays silent for ordinary
+  // callers (whose digits differ) and never logs a full number.
+  if (!isYou) {
+    const tail = (n) => (n ? String(n).replace(/\D/g, "").slice(-8) : "");
+    if (tail(caller) && tail(caller) === tail(client.real_number)) {
+      console.warn(
+        `⚠️  Owner bridge not recognised despite matching trailing digits: ` +
+        `From ${describeNumberSafely(caller)} vs real_number ${describeNumberSafely(client.real_number)} ` +
+        `(client ${CLIENT_ID}) — check the number format in the clients table.`
+      );
+    }
+  }
 
   if (isYou) {
     // ── OUTBOUND BRIDGE ──────────────────────────────────────
@@ -172,6 +195,24 @@ function normaliseAU(number) {
   if (digits.startsWith("0")  && digits.length === 10) return "+61" + digits.slice(1); // landline: 0[2378] xxxx xxxx
   if (digits.startsWith("61") && digits.length === 11) return "+" + digits;            // already has country code, no leading 0
   return "+" + digits; // malformed — will fail the AU_MOBILE_OR_LANDLINE check above, which is intentional
+}
+
+// Normalise a phone number to E.164 for owner-recognition comparison, or null
+// if absent/empty. Reuses normaliseAU — idempotent on E.164 (+61.. → +61..),
+// lifts local formats (04.. / spaced / no-+ → +61..) — so the owner is matched
+// regardless of how real_number happens to be stored.
+function normaliseForMatch(n) {
+  if (!n) return null;
+  return normaliseAU(String(n));
+}
+
+// Privacy-safe descriptor for diagnostic logs: reveals only the format shape
+// (leading +, digit count, last 3 digits) — enough to spot a format mismatch,
+// not enough to identify the caller. Never log the full number.
+function describeNumberSafely(n) {
+  if (!n) return "(empty)";
+  const digits = String(n).replace(/\D/g, "");
+  return `${String(n).trim().startsWith("+") ? "+" : ""}${digits.length}d…${digits.slice(-3)}`;
 }
 
 module.exports = router;

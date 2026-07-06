@@ -1,0 +1,67 @@
+# Aida CI — lightweight, secret-free by default.
+#
+# - `syntax` always runs: parses every JS file (`node --check`) and validates
+#   package.json. Catches syntax errors before they reach a deploy. No install,
+#   no secrets, no network — fast and always green on healthy code.
+# - `smoke` runs the black-box smoke suite against a staging URL, but ONLY when
+#   the repo has SMOKE_BASE_URL configured as a secret; otherwise it self-skips
+#   (stays green). See smoke/README.md.
+#
+# This does not deploy and does not need production credentials to pass.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    name: Syntax & manifest check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node >= 21 required: the test scripts pass glob patterns
+          # ("test/**/*.test.js") to `node --test`, and glob support was added
+          # in Node 21. On Node 20 the pattern is treated as a literal path and
+          # CI fails with "Could not find 'test/**/*.test.js'".
+          node-version: "22"
+      - name: node --check every JS file
+        run: |
+          set -e
+          count=0
+          for f in $(find src smoke -name '*.js'); do
+            node --check "$f"
+            count=$((count+1))
+          done
+          echo "OK — $count JS files parse."
+      - name: Validate package.json
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json is valid JSON')"
+      - name: Unit tests (self-contained, no deps)
+        run: npm test
+
+  smoke:
+    name: Smoke (staging, if configured)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # >= 21 for `node --test` glob support (same as the syntax job) —
+          # `npm run smoke` uses the pattern "smoke/**/*.test.js".
+          node-version: "22"
+      - name: Run smoke suite against staging (skips if unconfigured)
+        env:
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+          DASHBOARD_PASSWORD: ${{ secrets.SMOKE_DASHBOARD_PASSWORD }}
+          SMOKE_CLIENT_EMAIL: ${{ secrets.SMOKE_CLIENT_EMAIL }}
+          SMOKE_CLIENT_PASSWORD: ${{ secrets.SMOKE_CLIENT_PASSWORD }}
+        run: |
+          if [ -z "$SMOKE_BASE_URL" ]; then
+            echo "SMOKE_BASE_URL secret not set — skipping live smoke test."
+            echo "Configure repo secrets (SMOKE_BASE_URL, SMOKE_DASHBOARD_PASSWORD) to enable."
+            exit 0
+          fi
+          npm run smoke
