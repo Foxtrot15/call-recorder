@@ -66,4 +66,16 @@ function assessVoipConfig(env = process.env) {
   return { enabled: true, fatal, warnings };
 }
 
-module.exports = { isVoipV2Enabled, assessVoipConfig, REQUIRED_WHEN_ENABLED, PUSH_CREDENTIALS };
+// Router-level gate for real VoIP routes (Phase 1b+). While the server flag
+// is off, next("router") exits the whole VoIP router so requests fall through
+// to Express's default 404 — byte-identical to the routes not existing, and
+// evaluated BEFORE any auth so disabled deploys do zero extra work. (Same
+// contract the Phase 0 scaffold established with next().)
+function voipRouterGate(env = process.env) {
+  return function gate(req, res, next) {
+    if (!isVoipV2Enabled(env)) return next("router");
+    next();
+  };
+}
+
+module.exports = { isVoipV2Enabled, assessVoipConfig, voipRouterGate, REQUIRED_WHEN_ENABLED, PUSH_CREDENTIALS };
