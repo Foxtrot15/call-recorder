@@ -1,4 +1,3 @@
-const axios = require("axios");
 const express = require("express");
 const router  = express.Router();
 const analyseCall      = require("../services/analyse");
@@ -10,8 +9,8 @@ const {
   updateContactFromCall,
   buildContactContext,
 } = require("../services/contacts");
-const { createDraft }  = require("../services/gmail");
-const { createEvent }  = require("../services/gcal");
+const { draftFollowUpEmail, maybeCreateCalendarEvent } = require("../services/followup");
+const { deriveCallMode } = require("../services/prompts");
 const {
   getBusinessProfile,
   shouldUpdateProfile,
@@ -58,9 +57,10 @@ router.post("/inject", async (req, res) => {
       businessProfile = await getBusinessProfile(clientId);
     } catch (err) {}
 
-    // Analyse
-    const analysis = await analyseCall(transcript, contactContext, businessProfile);
-    console.log(`🤖 Test injection analysis complete`);
+    // Analyse — mode derived the same way as the real pipeline
+    const callMode = deriveCallMode({ direction });
+    const analysis = await analyseCall(transcript, contactContext, businessProfile, callMode);
+    console.log(`🤖 Test injection analysis complete (${callMode})`);
 
     // Save to calls table
     const { data, error } = await supabase
@@ -99,76 +99,23 @@ router.post("/inject", async (req, res) => {
     }
 
     // ── Gmail draft + Calendar event ─────────────────────────
+    // Same single implementation as the real pipeline (services/followup.js)
+    // — the previous inline copy here had drifted from recording.js (P2-2),
+    // so /test/inject wasn't testing production behaviour.
     try {
       if (!skip_drafts && analysis && direction === "inbound") {
-        const callerName  = analysis.caller?.name  || From;
-        const callerEmail = analysis.caller?.email || null;
-        const intent      = analysis.intent        || "general_enquiry";
-        const summary     = analysis.summary       || "Call received";
-        const action      = analysis.action        || "";
-        const isReturning = contactContext !== null;
-
-        if (callerEmail) {
-          const firstName = callerName.split(" ")[0];
-
-          // Build a natural follow-up email using Claude
-          const emailRes = await axios.post(
-            "https://api.anthropic.com/v1/messages",
-            {
-              model: "claude-haiku-4-5-20251001",
-              max_tokens: 400,
-              system: `You are writing a follow-up email on behalf of a small business owner to a client they just spoke with on the phone.
-Write a SHORT, natural, professional email directly to the client.
-- Address them by first name
-- Refer to specifics from the call (dates, prices, what was agreed)
-- Write in first person as if you are the business owner
-- Do NOT summarise the call in third person
-- Do NOT say "as discussed" more than once
-- Keep it to 3-5 sentences max
-- End with a warm sign-off
-- No subject line, just the email body`,
-              messages: [{
-                role: "user",
-                content: `Write a follow-up email to ${firstName} based on this call summary: ${summary}\n\nKey facts from call: ${JSON.stringify(analysis.facts || {})}\n\nNext action: ${action || "follow up"}`,
-              }],
-            },
-            {
-              headers: {
-                "x-api-key": process.env.ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-              },
-            }
-          );
-
-          const emailBody = emailRes.data?.content?.[0]?.text?.trim() || 
-            `Hi ${firstName},\n\nGreat speaking with you today. ${action || "I'll be in touch shortly."}\n\nKind regards`;
-
-          const subject = isReturning 
-            ? `Following up — ${callerName}` 
-            : `Great speaking with you today, ${firstName}`;
-
-          await createDraft(clientId, { to: callerEmail, subject, body: emailBody });
-          console.log("📧 Draft created for " + callerEmail);
+        const draftRes = await draftFollowUpEmail(clientId, {
+          mode: callMode,
+          transcript,
+          analysis,
+          isReturning: contactContext !== null,
+        });
+        if (draftRes.created) {
+          console.log(`📧 Draft created${draftRes.guarded ? " (guard rejected LLM draft — safe fallback used)" : ""}`);
         }
 
-        // Fire calendar for meetings, appointments, site visits, consultations
-        const facts = analysis.facts || {};
-        const needsCalendar = intent === "schedule_meeting" || 
-          (analysis.follow_up?.type === "meeting") ||
-          (facts.appointment_date || facts.visit_date || facts.meeting_date || facts.job_start_date);
-          
-        if (needsCalendar && (analysis.follow_up?.detail || analysis.action)) {
-          const eventDetail = analysis.follow_up?.detail || analysis.action || summary;
-          const desc = summary + "\n\nContact: " + From + (callerEmail ? " | " + callerEmail : "") + "\n\n" + eventDetail;
-          await createEvent(clientId, {
-            title:         `${callerName} — ${facts.job_start_date ? "Job" : intent === "schedule_meeting" ? "Meeting" : "Appointment"}`,
-            description:   desc,
-            attendeeEmail: callerEmail || null,
-            facts,
-          });
-          console.log("📅 Calendar event created for " + callerName);
-        }
+        const calRes = await maybeCreateCalendarEvent(clientId, { analysis, fromNumber: From });
+        if (calRes.created) console.log("📅 Calendar event created");
       }
     } catch (err) {
       console.error("⚠️  Gmail/Calendar failed:", err.message);
