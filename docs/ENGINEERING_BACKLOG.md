@@ -232,11 +232,14 @@ It encodes three non-negotiables:
 3. The exact columns the code touches: `id`, `client_id`, `phone`, `label`,
    `created_at` (ordered on by `/list`).
 
-Code follow-ups (separate approval):
-- **Stop discarding errors** in `personal-filter.js`: capture `error`, log it,
-  and make add/remove throw so `/add` can't report false success — this is the
-  change that would have surfaced the missing table months ago.
-- Delete or wire up `looksPersonalFromAnalysis`.
+Code follow-ups:
+- ✅ **Applied (this branch): stop discarding errors** in `personal-filter.js`
+  — all four functions now throw on unexpected Supabase errors (`PGRST116`
+  no-row excluded for the lookup), so `/add`/`/remove` return 500 instead of
+  false success, `/list` can't pass an error off as an empty list, and the
+  pipeline's existing catch at `recording.js:145` finally logs the failure.
+  This is the change that would have surfaced the missing table months ago.
+- Delete or wire up `looksPersonalFromAnalysis` (separate approval).
 - Normalise `phone` with the same E.164 logic as owner recognition (currently
   only strips spaces; works today because both sides originate from Twilio's
   E.164 `From`, but breaks the moment someone types a local-format number).
