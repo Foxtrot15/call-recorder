@@ -1,5 +1,6 @@
 const axios = require("axios");
 const supabase = require("./supabase");
+const { buildRollingSummaryPrompt } = require("./prompts");
 
 async function getOrCreateContact(clientId, phone) {
   if (!phone) return null;
@@ -27,12 +28,16 @@ async function getContactHistory(clientId, phone) {
   if (!phone) return [];
   const normPhone = phone.replace(/\s/g, "");
 
+  // TEST-… rows excluded: injected demo calls must not enter the contact
+  // history that gets fed into analysis/summary prompts
+  // (docs/LLM_PROMPT_CONTAMINATION_INVESTIGATION.md, loop L2).
   const { data } = await supabase
     .from("calls")
     .select("recorded_at, direction, duration, summary, intent, caller_name, caller_company")
     .eq("from_number", normPhone)
     .eq("client_id", clientId)
     .eq("status", "complete")
+    .not("call_sid", "like", "TEST-%")
     .order("recorded_at", { ascending: false })
     .limit(20);
 
@@ -96,32 +101,20 @@ async function generateRollingSummary(contact, history, latestAnalysis) {
     `${i + 1}. ${new Date(c.recorded_at).toLocaleDateString("en-AU")}: ${c.summary || "No summary"}`
   ).join("\n");
 
+  const { system, user } = buildRollingSummaryPrompt({
+    existingSummary,
+    recentCalls,
+    latestSummary: latestAnalysis.summary,
+    knownFacts: contact?.facts,
+  });
+
   const response = await axios.post(
     "https://api.anthropic.com/v1/messages",
     {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 300,
-      system: `You are maintaining a concise contact history summary for a business CRM. 
-Respond with ONLY a 2-3 sentence plain text summary. No JSON, no markdown.
-The summary should capture: who this person is, what they want, where they are in the journey, and any key facts.`,
-      messages: [{
-        role: "user",
-        content: `Update this contact summary based on their call history.
-
-EXISTING SUMMARY:
-${existingSummary || "No previous summary."}
-
-RECENT CALLS:
-${recentCalls}
-
-LATEST CALL SUMMARY:
-${latestAnalysis.summary || ""}
-
-KEY FACTS KNOWN:
-${JSON.stringify(contact?.facts || {})}
-
-Write an updated 2-3 sentence summary of this contact.`,
-      }],
+      system,
+      messages: [{ role: "user", content: user }],
     },
     {
       headers: {

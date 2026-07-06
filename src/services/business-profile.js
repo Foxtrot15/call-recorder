@@ -1,5 +1,6 @@
 const axios = require("axios");
 const supabase = require("./supabase");
+const { buildBusinessProfilePrompt } = require("./prompts");
 
 const MIN_CALLS_TO_PROFILE = 3; // Generate profile after 3 calls
 
@@ -20,11 +21,16 @@ async function getBusinessProfile(clientId) {
  * Triggers after MIN_CALLS_TO_PROFILE calls and then every 20 calls after.
  */
 async function shouldUpdateProfile(clientId) {
+  // TEST-… rows (from /test/inject) are excluded everywhere in this file:
+  // demo transcripts must never influence the profile that gets injected
+  // into real prompts (root cause of the "Streamline Software" contamination
+  // — see docs/LLM_PROMPT_CONTAMINATION_INVESTIGATION.md).
   const { count } = await supabase
     .from("calls")
     .select("*", { count: "exact", head: true })
     .eq("status", "complete")
-    .eq("client_id", clientId);
+    .eq("client_id", clientId)
+    .not("call_sid", "like", "TEST-%");
 
   const profile = await getBusinessProfile(clientId);
 
@@ -39,13 +45,14 @@ async function shouldUpdateProfile(clientId) {
 async function generateBusinessProfile(clientId) {
   console.log("🏢 Generating business profile...");
 
-  // Fetch last 10 completed calls — scoped to this client only, or the
-  // profile ends up built from a mix of everyone's transcripts.
+  // Fetch last 10 completed REAL calls — scoped to this client, excluding
+  // TEST-… injections (see note in shouldUpdateProfile).
   const { data: calls } = await supabase
     .from("calls")
     .select("transcript, summary, intent, analysis")
     .eq("status", "complete")
     .eq("client_id", clientId)
+    .not("call_sid", "like", "TEST-%")
     .order("recorded_at", { ascending: false })
     .limit(10);
 
@@ -57,43 +64,15 @@ async function generateBusinessProfile(clientId) {
     .map((c, i) => `--- Call ${i + 1} ---\n${c.transcript}`)
     .join("\n\n");
 
+  const { system, user } = buildBusinessProfilePrompt({ transcriptSamples });
+
   const response = await axios.post(
     "https://api.anthropic.com/v1/messages",
     {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1000,
-      system: `You are analysing call transcripts to build a business intelligence profile.
-Respond ONLY with valid JSON, no markdown, no preamble.
-
-Return this shape:
-{
-  "industry": string,
-  "business_type": string,
-  "profile_summary": string,
-  "common_intents": [string],
-  "extraction_fields": [
-    {
-      "key": string,
-      "label": string,
-      "description": string,
-      "example": string
-    }
-  ]
-}
-
-Rules:
-- industry: e.g. "real_estate", "trades", "legal", "finance", "health"
-- business_type: specific type e.g. "buyers_advocate", "plumber", "conveyancer", "mortgage_broker"
-- profile_summary: 2-3 sentences describing what this business does and what callers typically want
-- common_intents: list of the most common reasons people call this business
-- extraction_fields: 5-8 business-specific facts worth extracting from EVERY call for this business type. These should be fields that are commonly mentioned and useful for follow-up. Use snake_case keys.`,
-
-      messages: [
-        {
-          role: "user",
-          content: `Analyse these call transcripts and build a business profile:\n\n${transcriptSamples}`,
-        },
-      ],
+      system,
+      messages: [{ role: "user", content: user }],
     },
     {
       headers: {
@@ -113,12 +92,13 @@ Rules:
     profile = JSON.parse(clean);
   }
 
-  // Get total call count — scoped to this client
+  // Get total call count — scoped to this client, TEST-… rows excluded
   const { count } = await supabase
     .from("calls")
     .select("*", { count: "exact", head: true })
     .eq("status", "complete")
-    .eq("client_id", clientId);
+    .eq("client_id", clientId)
+    .not("call_sid", "like", "TEST-%");
 
   // Store/update in Supabase
   const { data: existing } = await supabase
