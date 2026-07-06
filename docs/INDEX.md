@@ -56,9 +56,9 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 |---|---|---|---|
 | [../SECURITY_REVIEW.md](../SECURITY_REVIEW.md) | ✅ | Findings: fixed, open (ranked), accepted | **Security posture & risk register** |
 | [../supabase/sql/RLS_APPLY_CHECKLIST.md](../supabase/sql/RLS_APPLY_CHECKLIST.md) | ✅ | Gated RLS application + negative proof | **RLS procedure** |
-| [../supabase/sql/phase2_enable_rls.sql](../supabase/sql/phase2_enable_rls.sql) | ✅📐 | The RLS enable script (not yet applied) | RLS SQL |
+| [../supabase/sql/phase2_enable_rls.sql](../supabase/sql/phase2_enable_rls.sql) | ✅ | The RLS enable script — **applied 2026-07-06** (via an existence-guarded variant; `personal_contacts` didn't exist yet and was covered at creation instead) | RLS SQL |
 | [../supabase/sql/phase5_backfill_default.sql](../supabase/sql/phase5_backfill_default.sql) | ✅📐 | The `'default'` tenant backfill (not yet applied) | Backfill SQL |
-| [../supabase/sql/create_personal_contacts.sql](../supabase/sql/create_personal_contacts.sql) | ✅📐 | Creates the missing `personal_contacts` table (P1-6, not yet applied) | personal_contacts schema |
+| [../supabase/sql/create_personal_contacts.sql](../supabase/sql/create_personal_contacts.sql) | ✅ | Creates the `personal_contacts` table with RLS (P1-6) — **applied 2026-07-06**, post-apply smoke green | personal_contacts schema |
 
 ### Onboarding
 | Doc | Status | Purpose | Owns |
@@ -134,7 +134,7 @@ major products.
 ```mermaid
 flowchart LR
     P1["Phase 1<br/>Supabase auth<br/>isolation ✅"]
-    P2["Phase 2<br/>Enable RLS<br/>⏳ not applied"]
+    P2["Phase 2<br/>Enable RLS<br/>✅ applied 2026-07-06"]
     P3["Phase 3<br/>Invite-gated<br/>signup ✅"]
     P4["Phase 4<br/>Session-derived<br/>clientId ✅"]
     P5["Phase 5<br/>Cleanup<br/>⏳ pending"]
@@ -151,10 +151,13 @@ flowchart LR
 ```
 
 Note the ordering nuance (from SECURITY_REVIEW.md): Phase 2 (RLS) was
-intentionally deferred until after the Phase 5 item that removes the browser's
+intentionally deferred until after the Phase 5 item that removed the browser's
 direct Supabase access, because enabling RLS while the old dashboard was live
-would have broken it. That prerequisite is now met — RLS is unblocked, pending
-the deploy + smoke sign-off.
+would have broken it. **Status: RLS was applied 2026-07-06** (deny-by-default,
+no policies; `personal_contacts` created same day with RLS on) and the full
+smoke suite passed against production afterwards (17/17 active checks).
+Remaining sign-off: the anon-role negative proof from
+[RLS_APPLY_CHECKLIST.md](../supabase/sql/RLS_APPLY_CHECKLIST.md).
 
 ---
 
