@@ -90,34 +90,76 @@ Confirmed zero references via full-tree grep:
 
 ---
 
-## Investigation: `routes/outbound.js` — live, dead, or partial?
+## Investigation: Twilio outbound calls & `routes/outbound.js`
 
-_Requested finding. Traced via full-repo grep of `/outbound`, `outbound/voice`,
-`outbound/connect` and cross-check against `inbound.js`._
+_Full-repo trace of every Twilio outbound-call creation site and every
+`/outbound` reference. Read-only; no runtime change. Evidence is file:line so it
+can be re-verified. No files deleted._
 
-**Verdict: mounted and reachable, but orphaned in the current product — not
-safe to auto-delete, and not confirmable as fully dead from the repo alone.**
+### A. Every place a Twilio outbound call / leg is created
 
-| Question | Finding |
+There are three distinct mechanisms; only the first *originates* a call via the
+REST API. The rest are TwiML `<Dial>` legs bridged during an existing inbound
+webhook call.
+
+| # | Site | Mechanism | Trigger / gate | Status |
+|---|---|---|---|---|
+| 1 | `routes/call.js:19` `client.calls.create({...})` | **REST API origination** — the only place the app *places* a new outbound call. Dials `CLIENT_REAL_NUMBER`, then bridges to the destination via inline TwiML `<Dial record>` (`call.js:22-29`). | Operator dashboard, `POST /call/initiate` behind `requireLogin`. | **Live, used.** |
+| 2 | `routes/inbound.js:159-165` `twiml.dial(...).number(e164)` | **TwiML bridge leg** — the AU outbound bridge for the business owner: `/inbound/voice` `isYou` branch gathers digits (`inbound.js:45-51`) → `/inbound/connect` dials out with an **AU-only allow-list guard** (`inbound.js:144-153`). | Owner calls the Twilio number; `POST /inbound/connect`. | **Live, used** — this is the real outbound bridge. |
+| 3 | `routes/outbound.js:67-74` `twiml.dial(...).number(e164)` | **TwiML bridge leg (duplicate)** — a second, UK-hardcoded bridge (`normaliseUK`, `en-GB`), no client resolution, **no destination allow-list**. | `POST /outbound/voice` → `/outbound/connect`. | **Orphaned** — see B/C. |
+| 4 | `routes/call.js:22-29` inline `<Dial record>` TwiML | The `<Dial>` leg *inside* mechanism #1's REST call. | Same as #1. | **Live, used.** |
+| — | `services/sms.js:8` `client.messages.create()` | SMS (not a call); dead file, zero imports (confirmed). | none | Dead (listed above). |
+| — | `routes/recording.js:55` `client.calls(CallSid).fetch()` | A **read** (fetch call metadata), not an origination. | pipeline | n/a |
+
+### B. Does any runtime code use `/outbound/voice`? — **No.**
+
+Definitive from the repo. Every reference to `/outbound`:
+
+| Reference | Meaning |
 |---|---|
-| Is it wired up? | **Yes.** `server.js:33` mounts it: `app.use("/outbound", twilioWebhook, require("./routes/outbound"))`. So `POST /outbound/voice` + `/outbound/connect` are live endpoints (Twilio-signature gated). |
-| Does any app code route a caller to it? | **No.** Grep finds only the mount, the route's own internal `action:"/outbound/connect"`, and doc mentions. No dashboard, onboarding, or other route sends a caller there. |
-| Where's the real outbound bridge? | In **`inbound.js`** — the `isYou` branch (`inbound.js:43-58`) implements the AU outbound bridge. `outbound.js` is a separate, older UK-hardcoded copy. |
-| Is it correct for this product? | **No.** It uses `normaliseUK` / `en-GB`, does no client resolution, and never stamps `client_id` on the call. |
-| Security concern? | It dials whatever `normaliseUK` returns with **no destination allow-list**, unlike `inbound.js/connect` which enforces an AU-only regex (toll-fraud guard). It's Twilio-signature-gated, so only a configured Twilio number could invoke it — but *if* such a number exists, a caller controlling the DTMF digits could bridge to arbitrary (premium/international) numbers. |
+| `server.js:33` `app.use("/outbound", twilioWebhook, require("./routes/outbound"))` | The **only** wiring — mounts the router, making the endpoint exist/reachable. |
+| `outbound.js:16` (comment), `outbound.js:30` `action:"/outbound/connect"` | The route referencing **itself**. |
+| `public/index.html` `direction === 'outbound'`, `.badge-outbound` | Call-**direction labels** in the dashboard — unrelated to the route. |
 
-**Why it can't be declared dead from the repo:** whether a live Twilio number's
-voice webhook points at `<BASE_URL>/outbound/voice` is console-only
-configuration, invisible to the codebase. So "unquestionably dead and isolated"
-is not satisfied — **do not delete it autonomously** (also: it's Twilio routing).
+No dashboard, onboarding page, `client.calls.create` `url`/`twiml`, or other
+route sends any caller or Twilio number to `/outbound/voice`. The one thing that
+*could* invoke it — a Twilio phone number whose voice webhook is set to
+`<BASE_URL>/outbound/voice` — is **console-only configuration, not in the repo.**
 
-**Recommendation (needs approval — touches Twilio routing):**
-1. Check the Twilio console for any number whose voice webhook is `/outbound/voice`.
-2. **If none:** remove the `server.js:33` mount + the file (Phase 5 cleanup).
-3. **If one exists:** repoint it to `/inbound/voice`, *or* add the AU allow-list
-   to `outbound.js`'s `/connect` first — the missing guard is a real toll-fraud
-   exposure while the endpoint is reachable. This would be a **P1 security item**,
-   not cleanup.
+### C. Classification
+
+> **Legacy — conditional on one external check.** The repo half of the test is
+> satisfied: **no runtime code references `/outbound/voice`.** If the production
+> number's voice webhook points only at `/inbound/voice` (Twilio console), then
+> `outbound.js` is unambiguously legacy dead weight. It cannot be declared
+> *unquestionably* dead from the repo alone because that webhook mapping lives in
+> the Twilio console.
+
+It is a superseded UK-era duplicate of the AU bridge that now lives in
+`inbound.js` (mechanism #2). It also lacks the toll-fraud allow-list that
+`inbound.js/connect` enforces (#2 vs #3), so *if* it is reachable via a live
+number, that gap is a real exposure (Twilio-signature-gated, so not open to the
+public internet, but a caller controlling DTMF could bridge to arbitrary
+premium/international numbers).
+
+### D. Recommendation — retain / replace / remove (needs approval; touches Twilio routing)
+
+1. **One external check first:** in the Twilio console, inspect every number's
+   voice webhook. Confirm whether any points at `/outbound/voice`.
+2. **If none (expected):** **Remove** in a future cleanup — delete
+   `routes/outbound.js` and the `server.js:33` mount. Low risk once the console
+   check confirms no number targets it. (Do not remove before that check.)
+3. **If a number does point at it:** do **not** just delete — first **replace**:
+   repoint that number's webhook to `/inbound/voice` (which handles the owner
+   bridge correctly, with the allow-list and client resolution), then remove
+   `outbound.js`. Until repointed, add the AU allow-list to `outbound.js`'s
+   `/connect` as an interim toll-fraud guard — that interim step becomes a **P1
+   security item**.
+4. **Retain** is not recommended in any case — keeping a second, guard-less,
+   UK-hardcoded bridge is a standing liability with no offsetting benefit.
+
+**Net:** the safe default is **remove after the console check**; the only reason
+to touch it sooner is if the check finds it live, which flips it to a security fix.
 
 ---
 
