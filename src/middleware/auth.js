@@ -90,30 +90,65 @@ function requireLogin(req, res, next) {
   next();
 }
 
-module.exports = { twilioWebhook, requireLogin, issueSessionCookie, clearSessionCookie, requireClientAuth };
-
 // ── Client-facing session (different from the operator login above) ────
 // Clients authenticate via Supabase Auth (email/password). Their access
 // token is stored in its own cookie, verified against Supabase on every
 // request, and used to resolve their client_id server-side — a client can
 // never claim a different clientId by editing a request themselves.
-const CLIENT_SESSION_COOKIE = "aida_client_session";
+//
+// B1 (session refresh): when the access JWT is missing/expired but the
+// refresh cookie is present, the session is refreshed transparently here —
+// new (rotated) tokens are set on THIS response and the request proceeds.
+// The browser dashboard never sees the hourly JWT expiry at all.
+const {
+  ACCESS_COOKIE,
+  REFRESH_COOKIE,
+  setClientSessionCookies,
+  clearClientSessionCookies,
+  evaluateClientSession,
+} = require("../services/client-session");
 
 async function requireClientAuth(req, res, next) {
-  const token = req.cookies?.[CLIENT_SESSION_COOKIE];
-  if (!token) {
+  const accessToken = req.cookies?.[ACCESS_COOKIE];
+  const refreshToken = req.cookies?.[REFRESH_COOKIE];
+
+  // Verify the access token (if any) against Supabase.
+  let user = null;
+  if (accessToken) {
+    const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
+    if (!userError && userData?.user) user = userData.user;
+  }
+
+  const verdict = evaluateClientSession({
+    hasAccessToken: Boolean(accessToken),
+    accessValid: Boolean(user),
+    hasRefreshToken: Boolean(refreshToken),
+  });
+
+  if (verdict === "reject") {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  const { data: userData, error: userError } = await supabase.auth.getUser(token);
-  if (userError || !userData?.user) {
-    return res.status(401).json({ error: "Session expired or invalid — please log in again" });
+  if (verdict === "refresh") {
+    // Lazy require avoids loading the auth service on the operator path.
+    const { refreshClientSession } = require("../services/client-auth");
+    try {
+      const session = await refreshClientSession(refreshToken);
+      setClientSessionCookies(res, session); // rotated pair replaces both cookies
+      user = session.user;
+    } catch (err) {
+      // Refresh token dead (revoked, rotated out, or >30d idle): clear the
+      // corpses so the browser stops retrying, and end the session honestly.
+      console.log("Client session refresh failed:", err.message);
+      clearClientSessionCookies(res);
+      return res.status(401).json({ error: "Session expired or invalid — please log in again" });
+    }
   }
 
   const { data: client, error: clientError } = await supabase
     .from("clients")
     .select("slug, name, real_number")
-    .eq("auth_user_id", userData.user.id)
+    .eq("auth_user_id", user.id)
     .single();
 
   if (clientError || !client) {
@@ -126,3 +161,8 @@ async function requireClientAuth(req, res, next) {
   req.client = client;
   next();
 }
+
+// Exports at the bottom, after every definition — the previous
+// exports-before-definition layout worked only via function hoisting and was
+// flagged as a refactor hazard (backlog P2-6); fixed while touching this file.
+module.exports = { twilioWebhook, requireLogin, issueSessionCookie, clearSessionCookie, requireClientAuth };

@@ -99,4 +99,29 @@ async function loginClient(email, password) {
   };
 }
 
-module.exports = { signupClient, loginClient };
+// Exchange a refresh token for a fresh session (B1). Runs on a throwaway
+// client for the same contamination reason as loginClient. Supabase ROTATES
+// refresh tokens: the returned pair replaces the old one entirely (the old
+// refresh token dies after a short reuse-grace window), so callers must
+// persist BOTH returned tokens.
+async function refreshClientSession(refreshToken) {
+  if (!refreshToken) throw new Error("No refresh token");
+
+  const authClient = createAuthClient();
+  const { data, error } = await authClient.auth.refreshSession({
+    refresh_token: refreshToken,
+  });
+
+  if (error) throw new Error(`Session refresh failed: ${error.message}`);
+  if (!data.session || !data.user) throw new Error("No session returned from refresh");
+
+  return {
+    userId: data.user.id,
+    email: data.user.email,
+    accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
+    user: data.user, // saves the middleware a second getUser round-trip
+  };
+}
+
+module.exports = { signupClient, loginClient, refreshClientSession };
