@@ -4,6 +4,7 @@ const twilio = require("twilio");
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const supabase = require("../services/supabase");
 const { getClientByTwilioNumber } = require("../services/clients");
+const { fetchLoopGuardData, checkOutboundDialTarget } = require("../services/loop-guard");
 
 router.post("/voice", async (req, res) => {
   const twiml = new VoiceResponse();
@@ -151,7 +152,7 @@ router.post("/voicemail-complete", (req, res) => {
 });
 
 // Outbound: digits received, connect + record
-router.post("/connect", (req, res) => {
+router.post("/connect", async (req, res) => {
   const twiml = new VoiceResponse();
   const destination = req.body.Digits;
   if (!destination) {
@@ -173,6 +174,29 @@ router.post("/connect", (req, res) => {
     );
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
+  }
+
+  // VoIP loop guard (INV-1, Phase 1a): refuse to bridge to any CFU'd
+  // (voip_enabled) client's real number — the carrier would forward our own
+  // PSTN leg back to /inbound/voice and loop. No-op while no client has
+  // voip_enabled (today's entire fleet); on guard-data failure we fail closed
+  // for safety-by-refusal is wrong HERE (it would break the working bridge on
+  // a transient DB blip), so a fetch error is logged and treated as no-VoIP —
+  // acceptable because CFU cutover and this guard ship together per runbook.
+  try {
+    const { voipClients } = await fetchLoopGuardData(null);
+    const guard = checkOutboundDialTarget(e164, voipClients);
+    if (guard.blocked) {
+      console.error(`🚨 LOOP GUARD: refused bridge dial — ${guard.reason}`);
+      twiml.say(
+        { voice: "Polly.Amy", language: "en-AU" },
+        "Sorry, that number can only be reached through the app. Goodbye."
+      );
+      twiml.hangup();
+      return res.type("text/xml").send(twiml.toString());
+    }
+  } catch (err) {
+    console.error("⚠️  Loop-guard check failed (bridging anyway):", err.message);
   }
 
   twiml.say(

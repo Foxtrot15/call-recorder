@@ -188,9 +188,25 @@ if (voipActive(client)) {
   numbers, or >3 legs for the same (From,To) within 10s — log
   `🚨 LOOP GUARD`, respond polite `<Say>` + `<Hangup/>`, never dial.
 
-## 7. INV-1 guard in `routes/call.js` (D10)
+## 7. INV-1 guard in `routes/call.js` (D10) — ✅ implemented (Phase 1a)
 
-`POST /call/initiate` gains a pre-dial check:
+Implemented on `feature/voip-phase-1a-loop-guard` as `services/loop-guard.js`
+(pure decision core + thin DB adapter; 14 unit tests), wired into
+`POST /call/initiate` (refuses all three loop cases: voip_enabled
+caller-client, owner leg matching a voip_enabled client's number, destination
+matching one) and the owner bridge `/inbound/connect` (destination check after
+the AU allow-list). The `clients.voip_enabled` column ships as
+`supabase/sql/phase1a_add_voip_enabled.sql` (review-only). Two deliberate
+refinements over the original sketch:
+
+1. **The guard is independent of `VOIP_V2_ENABLED`.** CFU is carrier-side
+   state — the kill switch disables the feature, not the loop physics — so
+   the guard keys off `clients.voip_enabled` alone.
+2. **Fail-safe pre-provisioning.** Until the column SQL is applied, the 42703
+   error is treated as "no VoIP clients" (correct: no cutover can precede the
+   flag under the §16 runbook), with a one-time warning log.
+
+Original sketch (kept for context):
 
 ```
 const client = await getClientBySlug(req.clientId);        // clients row, NOT env
