@@ -23,7 +23,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node >= 21 required: the test scripts pass glob patterns
+          # ("test/**/*.test.js") to `node --test`, and glob support was added
+          # in Node 21. On Node 20 the pattern is treated as a literal path and
+          # CI fails with "Could not find 'test/**/*.test.js'".
+          node-version: "22"
       - name: node --check every JS file
         run: |
           set -e
@@ -45,7 +49,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # >= 21 for `node --test` glob support (same as the syntax job) —
+          # `npm run smoke` uses the pattern "smoke/**/*.test.js".
+          node-version: "22"
       - name: Run smoke suite against staging (skips if unconfigured)
         env:
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
