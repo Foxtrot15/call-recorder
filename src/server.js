@@ -40,6 +40,10 @@ app.use("/personal-contacts", requireLogin, require("./routes/personal-contacts"
 app.use("/voicemail",         requireLogin, require("./routes/voicemail"));
 app.use("/settings",          requireLogin, require("./routes/settings"));
 app.use("/client-dashboard",  require("./routes/client-dashboard")); // gated internally via requireClientAuth
+// VoIP v2 Phase 0 placeholders: with VOIP_V2_ENABLED unset/false (the only
+// production state) every route in this router calls next() and these paths
+// 404 exactly as they do today. See docs/VOIP_V2_PHASE_0_SCAFFOLD.md.
+app.use(require("./routes/voip-scaffold"));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
