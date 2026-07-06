@@ -84,3 +84,5 @@ Phase 1 deletes routes out of `voip-scaffold.js` one at a time as each real
 handler lands (spec §5), until the scaffold file is empty and removed. Any
 path still returning 501 is by definition unfinished — the scaffold doubles as
 a progress checklist.
+
+**Progress:** Phase 1b replaced `/voice/token`, `/devices/register`, and `GET /devices` with real handlers in `routes/voip.js` (flag-gated via `voipRouterGate`, client-session auth from B1). Still placeholders: `/devices/revoke`, `/voip/dial-result`, `/voip/call-status`, `/voip/push-ack`.

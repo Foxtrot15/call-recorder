@@ -102,7 +102,7 @@ Implemented via `assessVoipConfig(env)` in `src/config/voip.js`, called from
 All new mounts. Existing routes are untouched except the two modifications in
 §7. Every route below 404s (pass-through) while the server flag is off.
 
-### 5.1 `POST /voice/token` — mint a Twilio Access Token
+### 5.1 `POST /voice/token` — mint a Twilio Access Token — ✅ implemented (Phase 1b, `routes/voip.js`)
 - **Auth:** client session (`requireClientAuth`; `req.clientId` = slug).
 - **Rate limit (D11):** 10/min per session, 30/min per IP. 429 on breach.
 - **Request:** `{ "platform": "ios" | "android" }`
@@ -113,7 +113,7 @@ All new mounts. Existing routes are untouched except the two modifications in
   off at server level after auth (should be unreachable — pass-through) ·
   500 config missing (should be unreachable given D9).
 
-### 5.2 `POST /devices/register`
+### 5.2 `POST /devices/register` — ✅ implemented (Phase 1b, `routes/voip.js`)
 - **Auth:** client session. **Rate limit:** 10/min per session.
 - **Request:** `{ platform, pushTokenHash, label?, appVersion?, osVersion? }`
   (`pushTokenHash` = sha256 hex computed **on the device**; server never sees
@@ -131,7 +131,7 @@ All new mounts. Existing routes are untouched except the two modifications in
 - **Response 200:** `{ revoked: true }` · 404 unknown/foreign id (no
   existence leak across tenants).
 
-### 5.4 `GET /devices`
+### 5.4 `GET /devices` — ✅ implemented (Phase 1b, `routes/voip.js`)
 - **Auth:** client session (own) or operator. Returns active devices with
   staleness (`lastRegisteredAt`), never token hashes.
 

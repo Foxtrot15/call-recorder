@@ -22,12 +22,12 @@ const express = require("express");
 const router = express.Router();
 const { isVoipV2Enabled } = require("../config/voip");
 
-// The exact route surface from VOIP_V2_BACKEND_SPEC.md §5.
+// Remaining unimplemented surface from VOIP_V2_BACKEND_SPEC.md §5.
+// Phase 1b implemented /voice/token, /devices/register, and GET /devices in
+// routes/voip.js — removed here per this file's route-by-route replacement
+// contract. Still placeholders: revoke + the Twilio webhook callbacks.
 const PLACEHOLDER_ROUTES = [
-  { method: "post", path: "/voice/token" },
-  { method: "post", path: "/devices/register" },
   { method: "post", path: "/devices/revoke" },
-  { method: "get",  path: "/devices" },
   { method: "post", path: "/voip/dial-result" },
   { method: "post", path: "/voip/call-status" },
   { method: "post", path: "/voip/push-ack" },
