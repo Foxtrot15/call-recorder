@@ -85,4 +85,4 @@ handler lands (spec §5), until the scaffold file is empty and removed. Any
 path still returning 501 is by definition unfinished — the scaffold doubles as
 a progress checklist.
 
-**Progress:** Phase 1b replaced `/voice/token`, `/devices/register`, and `GET /devices` with real handlers in `routes/voip.js` (flag-gated via `voipRouterGate`, client-session auth from B1). Still placeholders: `/devices/revoke`, `/voip/dial-result`, `/voip/call-status`, `/voip/push-ack`.
+**Progress:** Phase 1b replaced `/voice/token`, `/devices/register`, and `GET /devices` with real handlers in `routes/voip.js` (flag-gated via `voipRouterGate`, client-session auth from B1). Phase 1c replaced `/voip/dial-result` (`routes/voip-webhooks.js`, Twilio-signature-gated, INV-2). Still placeholders: `/devices/revoke`, `/voip/call-status`, `/voip/push-ack`.

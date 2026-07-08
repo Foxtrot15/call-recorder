@@ -135,7 +135,7 @@ All new mounts. Existing routes are untouched except the two modifications in
 - **Auth:** client session (own) or operator. Returns active devices with
   staleness (`lastRegisteredAt`), never token hashes.
 
-### 5.5 `POST /voip/dial-result` — the INV-2 enforcement point
+### 5.5 `POST /voip/dial-result` — the INV-2 enforcement point — ✅ implemented (Phase 1c, `routes/voip-webhooks.js`)
 - **Auth:** Twilio signature (`twilioWebhook`), same as `/inbound`.
 - Fired as `<Dial action>` after the Client leg ends. **Exactly two branches:**
 
@@ -162,7 +162,7 @@ PSTN redial). A unit test asserts the rendered else-TwiML contains no `<Dial>`.
   `push_sent_at` (from Twilio dial) vs `ack_received_at` = the real
   ring-delivery metric neither Apple nor Google will give us.
 
-## 6. Inbound branch (the one change to `inbound.js`)
+## 6. Inbound branch (the one change to `inbound.js`) — ✅ implemented (Phase 1c)
 
 After client resolution and owner-recognition, before the voicemail block:
 
