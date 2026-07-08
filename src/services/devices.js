@@ -132,6 +132,29 @@ async function listDevices(clientId) {
   return (data || []).map(toPublicDevice);
 }
 
+/**
+ * Active-device count for delivery decisions (spec: revoked_at null AND
+ * registered within the 30-day window — same definition as the cap check).
+ * NEVER throws: any failure (incl. table not provisioned, 42P01) returns 0,
+ * which callers treat as "cannot deliver via VoIP" (INV-3 fail-safe).
+ */
+async function countActiveDevices(clientId) {
+  try {
+    const supabase = require("./supabase");
+    const cutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { count, error } = await supabase
+      .from("devices")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId)
+      .is("revoked_at", null)
+      .gte("last_registered_at", cutoff);
+    if (error) return 0;
+    return count || 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** 42703-safe voip_enabled check (column may not be provisioned yet). */
 async function isClientVoipEnabled(slug) {
   const supabase = require("./supabase");
@@ -149,5 +172,6 @@ module.exports = {
   toPublicDevice,
   registerDevice,
   listDevices,
+  countActiveDevices,
   isClientVoipEnabled,
 };

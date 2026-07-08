@@ -5,6 +5,8 @@ const VoiceResponse = twilio.twiml.VoiceResponse;
 const supabase = require("../services/supabase");
 const { getClientByTwilioNumber } = require("../services/clients");
 const { fetchLoopGuardData, checkOutboundDialTarget } = require("../services/loop-guard");
+const { fetchGreetingUrl, appendVoicemailTwiml } = require("../services/voicemail-twiml");
+const { evaluateVoipDelivery, appendClientDialTwiml } = require("../services/voip-dial");
 
 router.post("/voice", async (req, res) => {
   const twiml = new VoiceResponse();
@@ -82,6 +84,43 @@ router.post("/voice", async (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
 
+  // ── VOIP DELIVERY (Phase 1c, flag-gated — spec §6, INV-3) ──
+  // Runs strictly AFTER the owner bridge (a CFU'd owner calling their own
+  // Twilio number must reach the dial-out bridge, never their own app) and
+  // strictly BEFORE the voicemail block. evaluateVoipDelivery never throws
+  // and returns deliver:false unless VOIP_V2_ENABLED=true AND
+  // clients.voip_enabled AND an active device exists — so on every
+  // production deploy today this is one boolean check and nothing more.
+  // Belt-and-braces: the whole delivery attempt is ALSO wrapped in
+  // try/catch — any failure falls through to the unchanged v1 voicemail.
+  try {
+    const voip = await evaluateVoipDelivery(client, { callerNumber: From });
+    if (voip.deliver) {
+      console.log(`voip.dial.start client=${CLIENT_ID} record=${voip.record} call=${CallSid}`);
+      // Same row shape as the v1 insert below; status 'ringing' marks the
+      // app-delivery attempt. No v2-only columns here — the insert must
+      // succeed even before phase1c_add_answered_via.sql is applied.
+      // Insert failure is logged but does NOT abort delivery: ringing the
+      // owner's app matters more than the bookkeeping row (the recording
+      // pipeline upserts by call_sid later and repairs it).
+      const { error: insertErr } = await supabase.from("calls").insert({
+        call_sid:           CallSid,
+        caller_number:      From,
+        twilio_number:      To,
+        client_real_number: ForwardedFrom || null,
+        client_id:          CLIENT_ID,
+        direction:          Direction || "inbound",
+        status:             "ringing",
+        started_at:         new Date().toISOString(),
+      });
+      if (insertErr) console.error(`⚠️  voip: ringing-row insert failed for ${CallSid}: ${insertErr.message}`);
+      appendClientDialTwiml(twiml, { identity: voip.identity, record: voip.record });
+      return res.type("text/xml").send(twiml.toString());
+    }
+  } catch (err) {
+    console.error("⚠️  voip: delivery attempt failed — falling back to v1 voicemail:", err.message);
+  }
+
   // ── MISSED CALL — with conditional call forwarding (**61*/**62*/**67*),
   // Twilio only ever receives calls the client didn't answer. There is no
   // live dial-through to the client's mobile, so every call reaching here
@@ -101,41 +140,12 @@ router.post("/voice", async (req, res) => {
     started_at:         new Date().toISOString(),
   });
 
-  // Check for a custom recorded greeting
-  let greetingUrl = null;
-  try {
-    const { data } = await supabase
-      .from("client_settings")
-      .select("voicemail_url")
-      .eq("client_id", CLIENT_ID)
-      .single();
-    greetingUrl = data?.voicemail_url || null;
-  } catch (err) {
-    console.error("⚠️  Could not load custom greeting:", err.message);
-  }
-
-  if (greetingUrl) {
-    twiml.play(greetingUrl);
-  } else {
-    const fallbackGreeting = process.env.VOICEMAIL_GREETING ||
-      "Sorry, I can't get to the phone right now. Please leave a message with your name, number, and reason for calling, and I'll get back to you as soon as possible.";
-    twiml.say({ voice: "Polly.Amy", language: "en-AU" }, fallbackGreeting);
-  }
-
-  twiml.record({
-    maxLength: 180,           // auto-hangup safety net at 3 minutes
-    playBeep: true,
-    trim: "trim-silence",
-    recordingStatusCallback: `${process.env.BASE_URL}/recording/complete`,
-    recordingStatusCallbackMethod: "POST",
-    action: `${process.env.BASE_URL}/inbound/voicemail-complete`,
-    // No explicit finishOnKey — caller controls when they're done by hanging up.
-    // Twilio's <Record> also ends automatically on ~4s of silence.
-  });
-  twiml.say(
-    { voice: "Polly.Amy", language: "en-AU" },
-    "Sorry, I didn't catch that. Goodbye."
-  );
+  // Voicemail TwiML — extracted to services/voicemail-twiml.js (Phase 1c)
+  // so /voip/dial-result's fallback renders the IDENTICAL flow. The helper
+  // is byte-identical to the previous inline code (INV-3), pinned by
+  // test/voip-phase1c.test.js.
+  const greetingUrl = await fetchGreetingUrl(CLIENT_ID);
+  appendVoicemailTwiml(twiml, { greetingUrl });
 
   res.type("text/xml").send(twiml.toString());
 });
