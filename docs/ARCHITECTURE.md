@@ -58,7 +58,7 @@ validated; **operator** = `requireLogin`; **client** = `requireClientAuth`;
 | `/personal-contacts` | routes/personal-contacts.js | operator | Personal-number exclusion list |
 | `/test` | routes/test.js | operator | Dev-only pipeline injection |
 | `/login` | routes/login.js | public | Operator password login |
-| `/client-auth` | routes/client-auth.js | public | Client signup (invite-gated) / login / logout / invite mint (operator) |
+| `/client-auth` | routes/client-auth.js | public (`/me` client) | Client signup (invite-gated) / login / refresh / logout / `GET /me` / invite mint (operator) — dual transport, see [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md) |
 | `/client-dashboard` | routes/client-dashboard.js | client | Per-tenant contacts API |
 | `/health` | inline | public | Liveness probe |
 
@@ -158,8 +158,10 @@ flowchart TD
         OPC --> OPR["requireLogin → req.clientId = OPERATOR_CLIENT_ID"]
     end
     subgraph CLI["Client (per tenant)"]
-        CLL["/client-auth/login (Supabase Auth)"] --> CLC["cookie aida_client_session"]
+        CLL["/client-auth/login (Supabase Auth)"] --> CLC["browser: httpOnly cookies<br/>aida_client_session + aida_client_refresh"]
+        CLL --> CLB["mobile (mode:'tokens'):<br/>Authorization: Bearer, pair in Keychain/Keystore"]
         CLC --> CLR["requireClientAuth → verify token → req.clientId = clients.slug"]
+        CLB --> CLR
     end
     subgraph WH["Twilio webhooks"]
         WHS["X-Twilio-Signature validated"]
@@ -167,6 +169,12 @@ flowchart TD
 ```
 
 `req.clientId` is always resolved server-side, never from request input.
+
+Client auth is **dual-transport, single-implementation**: browser cookie mode
+(with transparent B1 refresh) and mobile Bearer mode share one middleware and
+one validation/refresh path. A request carrying any `Authorization` header is
+bearer-mode and its cookies are ignored — never a silent fallback. Full
+contract: [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md).
 
 ## 8. External dependencies & failure surface
 

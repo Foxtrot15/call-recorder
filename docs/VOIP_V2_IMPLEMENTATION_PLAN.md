@@ -47,7 +47,7 @@ Also affirmed, not changed: D1–D6, INV-1–6, iOS-first-unless-pilot-is-Androi
 
 | # | Prerequisite | Why it blocks | Status |
 |---|---|---|---|
-| B1 | **Client session refresh** (Phase 5 item 5): sessions die ~1h. | An app that logs out hourly cannot hold a trustworthy registration; `/voice/token` refresh depends on a durable session. Architecture doc calls this "a blocking prerequisite, not a nice-to-have." | Open. Must land before app development (Phase 2/M2). |
+| B1 | **Client session refresh** (Phase 5 item 5): sessions die ~1h. | An app that logs out hourly cannot hold a trustworthy registration; `/voice/token` refresh depends on a durable session. Architecture doc calls this "a blocking prerequisite, not a nice-to-have." | ✅ Landed, plus the mobile-auth compatibility layer (Bearer transport, token-mode login/refresh, `GET /client-auth/me`, `/devices/revoke`) — see [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md). |
 | B2 | **Legal answer on AU two-party recording consent** (Q1). | v2 records live conversations — a materially different consent posture than v1 voicemail under AU state surveillance-devices laws. | Open. Blocks pilot cutover (Phase 5/M5), not code. Get advice early; if an announcement is required it changes §11 TwiML. |
 | B3 | **Carrier CFU test** (Q3): `*21*` behaviour, caller-ID preservation, `*#21#` support, forwarding charges on the pilot's carrier/MVNO. | The whole delivery model assumes CFU works as documented on the pilot's SIM. | Open. $2-SIM test; blocks cutover planning, informs cost model (Q4). |
 | B4 | **`hardening/p0-autonomous` deployed** (ENCRYPTION_KEY precondition met). | Phase 0 scaffold branches from it; the fail-closed config pattern D9 builds on ships there. | Branch ready, not deployed. |

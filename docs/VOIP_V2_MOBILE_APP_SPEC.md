@@ -7,9 +7,10 @@ CallKit/ConnectionService are non-negotiable) lives in
 [VOIP_V2_ARCHITECTURE.md](VOIP_V2_ARCHITECTURE.md) §5–9; backend contracts in
 [VOIP_V2_BACKEND_SPEC.md](VOIP_V2_BACKEND_SPEC.md).
 
-> **Hard entry gate (B1):** client session refresh must be fixed first. An app
-> whose session dies hourly cannot hold a live registration. Do not start
-> Phase 2 before that lands.
+> **Hard entry gate (B1): ✅ cleared.** Client session refresh landed, and the
+> mobile-auth compatibility layer with it: token-mode login/refresh, Bearer
+> auth on every client endpoint, `GET /client-auth/me`, `/devices/revoke`.
+> The app builds against [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md).
 
 ---
 
@@ -26,7 +27,7 @@ CallKit/ConnectionService are non-negotiable) lives in
 
 | Screen | Contents |
 |---|---|
-| **Login** | Email/password → existing `/client-auth/login`. No signup in-app (accounts come from the invite flow). |
+| **Login** | Email/password → `/client-auth/login` with `mode: "tokens"`; pair stored in Keychain/Keystore ([MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md) §1). No signup in-app (accounts come from the invite flow). |
 | **Home / status** | Registration state ("Ready to receive calls" / warnings), device label, business name, logout. This screen is a diagnostic, not a product surface. |
 | **Incoming call** | NOT ours — native CallKit (iOS) / CallStyle full-screen (Android) UI. We render nothing at ring time. |
 | **In-call** | Caller number/name, duration, mute, speaker, hang up. Nothing else at MVP. |

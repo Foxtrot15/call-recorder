@@ -23,12 +23,12 @@ const router = express.Router();
 const { isVoipV2Enabled } = require("../config/voip");
 
 // Remaining unimplemented surface from VOIP_V2_BACKEND_SPEC.md §5.
-// Phase 1b implemented /voice/token, /devices/register, GET /devices
-// (routes/voip.js); Phase 1c implemented /voip/dial-result
-// (routes/voip-webhooks.js) — removed here per this file's route-by-route
-// replacement contract. Still placeholders: revoke, call-status, push-ack.
+// Phase 1b implemented /voice/token, /devices/register, GET /devices; the
+// mobile-auth work added POST /devices/revoke (all in routes/voip.js);
+// Phase 1c implemented /voip/dial-result (routes/voip-webhooks.js) — each
+// removed here per this file's route-by-route replacement contract.
+// Still placeholders: call-status, push-ack.
 const PLACEHOLDER_ROUTES = [
-  { method: "post", path: "/devices/revoke" },
   { method: "post", path: "/voip/call-status" },
   { method: "post", path: "/voip/push-ack" },
 ];

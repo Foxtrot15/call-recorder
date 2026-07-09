@@ -20,16 +20,18 @@ const { createRateLimiter } = require("../services/rate-limit");
 const {
   validateDeviceRegistration,
   registerDevice,
+  revokeDevice,
   listDevices,
   isClientVoipEnabled,
 } = require("../services/devices");
 
 router.use(voipRouterGate());
 
-// D11: cheap-abuse throttles on the two POST endpoints. Keyed by session
+// D11: cheap-abuse throttles on the POST endpoints. Keyed by session
 // client + IP so one tenant can't starve another from behind the same NAT.
 const tokenLimiter = createRateLimiter({ limit: 10, windowMs: 60 * 1000 });
 const registerLimiter = createRateLimiter({ limit: 10, windowMs: 60 * 1000 });
+const revokeLimiter = createRateLimiter({ limit: 10, windowMs: 60 * 1000 });
 
 function limiterKey(req) {
   return `${req.clientId || "anon"}|${req.ip || "?"}`;
@@ -103,6 +105,28 @@ router.post("/devices/register", requireClientAuth, requireVoipEnabledClient, as
     res.json({ device: result.device });
   } catch (err) {
     console.error("❌ Device registration failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /devices/revoke — soft-revoke one of the caller's devices (§5.3) ───
+router.post("/devices/revoke", requireClientAuth, requireVoipEnabledClient, async (req, res) => {
+  const rl = revokeLimiter.check(limiterKey(req));
+  if (!rl.allowed) {
+    return res.status(429).json({ error: "Too many revocation requests — retry shortly" });
+  }
+
+  try {
+    const result = await revokeDevice(req.clientId, req.body?.deviceId);
+    if (result.notFound) {
+      // Unknown, foreign-tenant, malformed, and already-revoked ids are all
+      // the same 404 — no existence leak across tenants (spec §5.3).
+      return res.status(404).json({ error: "device not found" });
+    }
+    console.log(`voip.device.revoke client=${req.clientId} device=${req.body.deviceId}`);
+    res.json({ revoked: true });
+  } catch (err) {
+    console.error("❌ Device revocation failed:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

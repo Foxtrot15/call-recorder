@@ -123,13 +123,15 @@ All new mounts. Existing routes are untouched except the two modifications in
   **5 active devices** per client → 409 `{ error: "device limit reached" }`.
 - **Response 200:** `{ device: { id, platform, label, lastRegisteredAt } }`
 
-### 5.3 `POST /devices/revoke`
-- **Auth:** client session (own devices) or operator session.
-- **Request:** `{ deviceId }` → sets `revoked_at`, then calls Twilio REST to
-  delete the binding for that identity/registration immediately (token dies
-  within ≤1h TTL regardless).
-- **Response 200:** `{ revoked: true }` · 404 unknown/foreign id (no
-  existence leak across tenants).
+### 5.3 `POST /devices/revoke` — ✅ implemented (mobile-auth layer, `routes/voip.js`)
+- **Auth:** client session (own devices; cookie or Bearer — see
+  [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md)). Operator-session access
+  deferred, same as §5.4's implementation.
+- **Request:** `{ deviceId }` → sets `revoked_at`. Twilio REST binding
+  deletion is deferred until app-side SDK registration exists (Phase 2 —
+  today no bindings exist to delete; token dies within ≤1h TTL regardless).
+- **Response 200:** `{ revoked: true }` · 404 unknown/foreign/malformed id
+  (no existence leak across tenants).
 
 ### 5.4 `GET /devices` — ✅ implemented (Phase 1b, `routes/voip.js`)
 - **Auth:** client session (own) or operator. Returns active devices with

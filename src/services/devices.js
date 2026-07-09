@@ -13,6 +13,7 @@ const MAX_ACTIVE_DEVICES = 5; // spec §5.2 — app-level cap under Twilio's ~10
 const ACTIVE_WINDOW_DAYS = 30; // registrations older than this count as stale (spec §10)
 
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PLATFORMS = new Set(["ios", "android"]);
 
 function validateDeviceRegistration({ platform, pushTokenHash, label, appVersion, osVersion } = {}) {
@@ -25,6 +26,13 @@ function validateDeviceRegistration({ platform, pushTokenHash, label, appVersion
   if (appVersion != null && String(appVersion).length > 40) errors.push("appVersion must be 40 characters or fewer");
   if (osVersion != null && String(osVersion).length > 40) errors.push("osVersion must be 40 characters or fewer");
   return { ok: errors.length === 0, errors };
+}
+
+// A deviceId that isn't even a UUID gets the same treatment as a foreign or
+// unknown one (404 at the route) — the shape of the error must not reveal
+// whether an id exists in another tenant (spec §5.3: no existence leak).
+function isValidDeviceId(deviceId) {
+  return typeof deviceId === "string" && UUID_RE.test(deviceId);
 }
 
 // Cap applies to NEW devices only; re-registering an existing binding always
@@ -116,6 +124,37 @@ async function registerDevice(clientId, { platform, pushTokenHash, label, appVer
   return { device: toPublicDevice(data) };
 }
 
+/**
+ * Soft-revoke one of the CALLER'S devices (spec §5.3). The client_id filter
+ * is the tenant boundary: a valid UUID belonging to another tenant updates
+ * zero rows and reports notFound — indistinguishable from a random id.
+ * Returns { revoked: true } or { notFound: true }. Idempotent: revoking an
+ * already-revoked device reports notFound (zero rows match revoked_at null),
+ * which the spec treats as 404.
+ *
+ * Twilio push-binding deletion is deliberately deferred: no bindings exist
+ * until the app registers with the Voice SDK (Phase 2), and the access token
+ * dies within its 1h TTL regardless. When Phase 2 lands, this is the hook.
+ */
+async function revokeDevice(clientId, deviceId) {
+  if (!isValidDeviceId(deviceId)) return { notFound: true };
+
+  const supabase = require("./supabase");
+  const { data, error } = await supabase
+    .from("devices")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("id", deviceId)
+    .eq("client_id", clientId)
+    .is("revoked_at", null)
+    .select("id");
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`device revoke failed: ${error.message}`);
+  }
+  if (!data || data.length === 0) return { notFound: true };
+  return { revoked: true };
+}
+
 /** Active (non-revoked) devices for a client — public shape only. */
 async function listDevices(clientId) {
   const supabase = require("./supabase");
@@ -168,9 +207,11 @@ module.exports = {
   MAX_ACTIVE_DEVICES,
   ACTIVE_WINDOW_DAYS,
   validateDeviceRegistration,
+  isValidDeviceId,
   canRegisterNewDevice,
   toPublicDevice,
   registerDevice,
+  revokeDevice,
   listDevices,
   countActiveDevices,
   isClientVoipEnabled,

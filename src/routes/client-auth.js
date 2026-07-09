@@ -1,13 +1,14 @@
 const express = require("express");
 const router = express.Router();
-const { signupClient, loginClient, refreshClientSession } = require("../services/client-auth");
+const { signupClient } = require("../services/client-auth");
 const { createInviteToken, verifyInviteToken } = require("../services/invite");
-const { requireLogin } = require("../middleware/auth");
-const {
-  REFRESH_COOKIE,
-  setClientSessionCookies,
-  clearClientSessionCookies,
-} = require("../services/client-session");
+const { requireLogin, requireClientAuth } = require("../middleware/auth");
+const { createClientAuthHandlers } = require("./client-auth-handlers");
+
+// Session lifecycle (login/refresh/logout/me) lives in client-auth-handlers.js
+// — dual-transport behaviour (browser cookies vs mobile Bearer tokens) is
+// documented there and in docs/MOBILE_API_CONTRACT.md.
+const handlers = createClientAuthHandlers();
 
 // POST /client-auth/invite — { clientId }  (operator-only)
 // Mints an invite token for one client slug. There's no separate "used" flag —
@@ -51,75 +52,16 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-// POST /client-auth/login — { email, password }
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+// POST /client-auth/login — { email, password, mode? } ("tokens" ⇒ JSON pair)
+router.post("/login", handlers.login);
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Missing email or password" });
-  }
+// POST /client-auth/refresh — cookie transport, or body { refresh_token }
+router.post("/refresh", handlers.refresh);
 
-  try {
-    const result = await loginClient(email, password);
-    // B1: persist BOTH tokens. The access JWT dies after ~1h; the refresh
-    // cookie lets requireClientAuth (and POST /refresh) mint a new one
-    // transparently instead of forcing hourly re-logins.
-    setClientSessionCookies(res, {
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-    });
-    res.json({ success: true, email: result.email });
-  } catch (err) {
-    console.error("Client login error:", err.message);
-    res.status(401).json({ error: err.message });
-  }
-});
+// POST /client-auth/logout — both transports; best-effort server-side revoke
+router.post("/logout", handlers.logout);
 
-// POST /client-auth/refresh — exchange the refresh token for a new session.
-// Dual transport (VoIP plan Q5):
-//   * Browser: refresh token read from the httpOnly cookie; new tokens are
-//     set as cookies only — the JSON body stays token-free, so page JS never
-//     touches raw tokens.
-//   * Future mobile app (Phase 2): sends { refresh_token } in the body (from
-//     Keychain/Keystore — apps have no cookie jar worth trusting) and gets
-//     the rotated pair back in the JSON body.
-// The browser dashboard rarely needs this endpoint — requireClientAuth
-// refreshes transparently — but it exists for the app and for explicit
-// "wake up" refreshes.
-router.post("/refresh", async (req, res) => {
-  const fromBody = req.body?.refresh_token || null;
-  const fromCookie = req.cookies?.[REFRESH_COOKIE] || null;
-  const refreshToken = fromBody || fromCookie;
-
-  if (!refreshToken) {
-    return res.status(401).json({ error: "No refresh token" });
-  }
-
-  try {
-    const session = await refreshClientSession(refreshToken);
-    setClientSessionCookies(res, session);
-    if (fromBody) {
-      // App transport: it needs the rotated pair back explicitly.
-      return res.json({
-        success: true,
-        email: session.email,
-        access_token: session.accessToken,
-        refresh_token: session.refreshToken,
-      });
-    }
-    res.json({ success: true, email: session.email });
-  } catch (err) {
-    // A dead/rotated-out refresh token means the session is over — clear
-    // both cookies so the browser stops retrying with a corpse.
-    console.error("Client session refresh failed:", err.message);
-    clearClientSessionCookies(res);
-    res.status(401).json({ error: "Session expired — please log in again" });
-  }
-});
-
-router.post("/logout", (req, res) => {
-  clearClientSessionCookies(res);
-  res.json({ success: true });
-});
+// GET /client-auth/me — session probe for either transport
+router.get("/me", requireClientAuth, handlers.me);
 
 module.exports = router;
