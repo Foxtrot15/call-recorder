@@ -36,3 +36,11 @@ desktop.ini
 tmp/
 temp/
 *.pid
+
+# Orchestration scratch — transient requirements ledger, one per work batch,
+# cleared at batch close (see .claude/skills/aida-orchestrate/). Never committed.
+.agent/
+
+# Claude Code personal/local settings (permissions etc.) — machine-specific.
+# Shared skills under .claude/skills/ ARE tracked.
+.claude/settings.local.json

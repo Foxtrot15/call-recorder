@@ -40,6 +40,14 @@ app.use("/personal-contacts", requireLogin, require("./routes/personal-contacts"
 app.use("/voicemail",         requireLogin, require("./routes/voicemail"));
 app.use("/settings",          requireLogin, require("./routes/settings"));
 app.use("/client-dashboard",  require("./routes/client-dashboard")); // gated internally via requireClientAuth
+// VoIP v2 (flag-gated; VOIP_V2_ENABLED unset/false in every production
+// deploy today, so all of these are 404 pass-throughs exactly as before):
+// Phase 1b real routes (/voice/token, /devices/register, GET /devices),
+// Phase 1c Twilio webhooks (/voip/dial-result — signature-gated per route),
+// then Phase 0 placeholders for the not-yet-built remainder.
+app.use(require("./routes/voip"));
+app.use("/voip", require("./routes/voip-webhooks"));
+app.use(require("./routes/voip-scaffold"));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));

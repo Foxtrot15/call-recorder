@@ -43,6 +43,14 @@ const RECOMMENDED = [
 function assessConfig(env = process.env) {
   const fatal = CRITICAL.filter((v) => !v.check(env[v.name])).map((v) => ({ name: v.name, hint: v.hint }));
   const warnings = RECOMMENDED.filter((v) => !env[v.name]).map((v) => ({ name: v.name, hint: v.hint }));
+
+  // VoIP v2 (feature-flagged, default off): contributes nothing unless
+  // VOIP_V2_ENABLED=true, in which case its secrets are fail-closed too
+  // (decision D9, docs/VOIP_V2_IMPLEMENTATION_PLAN.md).
+  const voip = require("./voip").assessVoipConfig(env);
+  fatal.push(...voip.fatal);
+  warnings.push(...voip.warnings);
+
   return { fatal, warnings };
 }
 

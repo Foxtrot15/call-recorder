@@ -1,8 +1,14 @@
 const express = require("express");
 const router = express.Router();
-const { signupClient, loginClient } = require("../services/client-auth");
+const { signupClient } = require("../services/client-auth");
 const { createInviteToken, verifyInviteToken } = require("../services/invite");
-const { requireLogin } = require("../middleware/auth");
+const { requireLogin, requireClientAuth } = require("../middleware/auth");
+const { createClientAuthHandlers } = require("./client-auth-handlers");
+
+// Session lifecycle (login/refresh/logout/me) lives in client-auth-handlers.js
+// — dual-transport behaviour (browser cookies vs mobile Bearer tokens) is
+// documented there and in docs/MOBILE_API_CONTRACT.md.
+const handlers = createClientAuthHandlers();
 
 // POST /client-auth/invite — { clientId }  (operator-only)
 // Mints an invite token for one client slug. There's no separate "used" flag —
@@ -46,32 +52,16 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-// POST /client-auth/login — { email, password }
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+// POST /client-auth/login — { email, password, mode? } ("tokens" ⇒ JSON pair)
+router.post("/login", handlers.login);
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Missing email or password" });
-  }
+// POST /client-auth/refresh — cookie transport, or body { refresh_token }
+router.post("/refresh", handlers.refresh);
 
-  try {
-    const result = await loginClient(email, password);
-    res.cookie("aida_client_session", result.accessToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days — Supabase refresh handles longer sessions later if needed
-    });
-    res.json({ success: true, email: result.email });
-  } catch (err) {
-    console.error("Client login error:", err.message);
-    res.status(401).json({ error: err.message });
-  }
-});
+// POST /client-auth/logout — both transports; best-effort server-side revoke
+router.post("/logout", handlers.logout);
 
-router.post("/logout", (req, res) => {
-  res.clearCookie("aida_client_session");
-  res.json({ success: true });
-});
+// GET /client-auth/me — session probe for either transport
+router.get("/me", requireClientAuth, handlers.me);
 
 module.exports = router;

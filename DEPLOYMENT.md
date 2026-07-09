@@ -23,6 +23,19 @@ _Last updated: 2026-07-05 (commit `1cdeaaa` — auth isolation, invite signup, s
 | `PORT` | server | Optional, default 3000. |
 | `NODE_ENV` | webhook signature check | `development` disables Twilio signature validation — never in production. |
 
+### VoIP v2 (all optional while the feature is off — added 2026-07)
+
+Validated at startup **only when `VOIP_V2_ENABLED="true"`** (decision D9);
+when unset/false they are ignored entirely and every VoIP route 404s.
+Semantics owned by [docs/VOIP_V2_BACKEND_SPEC.md](docs/VOIP_V2_BACKEND_SPEC.md) §4.
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `VOIP_V2_ENABLED` | server-wide VoIP kill switch | Strict string `"true"` enables; anything else = feature invisible. **Unset in production today.** |
+| `TWILIO_API_KEY_SID` / `TWILIO_API_KEY_SECRET` | `/voice/token` Access Token signing | Fatal at startup iff enabled. Never the account auth token. |
+| `TWILIO_APNS_PUSH_CREDENTIAL_SID` | iOS VoIP pushes | Fatal iff enabled; empty string allowed for a not-yet-shipped platform (warned). |
+| `TWILIO_FCM_PUSH_CREDENTIAL_SID` | Android pushes | As above. |
+
 Legacy/unused: `TWILIO_NUMBER`, `TRANSCRIPT_RECIPIENT_NUMBER` (only referenced by dead `src/services/sms.js`).
 
 ## Deploy order (matters)
