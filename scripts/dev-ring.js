@@ -18,6 +18,14 @@ const DEV_SUPABASE_REF = "wvwemitmmsdytyutaqbm";
 const IDENTITY = "client_dev_client"; // services/voip-identity.js clientIdentity("dev-client")
 const RING_TIMEOUT_SECONDS = 30;      // caller gives up -> app should see Cancelled
 
+// M3B: --hold <seconds> controls how long the answered leg stays up (the
+// <Pause> after <Say>), giving a comfortable hang-up window. Default 30.
+function holdSeconds() {
+  const i = process.argv.indexOf("--hold");
+  const v = i === -1 ? NaN : parseInt(process.argv[i + 1], 10);
+  return Number.isFinite(v) && v > 0 && v <= 300 ? v : 30;
+}
+
 function fail(msg) {
   console.error(`FAILURE: ${msg}`);
   process.exit(1);
@@ -48,19 +56,22 @@ async function main() {
   const twilio = require("twilio");
   const client = twilio(keySid, keySecret, { accountSid });
 
+  const hold = holdSeconds();
   const call = await client.calls.create({
     to: `client:${IDENTITY}`,
     from: "client:dev-ring-trigger",
     timeout: RING_TIMEOUT_SECONDS,
-    twiml: '<Response><Say>Aida dev ring test.</Say><Pause length="30"/></Response>',
+    twiml: `<Response><Say>Aida dev ring test.</Say><Pause length="${hold}"/></Response>`,
   });
-  console.log(`RING: created call ${call.sid} -> client:${IDENTITY}`);
+  console.log(`RING: created call ${call.sid} -> client:${IDENTITY} (hold ${hold}s)`);
 
   // Poll to a terminal status so the exit-gate evidence (rejected leg ends /
-  // cancel drill) comes from Twilio itself, not inference.
+  // cancel drill / answered-leg duration) comes from Twilio itself, not
+  // inference. Window sized to ring timeout + hold + slack.
   const TERMINAL = ["completed", "busy", "failed", "no-answer", "canceled"];
+  const maxPolls = Math.ceil((RING_TIMEOUT_SECONDS + hold + 30) / 3);
   let last = "";
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < maxPolls; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     const c = await client.calls(call.sid).fetch();
     if (c.status !== last) {
