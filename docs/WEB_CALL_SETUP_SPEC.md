@@ -6,11 +6,12 @@ status machine. The manual onboarding procedure and human-facing forwarding
 codes stay owned by [../CLIENT_ONBOARDING_RUNBOOK.md](../CLIENT_ONBOARDING_RUNBOOK.md)
 (step 7); this milestone productises that step inside the client dashboard._
 
-> **Build state:**
-> **WCS-1a ✅ built (dormant, uncommitted pending approval)** — pure module + tests, imported by nothing.
-> **WCS-1b 📐 designed, not built** — SQL, adapter, flagged routes.
+> **Build state (updated 2026-07-23):**
+> **WCS-1a ✅ built** (commit `980a6ad`) — pure module + tests, imported by nothing.
+> **WCS-1b-i ✅ built (uncommitted pending approval)** — review-only SQL files (**NOT applied**), routing-profile adapter (dormant, imported by nothing), additive validators.
+> **WCS-1b-ii 📐 designed, not built** — flag config, client-auth routes, server mount.
 > **WCS-1c 📐 designed, not built** — client-dashboard UI + browser verification.
-> No SQL has been applied, no route exists, no UI has changed.
+> No SQL has been applied anywhere, no route exists, no UI has changed.
 
 ---
 
@@ -37,13 +38,16 @@ Non-negotiable framing, encoded in `src/services/divert-codes.js`:
   verification (a `calls` row arriving after a claim) is a designed future
   integration point, deliberately not built (no pipeline changes).
 
-## 2. WCS-1a — what exists today
+## 2. What exists today (WCS-1a + WCS-1b-i)
 
 | Piece | Where | State |
 |---|---|---|
-| Template engine + registries + validation + status machine | `src/services/divert-codes.js` | ✅ pure, dep-free, **imported by nothing** (dormant by construction) |
-| Regression tests (41) | `test/call-setup.test.js` | ✅ green; runs without node_modules; includes a heavy-dep hygiene test |
-| This spec + INDEX row | `docs/` | ✅ |
+| Template engine + registries + validation + status machine | `src/services/divert-codes.js` | ✅ pure, dep-free, **imported by nothing at runtime** (dormant by construction). WCS-1b-i added two additive validators: `validateProfileInputs` (profile fields without the target — saves must work pre-provisioning) and `validateOptionalAuNumber` (business_number); `validateSetupInputs` now delegates, behaviour unchanged |
+| Routing-profile adapter | `src/services/routing-profile.js` | ✅ built, **imported by nothing** (dormant). Pure field-builders + thin lazy-supabase functions; upsert-on-`client_id` saves with reset semantics; optimistic-concurrency status updates; `getClientAidaNumber` is the module's ONLY touch of `clients` and is SELECT-only; no id-based access anywhere |
+| Table DDL | `supabase/sql/wcs1b_create_client_phone_routing_profiles.sql` | ✅ review-only file, **NOT applied**. RLS same transaction, `unique(client_id)`, status check constraint |
+| Dev addendum | `supabase/sql/dev/dev_add_twilio_number.sql` | ✅ review-only, dev project only, **NOT applied** (dev `clients` lacks `twilio_number`; seeds a fake number) |
+| Regression tests (63 across the two WCS files) | `test/call-setup.test.js`, `test/routing-profile.test.js` | ✅ green; run without node_modules; heavy-dep hygiene tests in both |
+| This spec + INDEX rows | `docs/` | ✅ |
 
 The module reuses `normalisePhone` from `src/services/loop-guard.js` (the
 exported pure copy; the shared `services/phone.js` dedup remains the known
@@ -103,25 +107,42 @@ test_passed`, plus `needs_help`. Pure `applyStatusAction(current, action)`:
 `needs_help` is not reachable from `not_started` (pre-generate help is a
 support conversation, not a profile state).
 
-## 3. WCS-1b — designed, NOT built (requires Peter's approval to start)
+## 3. Persistence semantics (fixed by WCS-1b-i) and WCS-1b-ii remaining scope
 
-- **Table** `client_phone_routing_profiles` — one row per `clients.slug`
-  (unique `client_id`), inputs (business_number — **never** written to
-  `clients.real_number`, which owner recognition depends on —
-  platform/carrier/loops/delay), `target_number` + `generated_codes` jsonb
-  snapshot, `setup_status` + per-status timestamps. Ships as a reviewed file
-  in `supabase/sql/` with **RLS enabled in the same transaction** (D8
-  precedent: `phase1b_create_devices.sql`), human-applied. Dev project needs a
-  `twilio_number` column addendum (`dev_minimal_schema.sql` lacks it).
-- **Routes** `/call-setup/*` (GET/PUT profile, POST generate, POST status),
-  each behind `requireClientAuth`, tenancy from `req.clientId` only; POSTs
-  rate-limited (`services/rate-limit.js`, D11 pattern); the whole router
-  behind a strict-`"true"` `CALL_SETUP_ENABLED` env flag with a
-  `next("router")` gate (pattern: `src/config/voip.js:74`) so flag-off is
-  byte-identical to the routes not existing. Env var documented in
-  `DEPLOYMENT.md` in the same commit.
-- **Adapter** `src/services/routing-profile.js` — lazy supabase require,
-  "table not provisioned" error style per `src/services/devices.js:61-67`.
+**Now-fixed persistence rules** (encoded in `routing-profile.js` and its tests):
+
+- One profile per tenant: single-statement **upsert on `client_id`** — the
+  caller passes `req.clientId` and nothing else; no id-based function exists
+  and `toPublicProfile` never exposes the row id.
+- **Every profile save resets**: snapshot (`generated_codes`,
+  `target_number`), status (`not_started`), help note, and claim timestamps
+  are cleared — edited inputs must never leave stale codes alive.
+- **Generate snapshots the exact `buildDivertCodes` result** (incl.
+  `templateVersion`) plus `target_number = result.target`; it also closes any
+  open `needs_help` episode. Generate is last-write-wins (the machine's
+  universal recovery), and never fabricates claim stamps.
+- **Status updates are optimistic**: the UPDATE matches both `client_id` and
+  the status the decision was made against; zero rows → conflict (route
+  returns 409, client refetches). `claim_done` → `claimed_done_at`,
+  `report_test_passed` → `test_passed_at` (both self-reported stamps);
+  `needs_help` stores the note; leaving `needs_help` clears it.
+- `getClientAidaNumber` (SELECT of `clients.twilio_number` only — the
+  module's sole touch of `clients`) reports not-provisioned on any failure —
+  fail closed, same philosophy as `devices.isClientVoipEnabled`.
+- Until the SQL is applied, every table access throws a clear
+  "not provisioned" error naming the SQL file (`devices.js` pattern).
+
+**WCS-1b-ii — designed, NOT built (requires Peter's approval to start):**
+
+- **Routes** `/call-setup/*` (GET/PUT profile, POST generate, POST status) via
+  an injected-deps handler factory (`client-auth-handlers.js` pattern), each
+  behind `requireClientAuth`, tenancy from `req.clientId` only; POSTs/PUT
+  rate-limited (`services/rate-limit.js`, D11 pattern).
+- **Flag** — strict-`"true"` `CALL_SETUP_ENABLED` with a `next("router")`
+  gate (pattern: `src/config/voip.js:74`) as the router's first middleware,
+  so flag-off is byte-identical to the routes not existing. One mount line in
+  `server.js`; env var documented in `DEPLOYMENT.md` in the same commit;
+  smoke run required (production-facing mount).
 
 ## 4. WCS-1c — designed, NOT built
 
@@ -156,9 +177,17 @@ approval).
 - Self-reported statuses can be wrong in both directions; the calls-table
   auto-verify slice is the honest fix later.
 
-## 7. WCS-1a verification record (2026-07-23)
+## 7. Verification record
 
-`node --test test/call-setup.test.js` → 41/41 pass. Full `npm test` → 194/194
-pass. Dormancy proven: no `src/` file imports `divert-codes`, no route or
-`server.js` mount references `call-setup`, and the hygiene test fails if the
-module ever pulls twilio/@supabase into the require cache.
+**WCS-1a (2026-07-23):** `node --test test/call-setup.test.js` → 41/41 pass.
+Full `npm test` → 194/194 pass. Dormancy proven: no `src/` file imports
+`divert-codes`, no route or `server.js` mount references `call-setup`, and the
+hygiene test fails if the module ever pulls twilio/@supabase into the require
+cache. Committed `980a6ad`.
+
+**WCS-1b-i (2026-07-23):** the two WCS test files → 63/63 pass (41 original
+WCS-1a tests unmodified). Full `npm test` → 216/216 pass. Dormancy re-proven:
+nothing imports `routing-profile`; no route files, no `server.js` change, no
+flag config; adversarial greps confirm no `clients` write exists in new code
+(single SELECT of `twilio_number`), no Twilio import, and both SQL files are
+review-only (nothing applied).

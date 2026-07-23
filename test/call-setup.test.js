@@ -18,6 +18,8 @@ const {
   PLATFORMS,
   renderTemplate,
   validateTargetNumber,
+  validateOptionalAuNumber,
+  validateProfileInputs,
   validateSetupInputs,
   buildDivertCodes,
   STATUSES,
@@ -382,6 +384,50 @@ describe("setup status machine", () => {
     for (const [action, rule] of Object.entries(STATUS_ACTIONS)) {
       assert.ok(STATUSES.includes(rule.to), `${action} target`);
       for (const f of rule.from) assert.ok(STATUSES.includes(f), `${action} from ${f}`);
+    }
+  });
+});
+
+describe("WCS-1b-i additive validators", () => {
+  const PROFILE_OK = { carrier: "telstra", phonePlatform: "iphone", loops: ALL_LOOPS, noAnswerDelaySeconds: 20 };
+
+  it("validateProfileInputs passes valid inputs with no target at all", () => {
+    assert.deepStrictEqual(validateProfileInputs(PROFILE_OK), { ok: true, errors: [] });
+    assert.strictEqual(validateProfileInputs({ ...PROFILE_OK, noAnswerDelaySeconds: null }).ok, true);
+  });
+
+  it("refactor parity: validateSetupInputs errors === validateProfileInputs errors + target error, in order", () => {
+    const badInputs = { carrier: "three", phonePlatform: "fax", loops: { all_calls: true }, noAnswerDelaySeconds: 7 };
+    const profile = validateProfileInputs(badInputs);
+    const full = validateSetupInputs({ ...badInputs, targetNumber: "junk" });
+    assert.deepStrictEqual(full.errors.slice(0, profile.errors.length), profile.errors, "profile errors identical and first");
+    assert.strictEqual(full.errors.length, profile.errors.length + 1, "exactly one extra (target) error");
+    assert.match(full.errors[full.errors.length - 1], /targetNumber/, "target error appended last");
+  });
+
+  it("validateProfileInputs rejects the same field problems as the full validator", () => {
+    assert.ok(validateProfileInputs({ ...PROFILE_OK, carrier: "TELSTRA" }).errors.some((e) => /carrier must be one of/.test(e)));
+    assert.ok(validateProfileInputs({ ...PROFILE_OK, phonePlatform: "fax" }).errors.some((e) => /phonePlatform must be one of/.test(e)));
+    assert.ok(validateProfileInputs({ ...PROFILE_OK, loops: {} }).errors.some((e) => /at least one/i.test(e)));
+    assert.ok(validateProfileInputs({ ...PROFILE_OK, noAnswerDelaySeconds: 17 }).errors.some((e) => /noAnswerDelaySeconds/.test(e)));
+  });
+
+  it("validateOptionalAuNumber: absent or blank is fine (optional field), e164 null", () => {
+    for (const v of [null, undefined, "", "   "]) {
+      assert.deepStrictEqual(validateOptionalAuNumber(v), { ok: true, e164: null }, JSON.stringify(v));
+    }
+  });
+
+  it("validateOptionalAuNumber: normalises AU formats when present", () => {
+    assert.deepStrictEqual(validateOptionalAuNumber("0400 111 222"), { ok: true, e164: "+61400111222" });
+    assert.deepStrictEqual(validateOptionalAuNumber("+61400111222"), { ok: true, e164: "+61400111222" });
+  });
+
+  it("validateOptionalAuNumber: rejects junk and non-AU values", () => {
+    for (const bad of ["hello", "12", "+1415555000", "0400"]) {
+      const v = validateOptionalAuNumber(bad);
+      assert.strictEqual(v.ok, false, JSON.stringify(bad));
+      assert.match(v.error, /Australian E\.164/);
     }
   });
 });

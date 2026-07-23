@@ -67,6 +67,8 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 | [../supabase/sql/phase1b_create_devices.sql](../supabase/sql/phase1b_create_devices.sql) | ✅📐 | Creates the `devices` table with RLS-at-birth (D8) — not yet applied | devices schema |
 | [../supabase/sql/phase1c_add_answered_via.sql](../supabase/sql/phase1c_add_answered_via.sql) | ✅📐 | Adds `calls.answered_via/dial_status/answered_at` (nullable, v2 bookkeeping) — not yet applied | calls v2 columns SQL |
 | [../supabase/sql/dev/dev_minimal_schema.sql](../supabase/sql/dev/dev_minimal_schema.sql) | ✅ | **DEV-ONLY** minimal `clients` schema + `dev-client` seed for the local VoIP E2E stack (RLS same-transaction, no PII; never for production) — applied to the dev Supabase project 2026-07-12, followed in order by phase1a + phase1b | dev Supabase schema |
+| [../supabase/sql/wcs1b_create_client_phone_routing_profiles.sql](../supabase/sql/wcs1b_create_client_phone_routing_profiles.sql) | ✅📐 | Creates `client_phone_routing_profiles` with RLS-at-birth (D8) for WEB-CALL-SETUP-1 — **not yet applied** | client_phone_routing_profiles schema |
+| [../supabase/sql/dev/dev_add_twilio_number.sql](../supabase/sql/dev/dev_add_twilio_number.sql) | ✅📐 | **DEV-ONLY** addendum: adds `clients.twilio_number` + fake seed to the dev project (call-setup generate target) — **not yet applied** | dev twilio_number addendum |
 
 ### Onboarding
 | Doc | Status | Purpose | Owns |

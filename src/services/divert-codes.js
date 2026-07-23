@@ -198,11 +198,28 @@ function validateTargetNumber(targetNumber) {
 }
 
 /**
- * Validate the full setup input set. Returns { ok, errors, target } where
- * `target` is the normalised E.164 AIDA number when valid. Collects ALL
- * errors (not first-fail) so the future UI can show everything at once.
+ * Validate an optional client-supplied AU number (e.g. business_number on the
+ * routing profile). Absent/blank is fine ({ ok, e164: null }); anything
+ * present must normalise to AU E.164. Callers prefix the field name.
  */
-function validateSetupInputs({ targetNumber, carrier, phonePlatform, loops, noAnswerDelaySeconds } = {}) {
+function validateOptionalAuNumber(value) {
+  if (value == null || String(value).trim() === "") {
+    return { ok: true, e164: null };
+  }
+  const e164 = normalisePhone(value);
+  if (!e164 || !AU_E164_RE.test(e164)) {
+    return { ok: false, error: `must normalise to an Australian E.164 number (+61…): got "${value}"` };
+  }
+  return { ok: true, e164 };
+}
+
+/**
+ * Validate the user-editable profile fields WITHOUT the target number —
+ * the save path must work for clients whose AIDA number isn't provisioned
+ * yet (they can store preferences; only generate needs the target).
+ * Collects ALL errors (not first-fail) so the future UI shows everything.
+ */
+function validateProfileInputs({ carrier, phonePlatform, loops, noAnswerDelaySeconds } = {}) {
   const errors = [];
 
   if (!isRegistryKey(CARRIERS, carrier)) {
@@ -237,6 +254,20 @@ function validateSetupInputs({ targetNumber, carrier, phonePlatform, loops, noAn
       );
     }
   }
+
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Validate the full setup input set (profile fields + target). Returns
+ * { ok, errors, target } where `target` is the normalised E.164 AIDA number
+ * when valid. Delegates to validateProfileInputs so the two can never drift;
+ * the target error is appended last (error order is part of the contract —
+ * WCS-1a tests assert it).
+ */
+function validateSetupInputs({ targetNumber, carrier, phonePlatform, loops, noAnswerDelaySeconds } = {}) {
+  const profile = validateProfileInputs({ carrier, phonePlatform, loops, noAnswerDelaySeconds });
+  const errors = [...profile.errors];
 
   const target = validateTargetNumber(targetNumber);
   if (!target.ok) errors.push(target.error);
@@ -382,6 +413,8 @@ module.exports = {
   MANUAL_HELP_NOTE,
   renderTemplate,
   validateTargetNumber,
+  validateOptionalAuNumber,
+  validateProfileInputs,
   validateSetupInputs,
   buildDivertCodes,
   STATUSES,
