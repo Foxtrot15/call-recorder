@@ -36,6 +36,28 @@ Semantics owned by [docs/VOIP_V2_BACKEND_SPEC.md](docs/VOIP_V2_BACKEND_SPEC.md) 
 | `TWILIO_APNS_PUSH_CREDENTIAL_SID` | iOS VoIP pushes | Fatal iff enabled; empty string allowed for a not-yet-shipped platform (warned). |
 | `TWILIO_FCM_PUSH_CREDENTIAL_SID` | Android pushes | As above. |
 
+### AIDA Locksmith Receptionist (all optional — added 2026-07)
+
+Public product page at `/locksmith-receptionist`. **Dormant by default** — with
+`LOCKSMITH_PILOT_ENABLED` unset (the production state today) both routes 404 and
+the feature is invisible. Everything else is optional: once enabled the page
+renders with visible `[TO BE CONFIRMED: …]` placeholders instead of any invented
+detail, and the enquiry form stays disabled. Nothing here is validated at
+startup. Semantics owned by
+[docs/LOCKSMITH_PILOT_SPEC.md](docs/LOCKSMITH_PILOT_SPEC.md) §5.
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `LOCKSMITH_PILOT_ENABLED` | public page + enquiry route | Strict string `"true"` serves them; anything else (including unset) = both routes 404. **Unset in production today.** |
+| `LOCKSMITH_ENQUIRY_ENABLED` | enquiry submissions | Strict string `"true"` enables. **Leave unset:** M1 has no persistence sink, so submissions answer a truthful 503. See spec §7 for what must exist first. |
+| `LOCKSMITH_DEMO_PHONE` | hero "Call the live demo" CTA | E.164. Until set, no `tel:` link is rendered at all. |
+| `LOCKSMITH_CONTACT_EMAIL` | footer contact | Until set, no `mailto:` link is rendered. |
+| `NICHE_DROPS_ABN` | footer | Placeholder until supplied. |
+| `NICHE_DROPS_PRIVACY_URL` / `NICHE_DROPS_TERMS_URL` | footer links | Placeholder text until supplied — never rendered as a live `href`. |
+| `LOCKSMITH_CONTACT_REGION` | footer | Defaults to `Melbourne, Victoria, Australia`. |
+| `LOCKSMITH_SETUP_PRICE` / `LOCKSMITH_MONTHLY_PRICE` / `LOCKSMITH_INCLUDED_DAYS` | pricing section | Whole dollars / days; a non-positive-integer value falls back to 149 / 299 / 14. |
+| `LOCKSMITH_PILOT_LIMIT` / `LOCKSMITH_PILOT_REGION` | founding-pilot line | Default 3 / `Melbourne`. |
+
 Legacy/unused: `TWILIO_NUMBER`, `TRANSCRIPT_RECIPIENT_NUMBER` (only referenced by dead `src/services/sms.js`).
 
 ## Deploy order (matters)

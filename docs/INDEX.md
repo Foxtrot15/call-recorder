@@ -40,6 +40,7 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 | Doc | Status | Purpose | Owns (source of truth for) |
 |---|---|---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | ✅ | How the current system works end-to-end: routes, services, data model, pipeline | Current system structure, data model |
+| [LOCKSMITH_PILOT_SPEC.md](LOCKSMITH_PILOT_SPEC.md) | ✅📐 | **AIDA Locksmith Receptionist** (Niche Drops) — M1 public product shell at `/locksmith-receptionist`: page sections, config/flags, demo-data boundary, stubbed enquiry submission, mobile + a11y review, founder placeholders. Built, not deployed | Locksmith pilot product scope, config, demo-data rules, enquiry-form status |
 | [../EXECUTIVE_SUMMARY.md](../EXECUTIVE_SUMMARY.md) | ✅ | One-page status: what was fixed, what's risky, what's next | Executive status |
 | [../README.md](../README.md) | ✅ | Project orientation → points into `docs/` | Repo entry point |
 

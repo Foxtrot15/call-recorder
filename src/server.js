@@ -17,6 +17,12 @@ const { twilioWebhook, requireLogin } = require("./middleware/auth");
 // Must be registered before the gated "/" route below.
 app.use("/login", require("./routes/login"));
 app.use("/client-auth", require("./routes/client-auth")); // Client signup/login, also public
+// Public product page for the locksmith pilot (GET /locksmith-receptionist +
+// its enquiry POST). No auth, no tenant data, no pipeline contact — it renders
+// config + demonstration data only. DORMANT by default: without
+// LOCKSMITH_PILOT_ENABLED="true" both paths 404, byte-identical to the routes
+// not existing (see docs/LOCKSMITH_PILOT_SPEC.md).
+app.use(require("./routes/locksmith"));
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.

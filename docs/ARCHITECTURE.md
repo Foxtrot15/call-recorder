@@ -60,6 +60,7 @@ validated; **operator** = `requireLogin`; **client** = `requireClientAuth`;
 | `/login` | routes/login.js | public | Operator password login |
 | `/client-auth` | routes/client-auth.js | public (`/me` client) | Client signup (invite-gated) / login / refresh / logout / `GET /me` / invite mint (operator) — dual transport, see [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md) |
 | `/client-dashboard` | routes/client-dashboard.js | client | Per-tenant contacts API |
+| `/locksmith-receptionist` | routes/locksmith.js | public | AIDA Locksmith Receptionist product page + pilot enquiry POST. **Dormant**: 404s unless `LOCKSMITH_PILOT_ENABLED="true"`. Reads config + demo data only — no tenant data, no pipeline contact; submissions separately off with no persistence sink. See [LOCKSMITH_PILOT_SPEC.md](LOCKSMITH_PILOT_SPEC.md) |
 | `/health` | inline | public | Liveness probe |
 
 ## 4. The pipeline (the core value path)
