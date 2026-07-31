@@ -225,13 +225,104 @@ function toSupplementaryWarnings(validated) {
   return out;
 }
 
+// ── Receptionist call analysis ──────────────────────────────────────
+//
+// The ONBOARDING validator above guards configuration. This one guards the
+// ordinary receptionist calls, whose analysis feeds the client's enquiry list
+// and the billable-call classification. Same posture: the provider's output is
+// useful and untrusted.
+//
+// It exists because an unvalidated enum here has consequences beyond a bad
+// display — "urgency" drives what a locksmith is told is urgent, and
+// "call_successful" would otherwise influence what a customer is billed for.
+// Billing decisions are NEVER taken from provider analysis (see
+// classifyCallForBilling's refusal to read it), but the enquiry view is, so it
+// must be schema-clean before anyone sees it.
+
+const RECEPTIONIST_ENUMS = Object.freeze({
+  service_type: [...S.SERVICE_IDS],
+  urgency: [...S.URGENCY_CLASSIFICATIONS],
+});
+const RECEPTIONIST_BOOLEANS = Object.freeze(["transferred", "out_of_area"]);
+const RECEPTIONIST_STRINGS = Object.freeze(["caller_name", "callback_number", "suburb", "call_summary"]);
+
+/**
+ * Validate a receptionist call analysis payload.
+ * Returns { ok, analysis, errors[], warnings[] }. Unknown enum values are
+ * rejected rather than coerced; a rejected payload leaves the call record's own
+ * facts (duration, status, transcript) untouched and authoritative.
+ */
+function validateReceptionistAnalysis(raw) {
+  const errors = [];
+  const warnings = [];
+  const analysis = {};
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, analysis: null, errors: [{ field: "analysis", message: "Receptionist analysis was not an object." }], warnings: [] };
+  }
+
+  for (const [field, allowed] of Object.entries(RECEPTIONIST_ENUMS)) {
+    const value = raw[field];
+    if (value === undefined || value === null || value === "") {
+      warnings.push({ code: `missing_${field}`, message: `The provider did not classify ${field}.`, severity: "review" });
+      analysis[field] = null;
+      continue;
+    }
+    if (!allowed.includes(value)) {
+      errors.push({ field, message: `"${String(value).slice(0, 60)}" is not a recognised ${field} value.` });
+      continue;
+    }
+    analysis[field] = value;
+  }
+
+  for (const field of RECEPTIONIST_BOOLEANS) {
+    const value = raw[field];
+    if (value === undefined || value === null) {
+      analysis[field] = null;
+      continue;
+    }
+    if (typeof value !== "boolean") {
+      errors.push({ field, message: `${field} must be a boolean.` });
+      continue;
+    }
+    analysis[field] = value;
+  }
+
+  for (const field of RECEPTIONIST_STRINGS) {
+    const value = raw[field];
+    if (value === undefined || value === null || value === "") {
+      analysis[field] = null;
+      continue;
+    }
+    if (typeof value !== "string") {
+      errors.push({ field, message: `${field} must be text.` });
+      continue;
+    }
+    analysis[field] = value.length > MAX_FIELD_CHARS ? `${value.slice(0, MAX_FIELD_CHARS)}…` : value;
+  }
+
+  // A transfer the provider claims but the call record does not corroborate is
+  // exactly the sort of thing that must not reach a locksmith as fact.
+  if (analysis.transferred === true) {
+    warnings.push({
+      code: "transfer_claim_needs_corroboration",
+      message: "The provider reports a transfer. Confirm against the call record before telling the client someone was reached.",
+      severity: "confirm",
+    });
+  }
+
+  return { ok: errors.length === 0, analysis: errors.length === 0 ? Object.freeze(analysis) : null, errors, warnings, schemaVersion: ANALYSIS_SCHEMA_VERSION };
+}
+
 module.exports = {
   ANALYSIS_SCHEMA_VERSION,
   CALL_OUTCOMES,
   CONFIDENCE_LEVELS,
   ALWAYS_REVIEW_FIELDS,
   MAX_FIELD_CHARS,
+  RECEPTIONIST_ENUMS,
   buildOnboardingAnalysisFields,
   validateProviderAnalysis,
+  validateReceptionistAnalysis,
   toSupplementaryWarnings,
 };

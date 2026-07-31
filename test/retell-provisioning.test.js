@@ -436,6 +436,35 @@ describe("post-call analysis schema", () => {
     assert.ok(r.analysis.missing_answers.length <= analysis.MAX_FIELD_CHARS + 1);
   });
 
+  it("validates receptionist call analysis too, not just onboarding analysis", () => {
+    // The receptionist's post_call_analysis_data feeds the client's enquiry
+    // list. An unvalidated enum there tells a locksmith the wrong thing is
+    // urgent.
+    const good = analysis.validateReceptionistAnalysis({
+      caller_name: "Danielle R.", callback_number: "0491 570 006", suburb: "Preston",
+      service_type: "residential_lockout", urgency: "urgent", transferred: true, out_of_area: false,
+    });
+    assert.strictEqual(good.ok, true, JSON.stringify(good.errors));
+    assert.strictEqual(good.analysis.urgency, "urgent");
+    assert.ok(good.warnings.some((w) => w.code === "transfer_claim_needs_corroboration"), "a claimed transfer must be corroborated before it is told to the client");
+  });
+
+  it("rejects invented receptionist enum values rather than coercing them", () => {
+    for (const [field, value] of [["service_type", "teleportation"], ["urgency", "extremely_urgent"]]) {
+      const r = analysis.validateReceptionistAnalysis({ [field]: value });
+      assert.strictEqual(r.ok, false, `${field}="${value}" must be rejected`);
+      assert.ok(r.errors.some((e) => e.field === field));
+      assert.strictEqual(r.analysis, null, "a rejected payload yields nothing usable");
+    }
+    assert.strictEqual(analysis.validateReceptionistAnalysis({ transferred: "yes" }).ok, false);
+    assert.strictEqual(analysis.validateReceptionistAnalysis(null).ok, false);
+  });
+
+  it("its enum vocabularies come from the canonical schema, not a private list", () => {
+    assert.deepStrictEqual(analysis.RECEPTIONIST_ENUMS.service_type, [...S.SERVICE_IDS]);
+    assert.deepStrictEqual(analysis.RECEPTIONIST_ENUMS.urgency, [...S.URGENCY_CLASSIFICATIONS]);
+  });
+
   it("exposes no function that turns analysis into profile fields", () => {
     // The module may only produce warnings — there must be no path from
     // provider analysis to configuration.

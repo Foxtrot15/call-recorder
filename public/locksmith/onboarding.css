@@ -199,6 +199,58 @@ h4 { font-size: 15px; margin: 0 0 6px; }
 .btn--small { min-height: 40px; padding: 6px 14px; font-size: 14px; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 
+/* ── Form controls ───────────────────────────────────────────────── */
+/* The M2 review page had no text inputs, so these arrived with the M4
+   onboarding-call page. Without them the browser defaults apply: a 13px input
+   makes iOS zoom on focus, and a 13px checkbox is far below a usable touch
+   target. */
+
+.field > label,
+.field--check label,
+.field--group legend { display: block; font-weight: 600; margin-bottom: 6px; }
+.field--check label { font-weight: 400; margin: 0; }
+
+.field input[type="text"],
+.field input[type="tel"],
+.field input[type="email"],
+.field input[type="url"],
+.field select,
+.field textarea {
+  width: 100%;
+  max-width: 100%;
+  min-height: 48px;
+  padding: 11px 12px;
+  font-size: 16px;               /* 16px stops iOS zooming on focus */
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+.field textarea { min-height: 110px; resize: vertical; }
+
+.checks { display: grid; gap: 6px; }
+.check { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 4px 0; }
+.check input { width: 22px; height: 22px; margin-top: 2px; flex: 0 0 auto; }
+
+.req { font-weight: 400; color: var(--muted); font-size: 13px; }
+.opt { font-weight: 400; color: var(--muted); font-size: 13px; }
+.hint { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+
+/* ── Journey timeline ────────────────────────────────────────────── */
+
+.timeline { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 4px; }
+.timeline__step {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 12px; border-radius: 8px; font-size: 15px;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.timeline__step--done { color: var(--ok); border-color: var(--ok-soft); }
+.timeline__step--current { border-color: var(--accent); border-left: 4px solid var(--accent); font-weight: 600; }
+.timeline__step--todo { color: var(--muted); }
+.timeline__marker { flex: 0 0 auto; font-weight: 700; }
+.timeline__detail { display: block; width: 100%; font-size: 14px; font-weight: 400; color: var(--muted); }
+
 .correction, .reject-panel {
   margin-top: 12px; padding: 12px; border-radius: 8px;
   background: var(--surface-alt); border: 1px solid var(--border);
