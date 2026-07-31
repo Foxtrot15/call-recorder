@@ -63,6 +63,8 @@ validated; **operator** = `requireLogin`; **client** = `requireClientAuth`;
 | `/locksmith-receptionist` | routes/locksmith.js | public | AIDA Locksmith Receptionist product page + pilot enquiry POST. **Dormant**: 404s unless `LOCKSMITH_PILOT_ENABLED="true"`. Reads config + demo data only — no tenant data, no pipeline contact; submissions separately off with no persistence sink. See [LOCKSMITH_PILOT_SPEC.md](LOCKSMITH_PILOT_SPEC.md) |
 | `/client/locksmith-onboarding/:sessionId/*` | routes/locksmith-onboarding.js | client | Locksmith onboarding review + approval (M2). **Dormant**: 404s unless `LOCKSMITH_ONBOARDING_ENABLED="true"`. See [LOCKSMITH_ONBOARDING_SPEC.md](LOCKSMITH_ONBOARDING_SPEC.md) |
 | `/locksmith-founder/*` | routes/locksmith-onboarding.js | operator | Founder console for onboarding sessions (M2) + the only transcript-ingestion entry point. Dormant with the same flag; cannot approve on a client's behalf |
+| `/locksmith-founder/provisioning/*` | routes/locksmith-onboarding.js | operator | Retell provisioning preview, dry-run and mock execution (M3). Dormant with the onboarding flag; live execution is hidden unless every Retell gate passes |
+| `/webhooks/retell` | routes/retell-webhook.js | signature | Retell event webhook (M3). **Dormant**: 404s unless `RETELL_ENABLED` and `RETELL_WEBHOOK_ENABLED` are both `"true"`. Mounted with its own `express.raw` parser so signature verification sees the exact bytes. See [RETELL_INTEGRATION_SPEC.md](RETELL_INTEGRATION_SPEC.md) |
 | `/health` | inline | public | Liveness probe |
 
 ## 4. The pipeline (the core value path)

@@ -74,6 +74,41 @@ workshop. Semantics owned by
 Until then every adapter fails closed with "locksmith onboarding tables not
 provisioned", so enabling the flag alone cannot half-open the feature.
 
+### Retell voice provider (M3 — added 2026-08, dormant)
+
+**Four independent danger gates, all strict-parse and all OFF by default**, plus
+an inverted dry-run gate that is ON by default. They are separate on purpose:
+enabling a preview must not grant permission to create agents, and creating
+agents must not grant permission to dial a customer. Semantics owned by
+[docs/RETELL_INTEGRATION_SPEC.md](docs/RETELL_INTEGRATION_SPEC.md).
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `RETELL_ENABLED` | the whole integration | Strict `"true"`. **Unset in production today.** |
+| `RETELL_WEBHOOK_ENABLED` | `POST /webhooks/retell` | Strict `"true"`. Both this AND `RETELL_ENABLED` are required or the route 404s. |
+| `RETELL_LIVE_WRITES_ENABLED` | provisioning execution | Strict `"true"`. Permits creating/updating Retell resources. |
+| `RETELL_LIVE_CALLS_ENABLED` | outbound onboarding calls | Strict `"true"`. **Placing calls spends money.** |
+| `RETELL_DRY_RUN` | all write paths | **Inverted and ON by default** — only `"false"` leaves dry-run. While on, nothing leaves the process. |
+| `RETELL_API_KEY` | auth + webhook signature verification | The API key *is* the webhook signing secret. Never logged, never rendered. |
+| `RETELL_API_BASE_URL` | provider transport | https origin only, no path/query/fragment. Invalid ⇒ fatal at startup once enabled. |
+| `RETELL_DEFAULT_VOICE_ID` | agent creation | **No default is invented.** Missing ⇒ live writes are fatal at startup. |
+| `RETELL_DEFAULT_LANGUAGE` | agent creation | Defaults `en-AU`; confirm against Retell's supported locales before first live provisioning. |
+| `RETELL_OUTBOUND_ONBOARDING_NUMBER` | outbound calls | E.164. Missing ⇒ live calls are fatal at startup. |
+| `RETELL_INBOUND_DEMO_NUMBER` | future inbound demo | Placeholder; never defaulted. |
+| `RETELL_WEBHOOK_BASE_URL` | agent `webhook_url` | Public https base. Missing while webhooks are on ⇒ warning. |
+| `RETELL_ALLOWED_TAG` | environment separation | `dev` \| `staging` \| `prod`. |
+| `RETELL_TIMEOUT_MS` / `RETELL_MAX_RETRIES` / `RETELL_WEBHOOK_MAX_BYTES` | transport + webhook | Defaults 30000 / 2 / 524288. |
+| `RETELL_RECORDING_ENABLED` | recording default | **Off by default pending the founder's legal wording.** Transcription is separate from recording. |
+| `RETELL_TRANSCRIPT_RETENTION` | retention preference | Mirrors the canonical profile enum. No retention job exists yet. |
+
+**Deploy preconditions** (all currently unmet, deliberately):
+1. `supabase/sql/lpm2_create_locksmith_onboarding.sql` then
+   `supabase/sql/lpm3_create_retell_provisioning.sql`, applied by a human.
+2. A Retell account, API key and dashboard voice id.
+3. **Node 20+** if webhook verification is needed: the official `retell-sdk`
+   (declared as an `optionalDependency`, not installed) requires it, and the
+   verifier fails closed without it rather than improvising an HMAC.
+
 Legacy/unused: `TWILIO_NUMBER`, `TRANSCRIPT_RECIPIENT_NUMBER` (only referenced by dead `src/services/sms.js`).
 
 ## Deploy order (matters)

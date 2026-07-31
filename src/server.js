@@ -28,6 +28,11 @@ app.use(require("./routes/locksmith"));
 // without LOCKSMITH_ONBOARDING_ENABLED="true" every path 404s before any auth
 // runs (see docs/LOCKSMITH_ONBOARDING_SPEC.md).
 app.use(require("./routes/locksmith-onboarding"));
+// Retell webhook (M3). Dormant: without RETELL_ENABLED and
+// RETELL_WEBHOOK_ENABLED both "true" the path 404s before any handler runs.
+// Mounted with its own express.raw body parser so signature verification sees
+// the exact bytes — this is why it sits apart from the JSON parser above.
+app.use(require("./routes/retell-webhook"));
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.

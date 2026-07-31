@@ -22,8 +22,10 @@ const router = express.Router();
 const { onboardingRouterGate } = require("../config/locksmith-onboarding");
 const { requireLogin, requireClientAuth } = require("../middleware/auth");
 const { createOnboardingHandlers } = require("./locksmith-onboarding-handlers");
+const { createProvisioningHandlers } = require("./locksmith-provisioning-handlers");
 
 const handlers = createOnboardingHandlers();
+const provisioning = createProvisioningHandlers();
 
 router.use(onboardingRouterGate());
 
@@ -43,5 +45,14 @@ router.post("/locksmith-founder/sessions/:sessionId/re-extract", requireLogin, h
 // future Retell webhook is a separate, signature-verified route — it does not
 // reuse this one (docs/LOCKSMITH_ONBOARDING_SPEC.md §6).
 router.post("/locksmith-founder/sessions/:sessionId/transcript", requireLogin, handlers.founderSubmitTranscript);
+
+// ── Provisioning preview (M3) ───────────────────────────────────────
+// Read-only preview of what would be sent to Retell. The execution control is
+// revealed only when every gate in evaluateExecutionGate passes, which cannot
+// happen under the shipped configuration. Mock and dry-run paths contact
+// nothing.
+router.get("/locksmith-founder/provisioning/:clientId", requireLogin, provisioning.provisioningPage);
+router.post("/locksmith-founder/provisioning/:clientId/dry-run", requireLogin, provisioning.dryRun);
+router.post("/locksmith-founder/provisioning/:clientId/mock-execute", requireLogin, provisioning.mockExecute);
 
 module.exports = router;
