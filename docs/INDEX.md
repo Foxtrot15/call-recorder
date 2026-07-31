@@ -40,7 +40,8 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 | Doc | Status | Purpose | Owns (source of truth for) |
 |---|---|---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | ✅ | How the current system works end-to-end: routes, services, data model, pipeline | Current system structure, data model |
-| [LOCKSMITH_PILOT_SPEC.md](LOCKSMITH_PILOT_SPEC.md) | ✅📐 | **AIDA Locksmith Receptionist** (Niche Drops) — M1 public product shell at `/locksmith-receptionist`: page sections, config/flags, demo-data boundary, stubbed enquiry submission, mobile + a11y review, founder placeholders. Built, not deployed | Locksmith pilot product scope, config, demo-data rules, enquiry-form status |
+| [LOCKSMITH_PILOT_SPEC.md](LOCKSMITH_PILOT_SPEC.md) | ✅📐 | **AIDA Locksmith Receptionist** (Niche Drops) — M1 public product shell at `/locksmith-receptionist`: page sections, config/flags, demo-data boundary, stubbed enquiry submission, mobile + a11y review, founder placeholders. Built dormant, not deployed | Locksmith pilot product scope, config, demo-data rules, enquiry-form status |
+| [LOCKSMITH_ONBOARDING_SPEC.md](LOCKSMITH_ONBOARDING_SPEC.md) | ✅📐 | **M2 autonomous onboarding foundation** — canonical locksmith business profile (12 sections), profile + session lifecycles, transcript ingestion boundary, extraction adapter contract, review/approval experience, founder console, provisioning-readiness rules, Retell webhook signature requirement. Built dormant; SQL written, **not applied** | Canonical profile schema, profile/session lifecycles, extraction contract, approval guard, provisioning readiness |
 | [../EXECUTIVE_SUMMARY.md](../EXECUTIVE_SUMMARY.md) | ✅ | One-page status: what was fixed, what's risky, what's next | Executive status |
 | [../README.md](../README.md) | ✅ | Project orientation → points into `docs/` | Repo entry point |
 
@@ -70,6 +71,7 @@ Status legend: ✅ current · 🟡 partially superseded (see audit) · 🔴 obso
 | [../supabase/sql/dev/dev_minimal_schema.sql](../supabase/sql/dev/dev_minimal_schema.sql) | ✅ | **DEV-ONLY** minimal `clients` schema + `dev-client` seed for the local VoIP E2E stack (RLS same-transaction, no PII; never for production) — applied to the dev Supabase project 2026-07-12, followed in order by phase1a + phase1b | dev Supabase schema |
 | [../supabase/sql/wcs1b_create_client_phone_routing_profiles.sql](../supabase/sql/wcs1b_create_client_phone_routing_profiles.sql) | ✅📐 | Creates `client_phone_routing_profiles` with RLS-at-birth (D8) for WEB-CALL-SETUP-1 — **not yet applied** | client_phone_routing_profiles schema |
 | [../supabase/sql/dev/dev_add_twilio_number.sql](../supabase/sql/dev/dev_add_twilio_number.sql) | ✅📐 | **DEV-ONLY** addendum: adds `clients.twilio_number` + fake seed to the dev project (call-setup generate target) — **not yet applied** | dev twilio_number addendum |
+| [../supabase/sql/lpm2_create_locksmith_onboarding.sql](../supabase/sql/lpm2_create_locksmith_onboarding.sql) | ✅📐 | Creates `locksmith_onboarding_sessions`, `locksmith_business_profiles` (versioned, one-approved-per-client partial unique index) and the append-only `locksmith_onboarding_events`, all with RLS-at-birth (D8) — **not yet applied** | Locksmith onboarding schema |
 
 ### Onboarding
 | Doc | Status | Purpose | Owns |

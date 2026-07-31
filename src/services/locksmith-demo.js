@@ -151,6 +151,40 @@ const HOW_IT_WORKS = Object.freeze([
   { step: 5, title: "You get a concise summary", detail: "A short written record of the call by email or SMS." },
 ]);
 
+// ── Setup: how a receptionist gets configured (M2 strategy, not yet live) ──
+// Describes the autonomous-onboarding approach the product is being built
+// around. Deliberately future-tense and labelled as upcoming: none of this is
+// running yet (docs/LOCKSMITH_ONBOARDING_SPEC.md). No competitor comparison, no
+// invented time savings, no claim that anything is available today.
+const SETUP_STATUS_LABEL = "Coming in the founding pilot — not available yet";
+
+const SETUP_SUMMARY =
+  "Speak with AIDA once. AIDA learns how your locksmith business works, prepares " +
+  "your receptionist settings, and asks you to approve them before launch.";
+
+const SETUP_STEPS = Object.freeze([
+  {
+    step: 1,
+    title: "One setup call",
+    detail: "AIDA asks about your work, your area, your hours and what counts as urgent. About ten minutes, in plain language.",
+  },
+  {
+    step: 2,
+    title: "AIDA writes it up",
+    detail: "The call is transcribed and turned into your receptionist's settings. You don't write prompts or configure anything.",
+  },
+  {
+    step: 3,
+    title: "You check it",
+    detail: "You get a page headed \"Here is what AIDA understood about your business\", section by section, with anything missing flagged.",
+  },
+  {
+    step: 4,
+    title: "You approve it",
+    detail: "Nothing answers your phone until you've approved it. Transfer numbers, hours and pricing rules are confirmed one at a time.",
+  },
+]);
+
 // ── 5. Example calls ────────────────────────────────────────────────
 // Mock scripts, written by hand. No real recordings, no third-party audio
 // embeds. `audioUrl` is the slot a future recording drops into unchanged.
@@ -319,4 +353,7 @@ module.exports = {
   HOW_IT_WORKS,
   EXAMPLE_CALLS,
   DASHBOARD,
+  SETUP_STATUS_LABEL,
+  SETUP_SUMMARY,
+  SETUP_STEPS,
 };

@@ -23,6 +23,11 @@ app.use("/client-auth", require("./routes/client-auth")); // Client signup/login
 // LOCKSMITH_PILOT_ENABLED="true" both paths 404, byte-identical to the routes
 // not existing (see docs/LOCKSMITH_PILOT_SPEC.md).
 app.use(require("./routes/locksmith"));
+// Locksmith autonomous onboarding (M2): client review/approval behind
+// requireClientAuth, founder console behind requireLogin. Also dormant —
+// without LOCKSMITH_ONBOARDING_ENABLED="true" every path 404s before any auth
+// runs (see docs/LOCKSMITH_ONBOARDING_SPEC.md).
+app.use(require("./routes/locksmith-onboarding"));
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.

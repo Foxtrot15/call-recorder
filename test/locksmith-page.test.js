@@ -95,7 +95,10 @@ describe("all nine required sections render", () => {
       assert.ok(at > cursor, `step "${step}" missing or out of order`);
       cursor = at;
     }
+    // Exactly five call-handling steps. The onboarding section's steps carry
+    // the extra `setup-step` class and are counted separately below.
     assert.strictEqual(count(HTML, '<li class="step">'), 5);
+    assert.strictEqual(count(HTML, '<li class="step setup-step">'), 4, "the setup section has its own four steps");
   });
 
   it("renders four scenarios with caller, suburb, job type, urgency, summary and action", () => {
@@ -217,7 +220,9 @@ describe("nothing on the page is invented", () => {
   });
 
   it("carries no testimonials, reviews, customer logos or revenue claims", () => {
-    assert.ok(!/\btestimonial|\breview\b|★|\brated\b|trusted by|customers say/i.test(HTML));
+    // Guards fabricated social proof. Deliberately does NOT ban the bare word
+    // "review" — the page legitimately describes the approval review step.
+    assert.ok(!/\btestimonials?\b|\bcustomer reviews?\b|\b\d+ reviews?\b|★|\brated\b|trusted by|customers say/i.test(HTML));
     assert.ok(!/\$\s?\d[\d,]*\s*(k|per week|per month) in (revenue|jobs|sales)/i.test(HTML));
     assert.ok(!/\bguarantee[ds]?\b/i.test(HTML), "no unsupported guarantees");
   });

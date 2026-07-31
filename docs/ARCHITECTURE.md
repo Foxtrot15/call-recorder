@@ -61,6 +61,8 @@ validated; **operator** = `requireLogin`; **client** = `requireClientAuth`;
 | `/client-auth` | routes/client-auth.js | public (`/me` client) | Client signup (invite-gated) / login / refresh / logout / `GET /me` / invite mint (operator) — dual transport, see [MOBILE_API_CONTRACT.md](MOBILE_API_CONTRACT.md) |
 | `/client-dashboard` | routes/client-dashboard.js | client | Per-tenant contacts API |
 | `/locksmith-receptionist` | routes/locksmith.js | public | AIDA Locksmith Receptionist product page + pilot enquiry POST. **Dormant**: 404s unless `LOCKSMITH_PILOT_ENABLED="true"`. Reads config + demo data only — no tenant data, no pipeline contact; submissions separately off with no persistence sink. See [LOCKSMITH_PILOT_SPEC.md](LOCKSMITH_PILOT_SPEC.md) |
+| `/client/locksmith-onboarding/:sessionId/*` | routes/locksmith-onboarding.js | client | Locksmith onboarding review + approval (M2). **Dormant**: 404s unless `LOCKSMITH_ONBOARDING_ENABLED="true"`. See [LOCKSMITH_ONBOARDING_SPEC.md](LOCKSMITH_ONBOARDING_SPEC.md) |
+| `/locksmith-founder/*` | routes/locksmith-onboarding.js | operator | Founder console for onboarding sessions (M2) + the only transcript-ingestion entry point. Dormant with the same flag; cannot approve on a client's behalf |
 | `/health` | inline | public | Liveness probe |
 
 ## 4. The pipeline (the core value path)

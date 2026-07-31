@@ -231,6 +231,25 @@ h3 { font-size: 17px; }
 .step__title { margin: 0 0 4px; }
 .step__detail { margin: 0; color: var(--muted); font-size: 15px; }
 
+/* ── Upcoming-feature labelling ──────────────────────────────────── */
+/* Anything not yet built says so, in text, before the heading that describes
+   it — never a colour-only "soon" badge. */
+
+.upcoming-tag {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--standard);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.upcoming-tag__dot { font-size: 10px; }
+
+.section__note { font-size: 15px; color: var(--muted); margin: 16px 0 0; max-width: 62ch; }
+
 /* ── Demo labelling ──────────────────────────────────────────────── */
 
 .demo-tag {

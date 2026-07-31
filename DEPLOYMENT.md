@@ -58,6 +58,22 @@ startup. Semantics owned by
 | `LOCKSMITH_SETUP_PRICE` / `LOCKSMITH_MONTHLY_PRICE` / `LOCKSMITH_INCLUDED_DAYS` | pricing section | Whole dollars / days; a non-positive-integer value falls back to 149 / 299 / 14. |
 | `LOCKSMITH_PILOT_LIMIT` / `LOCKSMITH_PILOT_REGION` | founding-pilot line | Default 3 / `Melbourne`. |
 
+### Locksmith autonomous onboarding (M2 — added 2026-08)
+
+Client review/approval + founder console. **Dormant by default and gated
+separately from the public page**: enabling the shop window never enables the
+workshop. Semantics owned by
+[docs/LOCKSMITH_ONBOARDING_SPEC.md](docs/LOCKSMITH_ONBOARDING_SPEC.md).
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `LOCKSMITH_ONBOARDING_ENABLED` | review + founder routes | Strict string `"true"` mounts them; anything else (including unset) = every path 404s before any auth runs. **Unset in production today.** |
+
+**Deploy precondition:** these routes also need
+`supabase/sql/lpm2_create_locksmith_onboarding.sql` applied by a human first.
+Until then every adapter fails closed with "locksmith onboarding tables not
+provisioned", so enabling the flag alone cannot half-open the feature.
+
 Legacy/unused: `TWILIO_NUMBER`, `TRANSCRIPT_RECIPIENT_NUMBER` (only referenced by dead `src/services/sms.js`).
 
 ## Deploy order (matters)

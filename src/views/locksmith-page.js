@@ -139,6 +139,34 @@ function renderScenarios(scenarios, demoLabel) {
     </section>`;
 }
 
+// ── Setup (autonomous onboarding — upcoming, not live) ──────────────
+
+function renderSetup(demo) {
+  // `setup-step` rather than a bare `step`: the two step lists on this page are
+  // different things (how a CALL is handled vs how SETUP works) and must stay
+  // distinguishable to styles and tests alike.
+  const steps = demo.SETUP_STEPS.map(
+    (s) => `
+      <li class="step setup-step">
+        <span class="step__number" aria-hidden="true">${escapeHtml(String(s.step))}</span>
+        <h3 class="step__title">${escapeHtml(s.title)}</h3>
+        <p class="step__detail">${escapeHtml(s.detail)}</p>
+      </li>`
+  ).join("");
+
+  return `
+    <section id="setup" class="section" aria-labelledby="setup-heading">
+      <p class="upcoming-tag"><span class="upcoming-tag__dot" aria-hidden="true">●</span> ${escapeHtml(demo.SETUP_STATUS_LABEL)}</p>
+      <h2 id="setup-heading">Setting it up takes one conversation</h2>
+      <p class="section__lead">${escapeHtml(demo.SETUP_SUMMARY)}</p>
+      <ol class="steps">${steps}</ol>
+      <p class="section__note">
+        You never write a prompt or configure an AI. If AIDA gets something wrong, you
+        correct it on the review page and nothing goes live until you say so.
+      </p>
+    </section>`;
+}
+
 // ── 4. Capabilities ─────────────────────────────────────────────────
 
 function renderCapabilities(capabilities) {
@@ -502,6 +530,7 @@ function renderLocksmithPage({ config, demo, fields }) {
   <nav class="site-nav" aria-label="Page sections">
     <ul>
       <li><a href="#how-it-works">How it works</a></li>
+      <li><a href="#setup">Setting up</a></li>
       <li><a href="#example-calls">Example calls</a></li>
       <li><a href="#pricing">Pricing</a></li>
       <li><a href="${escapeAttr(config.cta.pilotAnchor)}">Join the pilot</a></li>
@@ -513,6 +542,7 @@ function renderLocksmithPage({ config, demo, fields }) {
 ${renderHero(config)}
 ${renderHowItWorks(demo.HOW_IT_WORKS)}
 ${renderScenarios(demo.SCENARIOS, demo.DEMO_LABEL)}
+${renderSetup(demo)}
 ${renderCapabilities(demo.CAPABILITIES)}
 ${renderExampleCalls(demo.EXAMPLE_CALLS, demo.DEMO_LABEL)}
 ${renderDashboard(demo.DASHBOARD)}
