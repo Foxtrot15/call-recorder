@@ -28,6 +28,13 @@ app.use(require("./routes/locksmith"));
 // without LOCKSMITH_ONBOARDING_ENABLED="true" every path 404s before any auth
 // runs (see docs/LOCKSMITH_ONBOARDING_SPEC.md).
 app.use(require("./routes/locksmith-onboarding"));
+// Locksmith client portal (M5): the authenticated day-to-day surface, entirely
+// behind requireClientAuth. Also dormant — without LOCKSMITH_PORTAL_ENABLED
+// ="true" every path 404s before any auth runs. The portal flag is deliberately
+// independent of the public-page flag: the marketing shell and a client's live
+// call history are different surfaces with different risk, and switching one on
+// must never switch the other on (see docs/LOCKSMITH_CLIENT_PORTAL_SPEC.md).
+app.use(require("./routes/locksmith-portal"));
 // Retell webhook (M3). Dormant: without RETELL_ENABLED and
 // RETELL_WEBHOOK_ENABLED both "true" the path 404s before any handler runs.
 // Mounted with its own express.raw body parser so signature verification sees

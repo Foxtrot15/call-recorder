@@ -1,0 +1,447 @@
+/* AIDA Locksmith Receptionist — client portal (M5).
+ *
+ * Loaded AFTER onboarding.css, which supplies the palette, typography, cards,
+ * buttons, timeline and chip base. This file adds only what the portal needs:
+ * the tab nav, the stat grid, the call table's responsive behaviour, and the
+ * enquiry/request lists.
+ *
+ * Read on a phone, often one-handed, often outdoors, often by someone who has
+ * just got out of a van. So: 16px minimum body text, 44px minimum touch
+ * targets, and no state communicated by colour alone — every chip carries a
+ * text label and a non-colour marker.
+ *
+ * Scoped to body.locksmith-portal throughout, so nothing here reaches the
+ * operator dashboard or the M1 public page.
+ */
+
+/* ── Tab navigation ──────────────────────────────────────────────── */
+body.locksmith-portal .portal-nav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  /* Horizontally scrollable on narrow screens rather than wrapping into a
+   * two-row nav that pushes the content below the fold on a 320px phone. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.locksmith-portal .portal-nav ul {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0 0.75rem;
+  list-style: none;
+  min-width: max-content;
+}
+
+body.locksmith-portal .portal-nav__link {
+  display: block;
+  padding: 0.85rem 0.75rem;
+  min-height: 44px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  border-bottom: 3px solid transparent;
+}
+
+body.locksmith-portal .portal-nav__link:hover { color: var(--text); }
+
+body.locksmith-portal .portal-nav__link--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* The active tab is marked by weight, colour AND the underline, so it survives
+ * a monochrome display. aria-current carries it for screen readers. */
+body.locksmith-portal .portal-nav__badge {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0.1em 0.4em;
+  margin-left: 0.25rem;
+  background: var(--attention);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+/* ── Status banner ───────────────────────────────────────────────── */
+body.locksmith-portal .status-banner {
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+body.locksmith-portal .status-banner--live {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+}
+
+body.locksmith-portal .status-banner--setup {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+body.locksmith-portal .status-banner__headline {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+body.locksmith-portal .status-banner__next,
+body.locksmith-portal .status-banner__progress {
+  margin: 0.5rem 0 0;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+/* ── Stats ───────────────────────────────────────────────────────── */
+body.locksmith-portal .stat-grid {
+  display: grid;
+  /* auto-fit rather than a fixed count: five stats reflow to 2 / 3 / 5 across
+   * without a breakpoint per layout. */
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+body.locksmith-portal .stat {
+  padding: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+body.locksmith-portal .stat dt {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+
+body.locksmith-portal .stat dd {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+body.locksmith-portal .stat-note {
+  margin: 0 0 1rem;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+/* ── Chips ───────────────────────────────────────────────────────── */
+body.locksmith-portal .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.2em 0.6em;
+  margin: 0 0.3em 0.3em 0;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+body.locksmith-portal .chip__marker { font-weight: 700; }
+
+body.locksmith-portal .chip--good      { background: var(--ok-soft);        color: var(--ok);        border-color: var(--ok); }
+body.locksmith-portal .chip--attention { background: var(--attention-soft); color: var(--attention); border-color: var(--attention); }
+body.locksmith-portal .chip--bad       { background: var(--blocking-soft);  color: var(--blocking);  border-color: var(--blocking); }
+body.locksmith-portal .chip--neutral   { background: var(--neutral-soft);   color: var(--neutral);   border-color: var(--neutral); }
+body.locksmith-portal .chip--muted     { background: var(--surface-alt);    color: var(--muted);     border-color: var(--border); }
+
+/* ── Call table ──────────────────────────────────────────────────── */
+body.locksmith-portal .calls-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+
+body.locksmith-portal .calls-table thead { display: none; }
+
+/* Card-per-row below 900px. A four-column table at 375px is unreadable, and
+ * the M1 review found 768px still too cramped for tabular mode. */
+body.locksmith-portal .calls-table tr {
+  display: block;
+  padding: 0.85rem;
+  margin-bottom: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+body.locksmith-portal .calls-table tr.row--urgent {
+  border-left: 4px solid var(--attention);
+}
+
+body.locksmith-portal .calls-table td {
+  display: block;
+  padding: 0.2rem 0;
+  border: none;
+}
+
+body.locksmith-portal .calls-table td::before {
+  content: attr(data-label) ": ";
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+body.locksmith-portal .caller-name { font-weight: 600; }
+body.locksmith-portal .caller-name--unknown { font-weight: 400; color: var(--muted); font-style: italic; }
+body.locksmith-portal .caller-number,
+body.locksmith-portal .caller-suburb {
+  display: inline-block;
+  margin-left: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+body.locksmith-portal .call-summary {
+  margin: 0.35rem 0 0;
+  font-size: 0.93rem;
+  color: var(--muted);
+}
+
+@media (min-width: 900px) {
+  body.locksmith-portal .calls-table thead { display: table-header-group; }
+  body.locksmith-portal .calls-table tr {
+    display: table-row;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+  }
+  body.locksmith-portal .calls-table tr.row--urgent {
+    border-left: none;
+    background: var(--attention-soft);
+  }
+  body.locksmith-portal .calls-table th,
+  body.locksmith-portal .calls-table td {
+    display: table-cell;
+    padding: 0.7rem 0.6rem;
+    vertical-align: top;
+  }
+  body.locksmith-portal .calls-table th {
+    text-align: left;
+    font-size: 0.85rem;
+    color: var(--muted);
+    border-bottom: 2px solid var(--border-strong);
+  }
+  body.locksmith-portal .calls-table td::before { content: none; }
+  body.locksmith-portal .caller-number,
+  body.locksmith-portal .caller-suburb { display: block; margin-left: 0; }
+}
+
+/* ── Enquiry + request lists ─────────────────────────────────────── */
+body.locksmith-portal .enquiry-list,
+body.locksmith-portal .request-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+body.locksmith-portal .enquiry,
+body.locksmith-portal .request {
+  padding: 0.9rem;
+  margin-bottom: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+body.locksmith-portal .enquiry--attention { border-left: 4px solid var(--attention); }
+
+body.locksmith-portal .enquiry__head,
+body.locksmith-portal .request__head {
+  margin: 0 0 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+body.locksmith-portal .enquiry__who,
+body.locksmith-portal .request__what {
+  margin: 0 0 0.3rem;
+  font-weight: 600;
+}
+
+body.locksmith-portal .enquiry__summary,
+body.locksmith-portal .enquiry__callback {
+  margin: 0 0 0.3rem;
+  font-size: 0.93rem;
+  color: var(--muted);
+}
+
+/* ── Sections + misc ─────────────────────────────────────────────── */
+body.locksmith-portal .section-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0;
+}
+
+body.locksmith-portal .section-list__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+body.locksmith-portal .section-list__marker { font-weight: 700; color: var(--accent); }
+
+body.locksmith-portal .section-list__flag {
+  font-size: 0.82rem;
+  color: var(--blocking);
+  font-weight: 600;
+}
+
+body.locksmith-portal .empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  background: var(--surface-alt);
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+body.locksmith-portal .empty__message { margin: 0 0 0.3rem; font-weight: 600; }
+body.locksmith-portal .empty__detail  { margin: 0; font-size: 0.93rem; color: var(--muted); }
+
+body.locksmith-portal .callout {
+  padding: 0.9rem;
+  margin: 0 0 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+body.locksmith-portal .callout--attention {
+  background: var(--attention-soft);
+  border-color: var(--attention);
+}
+
+body.locksmith-portal .callout p { margin: 0 0 0.4rem; }
+body.locksmith-portal .callout p:last-child { margin-bottom: 0; }
+
+body.locksmith-portal .fwd-number {
+  font-size: 1.05rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-alt);
+  border-radius: 6px;
+}
+
+body.locksmith-portal .fwd-number--pending {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+body.locksmith-portal .cost-note {
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-alt);
+  border-radius: 6px;
+  font-size: 0.93rem;
+}
+
+body.locksmith-portal .progress-line { font-size: 1.05rem; }
+
+body.locksmith-portal .table-note,
+body.locksmith-portal .fine-print {
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+body.locksmith-portal .failure-list { padding-left: 1.2rem; }
+body.locksmith-portal .failure-list li { margin-bottom: 0.5rem; }
+
+body.locksmith-portal .timeline__owner {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+body.locksmith-portal .timeline__detail {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+/* ── Cards and footer ────────────────────────────────────────────── */
+/* onboarding.css styles `.review-section` and `.footer` for the M2 review
+ * page's shape. The portal's panels are a different shape (a titled block with
+ * a status line), so they get their own rule rather than borrowing one whose
+ * meaning would then be two things. */
+body.locksmith-portal .card {
+  padding: 1rem;
+  margin: 0 0 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+body.locksmith-portal .card > h2 { margin-top: 0; }
+
+body.locksmith-portal .card__status {
+  margin: 0 0 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+body.locksmith-portal .site-footer {
+  padding: 1.25rem 1rem 2rem;
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+/* Secondary metadata inside list rows: present but never competing with the
+ * row's actual subject. */
+body.locksmith-portal .enquiry__when,
+body.locksmith-portal .request__when,
+body.locksmith-portal .request__source {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+body.locksmith-portal .timeline__label,
+body.locksmith-portal .section-list__label {
+  font-weight: 600;
+}
+
+body.locksmith-portal .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Respect a user's reduced-motion preference; nothing here animates today, but
+ * the rule keeps that true if a transition is added later. */
+@media (prefers-reduced-motion: reduce) {
+  body.locksmith-portal * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

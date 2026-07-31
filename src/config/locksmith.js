@@ -48,6 +48,15 @@ function isEnquiryFormEnabled(env = process.env) {
   return env.LOCKSMITH_ENQUIRY_ENABLED === "true";
 }
 
+// Client portal (M5): off unless explicitly switched on. Independent of the
+// public page flag — the marketing shell and the authenticated portal are
+// different surfaces with different risk, and turning one on must never turn
+// the other on. Every portal route sits behind requireClientAuth as well, so
+// this flag governs existence, not authorisation.
+function isClientPortalEnabled(env = process.env) {
+  return env.LOCKSMITH_PORTAL_ENABLED === "true";
+}
+
 // Router-level gate, same contract as voipRouterGate: next("router") exits the
 // whole router so a disabled deploy 404s exactly as if the file did not exist.
 function locksmithRouterGate(env = process.env) {
@@ -57,11 +66,20 @@ function locksmithRouterGate(env = process.env) {
   };
 }
 
+// Same contract, for the M5 client portal.
+function locksmithPortalGate(env = process.env) {
+  return function gate(req, res, next) {
+    if (!isClientPortalEnabled(env)) return next("router");
+    next();
+  };
+}
+
 // ── Static product facts (not env-tunable; changing these is a code change) ──
 const PRODUCT_NAME = "AIDA Locksmith Receptionist";
 const PROVIDER_NAME = "Niche Drops";
 const PUBLIC_PATH = "/locksmith-receptionist";
 const ENQUIRY_PATH = `${PUBLIC_PATH}/enquiry`;
+const PORTAL_PATH = "/client/locksmith";
 
 // Provisional founding-pilot pricing. Amounts are integers in whole dollars;
 // the renderer formats them, so there is exactly one numeric source.
@@ -148,9 +166,12 @@ function getLocksmithConfig(env = process.env) {
       demoHref: isPlaceholder(demoPhone) ? null : `tel:${demoPhone.replace(/[^\d+]/g, "")}`,
     }),
 
+    portalPath: PORTAL_PATH,
+
     flags: Object.freeze({
       pageEnabled: isLocksmithPilotEnabled(env),
       enquiryEnabled: isEnquiryFormEnabled(env),
+      portalEnabled: isClientPortalEnabled(env),
     }),
   });
 }
@@ -172,7 +193,9 @@ module.exports = {
   getLocksmithConfig,
   isLocksmithPilotEnabled,
   isEnquiryFormEnabled,
+  isClientPortalEnabled,
   locksmithRouterGate,
+  locksmithPortalGate,
   unresolvedPlaceholders,
   isPlaceholder,
   PLACEHOLDER_PREFIX,
@@ -180,4 +203,5 @@ module.exports = {
   PROVIDER_NAME,
   PUBLIC_PATH,
   ENQUIRY_PATH,
+  PORTAL_PATH,
 };

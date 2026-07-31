@@ -64,6 +64,8 @@ validated; **operator** = `requireLogin`; **client** = `requireClientAuth`;
 | `/client/locksmith-onboarding/:sessionId/*` | routes/locksmith-onboarding.js | client | Locksmith onboarding review + approval (M2). **Dormant**: 404s unless `LOCKSMITH_ONBOARDING_ENABLED="true"`. See [LOCKSMITH_ONBOARDING_SPEC.md](LOCKSMITH_ONBOARDING_SPEC.md) |
 | `/locksmith-founder/*` | routes/locksmith-onboarding.js | operator | Founder console for onboarding sessions (M2) + the only transcript-ingestion entry point. Dormant with the same flag; cannot approve on a client's behalf |
 | `/locksmith-founder/provisioning/*` | routes/locksmith-onboarding.js | operator | Retell provisioning preview, dry-run and mock execution (M3). Dormant with the onboarding flag; live execution is hidden unless every Retell gate passes |
+| `/client/locksmith` | routes/locksmith-portal.js | client | Locksmith client portal (M5), 7 server-rendered tabs + change-request, notification and forwarding POSTs. **Dormant**: 404s unless `LOCKSMITH_PORTAL_ENABLED="true"` — a flag deliberately independent of the public-page flag. Reads `calls` with a STRICT tenant scope (no legacy `default`/NULL widening). See [LOCKSMITH_CLIENT_PORTAL_SPEC.md](LOCKSMITH_CLIENT_PORTAL_SPEC.md) |
+| `/locksmith-founder/clients[/:clientId]` | routes/locksmith-portal.js | operator | Client-operations view (M5). Cross-tenant reads, GET-only by design: there is no operator path that approves a client's change or alters their receptionist |
 | `/webhooks/retell` | routes/retell-webhook.js | signature | Retell event webhook (M3). **Dormant**: 404s unless `RETELL_ENABLED` and `RETELL_WEBHOOK_ENABLED` are both `"true"`. Mounted with its own `express.raw` parser so signature verification sees the exact bytes. See [RETELL_INTEGRATION_SPEC.md](RETELL_INTEGRATION_SPEC.md) |
 | `/health` | inline | public | Liveness probe |
 
@@ -151,6 +153,23 @@ Also: RPC `claim_recording(p_call_sid, p_recording_sid)`; Storage bucket
 `voicemail-greetings`. **RLS is currently disabled** on these tables (see
 [../SECURITY_REVIEW.md](../SECURITY_REVIEW.md) and
 [../supabase/sql/RLS_APPLY_CHECKLIST.md](../supabase/sql/RLS_APPLY_CHECKLIST.md)).
+
+### Locksmith pilot tables (written, **none applied**)
+
+All are additive, enable RLS in the same transaction with no policies
+(service_role only), and are inert while their feature flags are off. Apply in
+file order; each references the one before it.
+
+| Migration | Tables | Spec |
+|---|---|---|
+| `lpm2_create_locksmith_onboarding.sql` | `locksmith_onboarding_sessions`, `locksmith_profile_versions` | [M2](LOCKSMITH_ONBOARDING_SPEC.md) |
+| `lpm3_create_retell_provisioning.sql` | provider resources + provisioning plans | [M3](RETELL_INTEGRATION_SPEC.md) |
+| `lpm4_create_onboarding_call_runtime.sql` | `onboarding_call_consents`, `onboarding_calls` | [M4](LOCKSMITH_ONBOARDING_RUNTIME_SPEC.md) |
+| `lpm5_create_client_portal.sql` | `locksmith_change_requests`, `locksmith_notification_settings`, `locksmith_call_forwarding` | [M5](LOCKSMITH_CLIENT_PORTAL_SPEC.md) |
+
+The portal adds **no** call or enquiry table: its call and enquiry lists are
+projections over the existing `calls` table, so there is exactly one count of
+any given call — including the one billing will use.
 
 ## 7. Authentication model
 
