@@ -170,3 +170,43 @@ operational behaviour are:
 **None of this has been validated against a live Retell account.** See
 [docs/RETELL_SANDBOX_VALIDATION_PLAN.md](docs/RETELL_SANDBOX_VALIDATION_PLAN.md)
 for the procedure, prerequisites, billable actions and cleanup.
+
+### Retell web-call sandbox (M7B — dormant, never in production)
+
+`scripts/retell-web-sandbox.js` validates the corrected Retell contracts against
+a real account without buying a number or placing a telephone call. It has not
+been run.
+
+**It is gated separately from the telephone-call path, and refuses to run while
+`RETELL_LIVE_CALLS_ENABLED=true`.** `RETELL_LIVE_CALLS_ENABLED` governs real
+telephone dialling and requires an outbound number; a web call is browser audio
+with no number and no carrier. Testing a browser microphone must never require
+switching on the ability to ring real telephones.
+
+Required together, all strict-parse:
+`RETELL_ENABLED`, `RETELL_LIVE_WRITES_ENABLED`, `RETELL_DRY_RUN=false`,
+`RETELL_SANDBOX_WEB_CALL_ENABLED`, `RETELL_SANDBOX_EXECUTE`,
+`RETELL_ALLOWED_TAG=dev`, `RETELL_API_KEY`, `RETELL_DEFAULT_VOICE_ID`,
+`RETELL_DEFAULT_LANGUAGE`, `NODE_ENV` not `production`, recording and webhooks
+off.
+
+**Not required:** any phone number, any webhook URL, or `ANTHROPIC_API_KEY`.
+
+**No SDK is required.** Server-side calls use Node 18+ built-in `fetch`; the optional `retell-sdk` is for webhook signature verification only, and the sandbox configures no webhook. The official browser SDK (`retell-client-js-sdk`) is needed only for the later full-browser proof, and is installed outside this repository.
+
+An unattended run proves the **create-web-call API path**. It does **not** prove microphone or audio behaviour, because no browser joins — the call will move to `not_connected`/`error` once the ~30-second token window passes, which is expected. Dashboard testing and AIDA API testing are distinct proofs.
+
+The default invocation contacts nothing and spends nothing:
+
+    node scripts/retell-web-sandbox.js
+
+It creates temporary resources and one billable web call only with `--execute`.
+Resources are cleaned up automatically; keeping them needs both
+`RETELL_SANDBOX_KEEP_RESOURCES=true` **and** `--keep-resources`, so a forgotten
+environment variable cannot leave paid resources alive on its own.
+
+A manifest of ids and timings — never the API key, never an access token, never
+a transcript — is written under the OS temp directory, outside the repository.
+
+Full procedure, browser path and cleanup:
+[docs/RETELL_SANDBOX_VALIDATION_PLAN.md](docs/RETELL_SANDBOX_VALIDATION_PLAN.md).

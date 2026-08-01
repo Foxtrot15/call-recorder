@@ -446,3 +446,49 @@ API: whether the compiled `general_prompt` is accepted at its length; whether
 `en-AU` is a supported locale; whether the multipart encoding is accepted
 verbatim; whether an inbound webhook actually injects variables end to end;
 real KB processing time; and error/rate-limit shapes.
+
+## M7B — sandbox endpoints confirmed (2026-08-01)
+
+Additional pages reviewed for the web-call sandbox:
+
+| Page | Confirmed |
+|---|---|
+| `/api-references/get-knowledge-base` | `GET /get-knowledge-base/{id}`; status is one of `in_progress`, `complete`, `error`, `refreshing_in_progress` |
+| `/api-references/delete-knowledge-base` | `DELETE /delete-knowledge-base/{id}` → 204 |
+| `/api-references/delete-retell-llm` | `DELETE /delete-retell-llm/{id}` → 204, **removes all versions** |
+| `/api-references/delete-agent` | `DELETE /delete-agent/{id}` → 204 |
+| `/api-references/get-agent` | `GET /get-agent/{id}`, optional `version` query; returns `response_engine`, `voice_id`, `language`, `version` |
+| `/api-references/create-web-call` | `POST /v2/create-web-call`; `agent_id` required; returns `access_token`, `call_id`, `call_status` |
+| `/deploy/web-call` | Browser SDK is `retell-client-js-sdk`; `startCall({ accessToken })` / `stopCall()`; secure context required |
+
+### Corrections to earlier claims
+
+An earlier draft stated Retell exposes **no** delete endpoint for agents or
+LLMs, and AIDA's rollback model was written around that. **That was wrong.**
+Delete endpoints exist for knowledge bases, LLMs and agents. Rollback by
+re-pointing remains a reasonable strategy for production resources, but it is a
+choice now rather than a limitation.
+
+There is still **no documented delete-call endpoint**, so a web-call record
+cannot be removed.
+
+### Deletion error shape
+
+A missing asset returns **422**, not 404 — the body reads
+"Cannot find requested asset under given api key". Cleanup treats both statuses
+as already-deleted, which is what makes it idempotent.
+
+### The 30-second access token
+
+A web-call access token is invalidated roughly **30 seconds** after creation.
+This is why the sandbox runner does not print it: it could not be pasted into a
+browser in time, and printing an unusable secret is all cost and no benefit. A
+real browser session must create the web call at the moment the browser is
+ready, not in advance.
+
+### Web-call gating
+
+`createWebCall` is guarded by `canWriteLive`, **never** `canPlaceCall`.
+`canPlaceCall` demands `RETELL_LIVE_CALLS_ENABLED` and an outbound telephone
+number; a web call needs neither, and requiring them would mean enabling real
+telephone dialling to test browser audio.

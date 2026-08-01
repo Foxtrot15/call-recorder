@@ -64,6 +64,14 @@ const OPERATIONS = Object.freeze([
   "createOrUpdateAnalysisSchema",
   "bindPhoneNumber",
   "archiveProviderResource",
+  "createWebCall",
+  "getResponseEngine",
+  "getAgent",
+  "deleteKnowledgeBase",
+  "deleteResponseEngine",
+  "deleteAgent",
+  "addKnowledgeBaseSources",
+  "getKnowledgeBase",
   "verifyWebhook",
 ]);
 

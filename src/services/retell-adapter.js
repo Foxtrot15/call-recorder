@@ -60,6 +60,19 @@ const ENDPOINTS = Object.freeze({
   createAgent: { method: "POST", path: "/create-agent" },
   updateAgent: { method: "PATCH", path: "/update-agent/:id" },
   createPhoneCall: { method: "POST", path: "/v2/create-phone-call" },
+  // Web call. A DIFFERENT capability from createPhoneCall: browser audio, no
+  // number, no dialling, no carrier. Gated separately (config/retell-sandbox.js)
+  // precisely so testing a browser microphone never requires switching on the
+  // ability to ring a real telephone.
+  createWebCall: { method: "POST", path: "/v2/create-web-call" },
+  // Retrieval + deletion, verified 2026-08-01. Deletes return 204; a missing
+  // resource returns 422 ("Cannot find requested asset under given api key"),
+  // not 404 — which is why cleanup treats 422 as already-gone.
+  getResponseEngine: { method: "GET", path: "/get-retell-llm/:id" },
+  getAgent: { method: "GET", path: "/get-agent/:id" },
+  deleteKnowledgeBase: { method: "DELETE", path: "/delete-knowledge-base/:id" },
+  deleteResponseEngine: { method: "DELETE", path: "/delete-retell-llm/:id" },
+  deleteAgent: { method: "DELETE", path: "/delete-agent/:id" },
   retrieveCall: { method: "GET", path: "/v2/get-call/:id" },
   bindPhoneNumber: { method: "PATCH", path: "/update-phone-number/:id" },
 });
@@ -214,6 +227,21 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
     createAgent: (r) => request("createAgent", { body: r.payload, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
     updateAgent: (r) => request("updateAgent", { body: r.payload, pathParam: r.providerId, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
     bindPhoneNumber: (r) => request("bindPhoneNumber", { body: r.payload, pathParam: r.providerId, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
+
+    // ── Retrieval ────────────────────────────────────────────────────
+    getResponseEngine: (r) => request("getResponseEngine", { pathParam: r.providerId, capability: canWriteLive }),
+    getAgent: (r) => request("getAgent", { pathParam: r.providerId, capability: canWriteLive }),
+
+    // ── Web call ─────────────────────────────────────────────────────
+    // Guarded by canWriteLive, NOT canPlaceCall. canPlaceCall demands an
+    // outbound telephone number and the live-phone-call flag; a web call needs
+    // neither and must never require enabling telephone dialling.
+    createWebCall: (r) => request("createWebCall", { body: r.payload, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
+
+    // ── Deletion ─────────────────────────────────────────────────────
+    deleteKnowledgeBase: (r) => request("deleteKnowledgeBase", { pathParam: r.providerId, capability: canWriteLive }),
+    deleteResponseEngine: (r) => request("deleteResponseEngine", { pathParam: r.providerId, capability: canWriteLive }),
+    deleteAgent: (r) => request("deleteAgent", { pathParam: r.providerId, capability: canWriteLive }),
 
     // Retell has no standalone analysis-schema resource: post_call_analysis_data
     // is a field on the agent. Modelled as unsupported here so the domain keeps
