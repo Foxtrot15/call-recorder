@@ -35,10 +35,25 @@ const {
 } = require("./voice-platform-port");
 const { canWriteLive, canPlaceCall, redactSecrets } = require("../config/retell");
 
-// Documented paths. create-phone-call is the only /v2 endpoint today.
+// Documented paths, verified against docs.retellai.com on 2026-08-01.
+//
+// TRANSPORT IS NOT UNIFORM. /create-knowledge-base and
+// /add-knowledge-base-sources are multipart/form-data; everything else is JSON.
+// Sending the KB as ordinary JSON — which this adapter previously did — is
+// rejected by the provider, so `contentType` is now explicit per endpoint and
+// the request builder refuses to guess.
+//
+// THERE IS NO KNOWLEDGE-BASE UPDATE ENDPOINT. The documented surface is create,
+// add-sources and delete-source; a wholesale PATCH does not exist. The previous
+// `updateKnowledgeBase: PATCH /update-knowledge-base/:id` was invented. A KB
+// change is therefore CREATE-AND-REPOINT: build a new knowledge base, attach it
+// to a new response engine, and leave the old one to be superseded in the
+// registry — the same shape as the rest of AIDA's rollback model.
 const ENDPOINTS = Object.freeze({
-  createKnowledgeBase: { method: "POST", path: "/create-knowledge-base" },
-  updateKnowledgeBase: { method: "PATCH", path: "/update-knowledge-base/:id" },
+  createKnowledgeBase: { method: "POST", path: "/create-knowledge-base", contentType: "multipart/form-data" },
+  addKnowledgeBaseSources: { method: "POST", path: "/add-knowledge-base-sources/:id", contentType: "multipart/form-data" },
+  deleteKnowledgeBaseSource: { method: "DELETE", path: "/delete-knowledge-base-source/:id/source/:sourceId" },
+  getKnowledgeBase: { method: "GET", path: "/get-knowledge-base/:id" },
   createResponseEngine: { method: "POST", path: "/create-retell-llm" },
   updateResponseEngine: { method: "PATCH", path: "/update-retell-llm/:id" },
   createConversationFlow: { method: "POST", path: "/create-conversation-flow" },
@@ -192,7 +207,8 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
     provider: "retell",
 
     createKnowledgeBase: (r) => request("createKnowledgeBase", { body: r.payload, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
-    updateKnowledgeBase: (r) => request("updateKnowledgeBase", { body: r.payload, pathParam: r.providerId, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
+    addKnowledgeBaseSources: (r) => request("addKnowledgeBaseSources", { body: r.payload, pathParam: r.providerId, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
+    getKnowledgeBase: (r) => request("getKnowledgeBase", { pathParam: r.providerId, capability: canWriteLive }),
     createResponseEngine: (r) => request("createResponseEngine", { body: r.payload, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
     updateResponseEngine: (r) => request("updateResponseEngine", { body: r.payload, pathParam: r.providerId, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),
     createAgent: (r) => request("createAgent", { body: r.payload, idempotencyKey: r.idempotencyKey, capability: canWriteLive }),

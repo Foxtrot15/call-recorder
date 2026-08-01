@@ -214,6 +214,83 @@ function validateChange(change) {
     return { ok: true, change: out };
   }
 
+  if (change.target === "serviceAreas") {
+    // Validated HERE, not deferred.
+    //
+    // serviceAreas is safetyCritical, and buildDraftFromChanges assigns
+    // `draft.serviceAreas.primary = value` directly. Letting a free-form value
+    // through meant an object like { primary: [...] } was accepted and then
+    // written as a single list ELEMENT — producing a profile whose service
+    // areas were one nameless object. The receptionist would then have matched
+    // no suburb at all while the change request looked approved and applied.
+    //
+    // Two accepted shapes, both meaning "the COMPLETE resulting state":
+    //
+    //   ["Brunswick", "Frankston"]                     → primary only
+    //   { primary: [...], declined: [...] }            → both lists
+    //
+    // The declined list matters more than it looks. A suburb can appear in
+    // BOTH lists, and the profile validator correctly rejects that as a
+    // contradiction — so adding an area the business previously refused must
+    // also remove the refusal. The M7 demonstration hit exactly this: the
+    // seeded business had declined Frankston, and "we now service Frankston"
+    // is meaningless unless it clears that.
+    //
+    // Callers that think in deltas resolve theirs against the approved profile
+    // first — see locksmith-change-extraction.js.
+    const raw = change.value;
+    const isObject = raw && typeof raw === "object" && !Array.isArray(raw);
+    const primaryRaw = Array.isArray(raw) ? raw : isObject ? raw.primary : null;
+    const declinedRaw = isObject ? raw.declined : undefined;
+
+    if (!Array.isArray(primaryRaw)) {
+      return { ok: false, code: REFUSAL_CODES.invalidValue, message: "Service areas must be supplied as a complete list of suburb names." };
+    }
+
+    const cleanList = (list, label) => {
+      const cleaned = [];
+      for (const item of list) {
+        if (typeof item !== "string") return { ok: false, message: `Every ${label} must be a suburb name.` };
+        const name = item.replace(/\s+/g, " ").trim();
+        if (name.length < 2 || name.length > 60) return { ok: false, message: `"${name.slice(0, 30)}" does not look like a suburb name.` };
+        cleaned.push(name);
+      }
+      // Case-insensitive de-duplication, keeping first-seen spelling.
+      const seen = new Set();
+      return { ok: true, list: cleaned.filter((s) => (seen.has(s.toLowerCase()) ? false : (seen.add(s.toLowerCase()), true))) };
+    };
+
+    const primary = cleanList(primaryRaw, "service area");
+    if (!primary.ok) return { ok: false, code: REFUSAL_CODES.invalidValue, message: primary.message };
+    if (!primary.list.length) {
+      // An empty list disables the business without saying so.
+      return { ok: false, code: REFUSAL_CODES.invalidValue, message: "You must service at least one area." };
+    }
+
+    let declined = null;
+    if (declinedRaw !== undefined) {
+      if (!Array.isArray(declinedRaw)) {
+        return { ok: false, code: REFUSAL_CODES.invalidValue, message: "Declined areas must be supplied as a list." };
+      }
+      const d = cleanList(declinedRaw, "declined area");
+      if (!d.ok) return { ok: false, code: REFUSAL_CODES.invalidValue, message: d.message };
+      declined = d.list;
+    }
+
+    // Refuse a contradiction here rather than letting it reach the profile
+    // validator, so the caller gets a message naming the suburb.
+    if (declined) {
+      const covered = new Set(primary.list.map((s) => s.toLowerCase()));
+      const both = declined.filter((s) => covered.has(s.toLowerCase()));
+      if (both.length) {
+        return { ok: false, code: REFUSAL_CODES.invalidValue, message: `${both.join(", ")} cannot be both covered and declined.` };
+      }
+    }
+
+    out.value = declined ? { primary: primary.list, declined } : primary.list;
+    return { ok: true, change: out };
+  }
+
   // Free-form targets (greeting, hours, areas, urgency, pricing wording,
   // caller info, notifications, privacy) are carried as a structured request
   // and validated in full when applied to a draft profile, where the whole
@@ -427,9 +504,20 @@ function buildDraftFromChanges({ approvedProfile, changes }) {
       case "servicesDeclined":
         draft.servicesDeclined = change.value.map((id) => ({ serviceId: id, reason: "Updated by the business owner." }));
         break;
-      case "serviceAreas":
-        draft.serviceAreas.primary = Array.isArray(change.value) ? change.value : [change.value];
+      case "serviceAreas": {
+        // validateChange guarantees the shape: an array (primary only) or
+        // { primary, declined }. Both are complete resulting states.
+        const v = change.value;
+        if (Array.isArray(v)) {
+          draft.serviceAreas.primary = v.slice();
+        } else if (v && typeof v === "object" && Array.isArray(v.primary)) {
+          draft.serviceAreas.primary = v.primary.slice();
+          // declined is a plain list of suburb names. Replaced wholesale, so a
+          // suburb the client now covers simply stops being listed.
+          if (Array.isArray(v.declined)) draft.serviceAreas.declined = v.declined.slice();
+        }
         break;
+      }
       case "callerInfo":
         draft.callerInfo.always = Array.isArray(change.value) ? change.value.filter((f) => S.CALLER_INFO_FIELDS.includes(f)) : draft.callerInfo.always;
         break;

@@ -170,6 +170,8 @@ file order; each references the one before it.
 | `lpm5_create_client_portal.sql` | `locksmith_change_requests`, `locksmith_notification_settings`, `locksmith_call_forwarding` | [M5](LOCKSMITH_CLIENT_PORTAL_SPEC.md) |
 | `lpm6_create_billing.sql` | `billing_accounts`, `billing_usage_periods`, `billing_meter_events` | [M6](LOCKSMITH_BILLING_SPEC.md) |
 
+**Provider boundary (M7B).** The Retell contracts were corrected against official documentation on 2026-08-01: phone binding uses the weighted `inbound_agents` array (not `inbound_agent_id`), the knowledge base is multipart with no update endpoint (a change replaces it), `knowledge_base_ids` attaches to the LLM, and runtime-sensitive dynamic variables are supplied per call via the inbound webhook rather than baked in as defaults. **None of this has been validated against a live provider** — see [RETELL_SANDBOX_VALIDATION_PLAN.md](RETELL_SANDBOX_VALIDATION_PLAN.md).
+
 The portal adds **no** call or enquiry table: its call and enquiry lists are
 projections over the existing `calls` table, so there is exactly one count of
 any given call — including the one billing will use.

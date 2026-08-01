@@ -42,7 +42,7 @@
 const crypto = require("crypto");
 const S = require("./locksmith-profile-schema");
 const { validateProfile, assessProvisioning, normaliseAuNumber } = require("./locksmith-profile");
-const { stableStringify } = require("./voice-platform-port");
+const { stableStringify, ref } = require("./voice-platform-port");
 
 const COMPILER_VERSION = "locksmith-receptionist-compiler-2026-08-01";
 
@@ -576,6 +576,10 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       // through a dynamic variable so a compiled artefact never carries them.
     },
     pricing: { mayMentionPricing: pricing.mayMentionPricing === true, humanConfirmsEveryPrice: pricing.humanConfirmsEveryPrice === true },
+    // The client's recording decision drives Retell's data_storage_setting, so
+    // it has to survive compilation. Only the decision travels — no wording, no
+    // retention text, nothing that would put policy prose into a payload.
+    privacy: { callsMayBeRecorded: (profile.privacy || {}).callsMayBeRecorded === true },
     forbiddenPromises,
     dynamicVariables: buildDynamicVariables({ profile, profileVersion, clientId }),
     tools: buildToolContracts(),
@@ -739,10 +743,25 @@ function toRetellPayload({ compiled, config }) {
   ];
 
   const responseEngine = {
-    // Retell: POST /create-retell-llm
+    // Retell: POST /create-retell-llm (application/json, verified 2026-08-01).
     general_prompt: promptSections.join("\n"),
     begin_message: spec.identity.greeting || null,
-    default_dynamic_variables: spec.dynamicVariables,
+    // Provider contract: every value must be a STRING, and an unsupplied
+    // variable renders as literal {{name}} in the prompt rather than erroring.
+    //
+    // Only STABLE values are sent as defaults. The runtime-sensitive ones —
+    // transfer numbers, on-call state, business status — are stripped, because
+    // a default is baked in at provisioning time and would transfer a 2am
+    // emergency to whoever was on call the day the agent was last built. Those
+    // arrive per call via the inbound webhook (see
+    // services/retell-dynamic-variables.js).
+    default_dynamic_variables: stringifyDynamicVariables(
+      require("./retell-dynamic-variables").splitDefaultsFromRuntime(spec.dynamicVariables).defaults
+    ),
+    // The knowledge base attaches to the RESPONSE ENGINE, not the agent.
+    // Resolved from the knowledge base created earlier in the same plan; the
+    // compiled artefact never carries a provider id.
+    knowledge_base_ids: [ref("receptionist_knowledge", "knowledge_base")],
     general_tools: spec.tools.map((tool) => ({
       type: "custom",
       name: tool.name,
@@ -753,22 +772,106 @@ function toRetellPayload({ compiled, config }) {
     })),
   };
 
+  // Retell: POST /create-agent (verified 2026-08-01).
+  // response_engine and voice_id are the only REQUIRED fields.
   const agent = {
-    // Retell: POST /create-agent. response_engine + voice_id are the only
-    // required fields; llm_id is filled in after the engine exists.
     agent_name: `aida-receptionist-${spec.clientId}-v${spec.profileVersion}`,
-    response_engine: { type: config.responseEngineType || "retell-llm", llm_id: null },
+    // llm_id is a provider id that does not exist until the response engine has
+    // been created, so it is emitted as a reference and resolved during
+    // execution. It was previously hard-coded to null with a comment saying it
+    // would be "filled in after the engine exists" — nothing filled it in, so
+    // every agent creation would have gone to Retell with a null engine.
+    response_engine: { type: config.responseEngineType || "retell-llm", llm_id: ref("receptionist_agent", "response_engine") },
+    // REQUIRED by the provider. Emitting null here produced a request that
+    // could only ever be rejected; a missing voice is now a compile issue
+    // (see the check in compileReceptionist) rather than a runtime surprise.
     voice_id: config.defaultVoiceId || null,
     language: config.defaultLanguage || "en-AU",
     webhook_url: config.webhookBaseUrl ? `${config.webhookBaseUrl}/webhooks/retell` : null,
+    // Subscribe only to what routes/retell-webhook.js actually handles.
+    // Receiving events we ignore is noise that hides the ones we do not.
+    webhook_events: ["call_started", "call_ended", "call_analyzed"],
     post_call_analysis_data: buildReceptionistAnalysisFields(),
+    // Privacy is the client's decision, so it travels from their approved
+    // profile rather than being a deployment-wide default. A client who did not
+    // consent to recording gets the stricter provider-side setting too, not
+    // just an instruction asking the agent to behave.
+    data_storage_setting: privacyStorageSetting(spec),
   };
+
+  // The inbound binding: point an EXISTING provider phone number at this agent.
+  //
+  // Emitted only when a number is configured. AIDA does not buy numbers during
+  // a configuration change, and a binding payload with an invented number would
+  // either fail loudly or — worse — bind something that belongs to someone else.
+  // RETELL_INBOUND_DEMO_NUMBER (config.inboundDemoNumber) is the existing
+  // config field for a number AIDA may answer on. Reused rather than adding a
+  // parallel one — a second number setting is a second thing to get wrong.
+  //
+  // CONTRACT (verified against docs.retellai.com/api-references/update-phone-number,
+  // reviewed 2026-08-01): binding uses WEIGHTED AGENT ARRAYS, not a singular id.
+  // `inbound_agent_id` is not a current field. Each entry is an AgentWeight
+  // { agent_id (required), agent_version (optional), weight (required, >0 and
+  // <=1) } and the weights in an array must total exactly 1.
+  //
+  // M7A shipped `inbound_agent_id`. That was wrong, and it was the assumption
+  // flagged as least certain — a binding sent that way would have been rejected
+  // or silently ignored, leaving a provisioned agent no caller could reach.
+  const inboundNumber = config.inboundDemoNumber || null;
+  const inboundBinding = inboundNumber
+    ? {
+        // Retell: PATCH /update-phone-number/{phone_number}
+        phone_number: inboundNumber,
+        inbound_agents: [
+          {
+            agent_id: ref("receptionist_agent", "voice_agent"),
+            // One agent takes every call. Weight is the whole of the array's
+            // required total of 1.
+            weight: 1,
+          },
+        ],
+      }
+    : null;
 
   return Object.freeze({
     responseEngine: Object.freeze(responseEngine),
     agent: Object.freeze(agent),
     knowledge: Object.freeze({ knowledge_base_name: `aida-${spec.clientId}-v${spec.profileVersion}`.slice(0, 39), knowledge_base_texts: [{ title: "Business information", text: spec.knowledge.text }] }),
+    inboundBinding: inboundBinding ? Object.freeze(inboundBinding) : null,
   });
+}
+
+/**
+ * Provider dynamic variables must all be strings (verified 2026-08-01:
+ * "All values in retell_llm_dynamic_variables must be strings. Numbers,
+ * booleans, or other data types are not supported.").
+ *
+ * Coerced rather than rejected, because the values here are already
+ * allow-listed and bounded by buildDynamicVariables; the risk being managed is
+ * a type slip, not hostile input.
+ */
+function stringifyDynamicVariables(vars) {
+  const out = {};
+  for (const [k, v] of Object.entries(vars || {})) {
+    if (v === null || v === undefined) continue;
+    out[k] = typeof v === "string" ? v : String(v);
+  }
+  return out;
+}
+
+/**
+ * Map the client's approved privacy choice onto Retell's storage setting.
+ *
+ * "everything_except_pii" is the default rather than "everything": a locksmith's
+ * callers are members of the public who did not choose this provider, and
+ * storing the minimum that still lets the product work is the defensible
+ * position. A client who has explicitly consented to recording gets the fuller
+ * setting.
+ */
+function privacyStorageSetting(spec) {
+  const privacy = (spec && spec.privacy) || {};
+  if (privacy.callsMayBeRecorded === true) return "everything";
+  return "everything_except_pii";
 }
 
 /** Retell post_call_analysis_data for ordinary receptionist calls. */

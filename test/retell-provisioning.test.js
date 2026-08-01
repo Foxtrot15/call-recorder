@@ -553,16 +553,41 @@ describe("provisioning plan — diffing and idempotency", () => {
     assert.strictEqual(second.executable, false);
   });
 
-  it("a changed payload produces an update, not a second create", () => {
+  it("a changed payload updates in place where the provider supports it", () => {
     const first = planFor();
     const existing = first.actions.map((a) => ({
       purpose: a.purpose, resource_type: a.resourceType, provider_resource_id: `prov_${a.resourceType}`,
       payload_hash: "an-older-hash", active: true, profile_version: 1,
     }));
     const second = planFor({ existingResources: existing });
-    assert.strictEqual(second.updateActions, 3);
-    assert.strictEqual(second.createActions, 0);
-    for (const action of second.actions) assert.ok(action.existingProviderId, "an update must target the existing resource");
+
+    // Response engine and voice agent have documented update endpoints.
+    const updatable = second.actions.filter((a) => ["response_engine", "voice_agent"].includes(a.resourceType));
+    assert.ok(updatable.length >= 2);
+    for (const action of updatable) {
+      assert.strictEqual(action.kind, "update");
+      assert.ok(action.existingProviderId, "an update must target the existing resource");
+    }
+  });
+
+  it("a changed knowledge base is REPLACED, because Retell has no KB update endpoint", () => {
+    // Verified 2026-08-01: the documented KB surface is create,
+    // add-knowledge-base-sources and delete-knowledge-base-source. There is no
+    // wholesale update. The adapter previously declared
+    // PATCH /update-knowledge-base/:id, which does not exist — a plan built on
+    // it would have failed at the provider.
+    const first = planFor();
+    const existing = first.actions.map((a) => ({
+      purpose: a.purpose, resource_type: a.resourceType, provider_resource_id: `prov_${a.resourceType}`,
+      payload_hash: "an-older-hash", active: true, profile_version: 1,
+    }));
+    const second = planFor({ existingResources: existing });
+
+    const kb = second.actions.find((a) => a.resourceType === "knowledge_base");
+    assert.ok(kb, "the plan must still cover the knowledge base");
+    assert.strictEqual(kb.kind, "create", "a changed KB must be created afresh");
+    assert.strictEqual(kb.existingProviderId, null, "a create must not target the old resource");
+    assert.strictEqual(kb.replacesProviderId, "prov_knowledge_base", "it must record what it supersedes");
   });
 
   it("an active resource no longer desired becomes an archive action", () => {
@@ -695,16 +720,50 @@ describe("provisioning plan — execution against non-live adapters", () => {
     assert.ok(firstRecorded.length >= 1);
 
     // Resume with the completed keys — the successes are skipped, not repeated.
+    //
+    // A resume must ALSO carry the provider ids already recorded in the
+    // registry. Once a payload can depend on an earlier resource's id (an
+    // agent's llm_id, a phone binding's agent id), skipping an action as
+    // "already done" removes its id from scope — so a resume that passed only
+    // `alreadyDone` would fail on a dependency that demonstrably already
+    // exists. `knownResources` is how the registry supplies them.
     const done = new Set(firstRecorded.map((r) => r.idempotencyKey));
+    const knownResources = firstRecorded.map((r) => ({
+      purpose: r.purpose, resource_type: r.resourceType, provider_resource_id: r.providerResourceId, active: true,
+    }));
     const secondRecorded = [];
     const second = await plans.executePlan({
-      plan, adapter: port.createMockAdapter(), alreadyDone: done,
+      plan, adapter: port.createMockAdapter(), alreadyDone: done, knownResources,
       onResourceProvisioned: async (r) => secondRecorded.push(r),
       logger: { error() {}, log() {} },
     });
     assert.strictEqual(second.status, "completed");
     assert.ok(second.results.some((r) => r.outcome === "already_done"), "completed work must be skipped on resume");
     for (const r of secondRecorded) assert.ok(!done.has(r.idempotencyKey), "a completed resource must not be recreated");
+  });
+
+  it("a resume that loses the earlier ids fails loudly rather than sending a null dependency", async () => {
+    // The same resume WITHOUT knownResources. The dependent action must refuse:
+    // sending a null llm_id would create an agent wired to nothing, and a null
+    // inbound_agent_id would bind a phone number to no agent at all — a dead
+    // line that looks provisioned.
+    const plan = planFor();
+    const first = await plans.executePlan({
+      plan, adapter: port.createMockAdapter({ failures: { createAgent: { status: 503 } } }),
+      logger: { error() {}, log() {} },
+    });
+    const done = new Set((first.results || []).filter((r) => r.outcome === "succeeded").map((_, i) => `k${i}`));
+
+    const second = await plans.executePlan({
+      plan, adapter: port.createMockAdapter(),
+      alreadyDone: new Set(plan.actions.filter((a) => a.resourceType === "response_engine").map((a) => a.idempotencyKey)),
+      logger: { error() {}, log() {} },
+    });
+    const unresolved = (second.results || []).find((r) => Array.isArray(r.unresolvedRefs) && r.unresolvedRefs.length);
+    assert.ok(unresolved, "the dependent action must report an unresolved reference");
+    assert.ok(unresolved.unresolvedRefs.includes("receptionist_agent:response_engine"));
+    assert.strictEqual(unresolved.retryable, false);
+    assert.ok(done.size >= 0);
   });
 
   it("stops at a non-retryable failure rather than creating orphans", async () => {

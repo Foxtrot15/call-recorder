@@ -94,7 +94,7 @@ agents must not grant permission to dial a customer. Semantics owned by
 | `RETELL_DEFAULT_VOICE_ID` | agent creation | **No default is invented.** Missing ⇒ live writes are fatal at startup. |
 | `RETELL_DEFAULT_LANGUAGE` | agent creation | Defaults `en-AU`; confirm against Retell's supported locales before first live provisioning. |
 | `RETELL_OUTBOUND_ONBOARDING_NUMBER` | outbound calls | E.164. Missing ⇒ live calls are fatal at startup. |
-| `RETELL_INBOUND_DEMO_NUMBER` | future inbound demo | Placeholder; never defaulted. |
+| `RETELL_INBOUND_DEMO_NUMBER` | inbound phone binding | The number the receptionist answers on. When set, the provisioning plan emits an `inbound_binding` action; when unset, no binding is planned and the last mile is uncovered. **Never defaulted or invented.** |
 | `RETELL_WEBHOOK_BASE_URL` | agent `webhook_url` | Public https base. Missing while webhooks are on ⇒ warning. |
 | `RETELL_ALLOWED_TAG` | environment separation | `dev` \| `staging` \| `prod`. |
 | `RETELL_TIMEOUT_MS` / `RETELL_MAX_RETRIES` / `RETELL_WEBHOOK_MAX_BYTES` | transport + webhook | Defaults 30000 / 2 / 524288. |
@@ -146,3 +146,27 @@ Step 8 is the critical one: doing a client login *before* the test call reproduc
 - `OPERATOR_CLIENT_ID=default` — all operator data continues under the legacy `'default'` tenant; no data backfill needed yet.
 - `src/routes/calls.js` includes a transitional tenant filter (`clientId OR 'default' OR NULL`) so legacy call rows stay visible. Remove after the Phase 5 backfill.
 - RLS SQL exists (`supabase/sql/phase2_enable_rls.sql`) but is **not applied**.
+
+### Retell provider contracts (M7B — corrected 2026-08-01)
+
+The Retell request shapes were reconciled against official documentation. If you
+are deploying anything that touches provisioning, the corrections that change
+operational behaviour are:
+
+- **Phone binding uses weighted agent arrays.** `inbound_agents`, with weights
+  totalling exactly 1. `inbound_agent_id` is not a current field and is rejected
+  before a request is built.
+- **The knowledge base is multipart/form-data and cannot be updated.** A content
+  change creates a new knowledge base and supersedes the old one in the registry,
+  so expect KB resources to accumulate at the provider until deleted manually.
+- **Runtime-sensitive dynamic variables are not shipped as defaults.** Transfer
+  numbers, on-call state and business status must arrive per call through the
+  **inbound call webhook**, which must answer 2xx within **10 seconds**. Until
+  that webhook is implemented and reachable, a live receptionist would have no
+  transfer number at call time.
+- **`RETELL_DEFAULT_VOICE_ID` is genuinely required.** The provider requires
+  `voice_id` on agent creation; it is no longer emitted as null.
+
+**None of this has been validated against a live Retell account.** See
+[docs/RETELL_SANDBOX_VALIDATION_PLAN.md](docs/RETELL_SANDBOX_VALIDATION_PLAN.md)
+for the procedure, prerequisites, billable actions and cleanup.

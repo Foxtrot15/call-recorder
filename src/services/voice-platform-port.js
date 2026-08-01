@@ -155,6 +155,76 @@ function payloadHash(payload) {
   return crypto.createHash("sha256").update(stableStringify(payload)).digest("hex");
 }
 
+// ── Late-resolved provider references ───────────────────────────────
+//
+// Some payload fields are provider ids that do not exist until an earlier
+// resource has been created: an agent needs its response engine's id, a phone
+// binding needs the agent's id.
+//
+// A payload may carry a reference token in place of such a field. The token is
+// replaced with the real id during execution, immediately before the provider
+// call. Hashing happens over the UNRESOLVED payload — the token is stable, the
+// resolved id is not knowable at plan time, so hashing the token form is what
+// keeps diffing and idempotency deterministic across runs.
+//
+// Lives here, in the provider-neutral port, because both the compiler (which
+// emits tokens) and the planner (which resolves them) already depend on this
+// module and neither should depend on the other.
+const REF = "$aidaRef";
+
+function ref(purpose, resourceType) {
+  return { [REF]: `${purpose}:${resourceType}` };
+}
+
+function isRef(value) {
+  return Boolean(value && typeof value === "object" && typeof value[REF] === "string");
+}
+
+/**
+ * Replace reference tokens with ids produced during this execution.
+ *
+ * `placeholder` is for dry runs. A dry run creates nothing, so a dependency id
+ * genuinely does not exist — but failing the run because of that would make
+ * dry-run useless for precisely the plans that need previewing most (the ones
+ * with dependencies). Instead the token becomes a visibly fake string, so the
+ * operator sees the shape of the request AND can see at a glance which fields
+ * would be filled in for real.
+ *
+ * @returns {{ok:true, payload:*, placeheld?:string[]}|{ok:false, missing:string[]}}
+ */
+function resolveRefs(payload, provided, { placeholder = null } = {}) {
+  const missing = [];
+  const placeheld = [];
+
+  function walk(node) {
+    if (Array.isArray(node)) return node.map(walk);
+    if (isRef(node)) {
+      const key = node[REF];
+      if (!provided.has(key)) {
+        if (placeholder) {
+          placeheld.push(key);
+          return `${placeholder}${key}>`;
+        }
+        missing.push(key);
+        return null;
+      }
+      return provided.get(key);
+    }
+    if (node && typeof node === "object") {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) out[k] = walk(v);
+      return out;
+    }
+    return node;
+  }
+
+  const resolved = walk(payload);
+  return missing.length ? { ok: false, missing } : { ok: true, payload: resolved, placeheld };
+}
+
+/** Obviously-fake marker for dry-run dependency fields. Never a valid id. */
+const DRY_RUN_REF_PLACEHOLDER = "<would-be-resolved-at-execution:";
+
 /** JSON with sorted keys, so hashing is insensitive to property order. */
 function stableStringify(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -341,6 +411,11 @@ module.exports = {
   idempotencyKey,
   payloadHash,
   stableStringify,
+  REF,
+  ref,
+  isRef,
+  resolveRefs,
+  DRY_RUN_REF_PLACEHOLDER,
   createDisabledAdapter,
   createMockAdapter,
   createDryRunAdapter,

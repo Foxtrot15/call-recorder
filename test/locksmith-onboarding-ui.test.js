@@ -239,14 +239,50 @@ describe("onboarding is dormant by default", () => {
     assert.match(PROVISIONAL_COMMERCIAL_MODEL.qualityCommitment, /same core call quality/i);
   });
 
-  it("no billing or payment library is imported anywhere in the M2 modules", () => {
+  it("no provider SDK or billing library is imported anywhere in the locksmith modules", () => {
+    // The property being protected is that no locksmith module pulls in a
+    // PROVIDER PACKAGE — the thing that could open a socket or spend money.
+    //
+    // Only bare specifiers are checked. A relative require of one of AIDA's own
+    // modules is categorically different: src/services/retell-dynamic-variables.js
+    // is our own pure, dep-free contract logic that happens to be named after
+    // the provider it models. A substring match over every require string
+    // conflated the two and would have banned naming our own files sensibly.
+    // Checked at MODULE SCOPE only. The house rule is that heavy or
+    // network-capable dependencies are required lazily INSIDE a function, so
+    // the module still loads on a bare checkout and nothing opens a socket by
+    // being imported. A top-level require of one of these defeats that; an
+    // indented one inside a function is the pattern working as intended.
+    const banned = ["stripe", "retell-sdk", "retellai", "openai", "@anthropic-ai/sdk", "twilio", "axios", "node-fetch"];
     const files = fs.readdirSync(path.join(__dirname, "../src/services")).filter((f) => f.startsWith("locksmith"));
+
     for (const file of files) {
       const source = fs.readFileSync(path.join(__dirname, "../src/services", file), "utf8");
-      const requires = (source.match(/require\("([^"]+)"\)/g) || []).join(" ");
-      for (const banned of ["stripe", "retell", "openai", "anthropic", "twilio"]) {
-        assert.ok(!requires.includes(banned), `${file} must not require ${banned}`);
+      for (const line of source.split("\n")) {
+        // A top-level require starts at column 0.
+        if (/^\s/.test(line)) continue;
+        const m = line.match(/require\(["']([^"']+)["']\)/);
+        if (!m) continue;
+        const spec = m[1];
+        if (spec.startsWith(".") || spec.startsWith("/")) continue;
+        assert.ok(
+          !banned.some((b) => spec === b || spec.startsWith(`${b}/`)),
+          `${file} must not require "${spec}" at module scope — require it lazily inside the function that needs it`
+        );
       }
+    }
+  });
+
+  it("every locksmith module still loads with no provider package installed", () => {
+    // The stronger guarantee behind the rule above: these modules must be
+    // requireable on a bare checkout. If one of them reached for a provider
+    // package at load time, this would throw.
+    const files = fs.readdirSync(path.join(__dirname, "../src/services")).filter((f) => f.startsWith("locksmith"));
+    for (const file of files) {
+      assert.doesNotThrow(
+        () => require(path.join(__dirname, "../src/services", file)),
+        `${file} must load without any provider package present`
+      );
     }
   });
 });

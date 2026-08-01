@@ -25,7 +25,10 @@
 // Pure core + thin adapter, house style.
 
 const crypto = require("crypto");
-const { idempotencyKey, payloadHash, stableStringify, MODES, ERROR_CODES } = require("./voice-platform-port");
+const {
+  idempotencyKey, payloadHash, stableStringify, MODES, ERROR_CODES,
+  REF, ref, isRef, resolveRefs, DRY_RUN_REF_PLACEHOLDER,
+} = require("./voice-platform-port");
 
 const PLAN_STATUSES = Object.freeze([
   "created",
@@ -57,13 +60,88 @@ const ACTION_KINDS = Object.freeze(["create", "update", "noop", "archive", "unsu
 
 /** The resources a locksmith receptionist needs, in dependency order. */
 const DESIRED_RESOURCE_ORDER = Object.freeze([
-  { purpose: "receptionist_knowledge", resourceType: "knowledge_base", operation: "createKnowledgeBase", updateOperation: "updateKnowledgeBase" },
+  // updateOperation is deliberately null: Retell has no knowledge-base update
+  // endpoint (verified 2026-08-01). A changed KB is created afresh and the old
+  // one superseded — see the !want.updateOperation branch in diffResources.
+  { purpose: "receptionist_knowledge", resourceType: "knowledge_base", operation: "createKnowledgeBase", updateOperation: null },
   { purpose: "receptionist_agent", resourceType: "response_engine", operation: "createResponseEngine", updateOperation: "updateResponseEngine" },
   { purpose: "receptionist_agent", resourceType: "voice_agent", operation: "createAgent", updateOperation: "updateAgent" },
+  // The last mile. Without this a plan builds an agent that no caller can
+  // reach: M7 found the purpose and the adapter operation both existed while
+  // the plan never emitted the action, so provisioning "succeeded" and the
+  // phone stayed dead.
+  //
+  // Binding is an UPDATE to a phone number that already exists at the provider
+  // — AIDA does not purchase numbers as part of a configuration change. The
+  // number arrives from config; if it is absent the entry is skipped and the
+  // plan says so, rather than inventing one.
+  { purpose: "inbound_binding", resourceType: "phone_number", operation: "bindPhoneNumber", updateOperation: "bindPhoneNumber" },
 ]);
+
+// ── Late-resolved dependencies ──────────────────────────────────────
+//
+// Some payload fields cannot be known at plan time because they are provider
+// ids produced DURING execution: an agent needs its response engine's id, and a
+// phone binding needs the agent's id.
+//
+// The plan model originally assumed every payload was fully known upfront.
+// executePlan even carried the comment "later resources depend on earlier ids"
+// with no mechanism to pass one — so `llm_id` went to Retell as null and the
+// binding action did not exist at all.
+//
+// A payload may contain a reference token (see REF/ref/resolveRefs in
+// services/voice-platform-port.js). It is resolved against the ids produced
+// earlier in the SAME execution, immediately before the provider call.
+//
+// The payload HASH is computed over the UNRESOLVED payload, so diffing and
+// idempotency stay deterministic across runs.
 
 function canTransition(from, to) {
   return Boolean(PLAN_TRANSITIONS[from]) && PLAN_TRANSITIONS[from].includes(to);
+}
+
+/** Deep scan for a dry-run placeholder that must never reach a live provider. */
+function containsPlaceholder(node) {
+  if (typeof node === "string") return node.startsWith(DRY_RUN_REF_PLACEHOLDER);
+  if (Array.isArray(node)) return node.some(containsPlaceholder);
+  if (node && typeof node === "object") return Object.values(node).some(containsPlaceholder);
+  return false;
+}
+
+/**
+ * Validate a weighted agent binding before it is sent.
+ *
+ * Retell requires each weight in (0, 1] and the array to total exactly 1
+ * (verified 2026-08-01). A binding that violates this is either rejected or —
+ * worse — accepted with a distribution nobody intended, silently sending a
+ * share of a locksmith's calls somewhere else.
+ */
+const WEIGHT_TOLERANCE = 1e-9;
+
+function validateAgentWeights(agents, { field = "inbound_agents" } = {}) {
+  if (!Array.isArray(agents) || agents.length === 0) {
+    return { ok: false, code: "no_agents", message: `${field} must list at least one agent.` };
+  }
+  let total = 0;
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object") return { ok: false, code: "bad_entry", message: `Every ${field} entry must be an object.` };
+    if (!entry.agent_id || typeof entry.agent_id !== "string") {
+      return { ok: false, code: "missing_agent_id", message: `Every ${field} entry needs a resolved agent_id.` };
+    }
+    if (typeof entry.weight !== "number" || !(entry.weight > 0) || entry.weight > 1) {
+      return { ok: false, code: "invalid_weight", message: `Each weight must be greater than 0 and at most 1 (got ${JSON.stringify(entry.weight)}).` };
+    }
+    if (entry.agent_version !== undefined && entry.agent_version !== null) {
+      const v = entry.agent_version;
+      const versionOk = Number.isInteger(v) || (typeof v === "string" && v.length > 0 && v.length <= 40);
+      if (!versionOk) return { ok: false, code: "invalid_version", message: "agent_version must be an integer or a version tag." };
+    }
+    total += entry.weight;
+  }
+  if (Math.abs(total - 1) > WEIGHT_TOLERANCE) {
+    return { ok: false, code: "weights_not_one", message: `Agent weights must total exactly 1 (got ${total}).` };
+  }
+  return { ok: true, total };
 }
 
 // ── Planning ────────────────────────────────────────────────────────
@@ -80,6 +158,10 @@ function buildDesiredResources({ compiled, retellPayload, clientId, planScopeId 
     knowledge_base: retellPayload.knowledge,
     response_engine: retellPayload.responseEngine,
     voice_agent: retellPayload.agent,
+    // Absent when no inbound number is configured. buildDesiredResources skips
+    // a missing payload, so the plan simply carries no binding action and the
+    // caller can see that the last mile is not covered.
+    phone_number: retellPayload.inboundBinding || null,
   };
 
   for (const entry of DESIRED_RESOURCE_ORDER) {
@@ -122,6 +204,23 @@ function diffResources({ desired, existing }) {
       actions.push({ kind: "create", ...want, existingProviderId: null, reason: "no active provider resource exists for this purpose" });
     } else if (have.payload_hash === want.payloadHash) {
       actions.push({ kind: "noop", ...want, existingProviderId: have.provider_resource_id, reason: "the provider already holds this exact configuration" });
+    } else if (!want.updateOperation) {
+      // The provider has no update endpoint for this resource type — verified
+      // true of knowledge bases on 2026-08-01: the documented surface is
+      // create, add-sources and delete-source, with no wholesale update.
+      //
+      // A changed payload therefore becomes a CREATE of a fresh resource, and
+      // the previous one is superseded in the registry. `replacesProviderId`
+      // records what it supersedes, so the registry can retire the old row
+      // without the plan pretending it can edit something it cannot.
+      actions.push({
+        kind: "create",
+        ...want,
+        existingProviderId: null,
+        replacesProviderId: have.provider_resource_id,
+        reason: "the configuration changed and this provider resource cannot be updated in place",
+        previousPayloadHash: have.payload_hash,
+      });
     } else {
       actions.push({
         kind: "update",
@@ -341,11 +440,24 @@ function evaluateExecutionGate({ plan, config, actor, currentApprovedVersion, ex
  * success — a failed or ambiguous response records nothing, because a stored id
  * for a resource that may not exist is worse than no id at all.
  */
-async function executePlan({ plan, adapter, alreadyDone = new Set(), onResourceProvisioned = async () => {}, onActionResult = async () => {}, logger = console }) {
+async function executePlan({ plan, adapter, alreadyDone = new Set(), knownResources = [], onResourceProvisioned = async () => {}, onActionResult = async () => {}, logger = console }) {
   const results = [];
   let succeeded = 0;
   let failed = 0;
   let skipped = 0;
+
+  // Provider ids available to later actions in this run.
+  //
+  // Seeded from the registry so a RESUMED execution can satisfy a reference to
+  // a resource created on an earlier attempt. Without this, resuming after a
+  // partial failure would fail on a dependency that already exists — the retry
+  // would be less capable than the first attempt, which is exactly backwards.
+  const provided = new Map();
+  for (const row of knownResources || []) {
+    if (row && row.active !== false && row.provider_resource_id) {
+      provided.set(`${row.purpose}:${row.resource_type}`, row.provider_resource_id);
+    }
+  }
 
   for (const action of plan.actions) {
     if (action.kind === "noop") {
@@ -372,8 +484,74 @@ async function executePlan({ plan, adapter, alreadyDone = new Set(), onResourceP
       continue;
     }
 
+    // Fill in provider ids produced earlier in this run (or on a previous
+    // attempt). A reference that cannot be satisfied is a hard failure: sending
+    // a null agent id would create a binding that points nowhere, and a phone
+    // number bound to nothing is a silently dead line.
+    // A dry run creates nothing, so dependency ids do not exist. Placeholders
+    // let the operator preview the full request shape instead of the run dying
+    // on the first dependent action.
+    const resolution = resolveRefs(action.payload, provided, {
+      placeholder: adapter.mode === MODES.dryRun ? DRY_RUN_REF_PLACEHOLDER : null,
+    });
+
+    // A dry-run placeholder must never reach a live provider. The dry-run and
+    // live paths share a request builder by design, so this asserts the one
+    // property that sharing puts at risk: if a placeholder ever appeared in a
+    // live payload it would be sent verbatim as an agent id.
+    if (resolution.ok && adapter.mode !== MODES.dryRun && containsPlaceholder(resolution.payload)) {
+      failed += 1;
+      logger.error(`provisioning.action.placeholder_in_live purpose=${action.purpose} type=${action.resourceType}`);
+      results.push({
+        action: action.kind,
+        purpose: action.purpose,
+        resourceType: action.resourceType,
+        outcome: "failed",
+        errorCode: ERROR_CODES.invalidRequest,
+        retryable: false,
+        placeholderInLiveMode: true,
+      });
+      break;
+    }
+    if (!resolution.ok) {
+      failed += 1;
+      logger.error(`provisioning.action.unresolved purpose=${action.purpose} type=${action.resourceType} missing=${resolution.missing.join(",")}`);
+      results.push({
+        action: action.kind,
+        purpose: action.purpose,
+        resourceType: action.resourceType,
+        outcome: "failed",
+        errorCode: ERROR_CODES.invalidRequest,
+        retryable: false,
+        unresolvedRefs: resolution.missing,
+      });
+      break;
+    }
+
+    // A phone binding must satisfy the provider's weight contract before it is
+    // sent. Checked post-resolution, because the agent_id it validates is the
+    // one produced moments earlier in this run.
+    if (action.purpose === "inbound_binding") {
+      const weights = validateAgentWeights(resolution.payload.inbound_agents, { field: "inbound_agents" });
+      if (!weights.ok) {
+        failed += 1;
+        logger.error(`provisioning.action.invalid_binding purpose=${action.purpose} code=${weights.code}`);
+        results.push({
+          action: action.kind,
+          purpose: action.purpose,
+          resourceType: action.resourceType,
+          outcome: "failed",
+          errorCode: ERROR_CODES.invalidRequest,
+          retryable: false,
+          bindingError: weights.code,
+          bindingMessage: weights.message,
+        });
+        break;
+      }
+    }
+
     const response = await method({
-      payload: action.payload,
+      payload: resolution.payload,
       providerId: action.existingProviderId,
       idempotencyKey: action.idempotencyKey,
       purpose: action.purpose,
@@ -381,6 +559,10 @@ async function executePlan({ plan, adapter, alreadyDone = new Set(), onResourceP
 
     if (response.ok) {
       succeeded += 1;
+      // Make this resource's id available to later actions in this run.
+      if (response.resource && response.resource.id) {
+        provided.set(`${action.purpose}:${action.resourceType}`, response.resource.id);
+      }
       // Only now is anything recorded.
       if (response.resource && response.resource.id) {
         await onResourceProvisioned({
@@ -461,6 +643,13 @@ module.exports = {
   assessStaleness,
   evaluateExecutionGate,
   executePlan,
+  DESIRED_RESOURCE_ORDER,
+  REF,
+  ref,
+  isRef,
+  resolveRefs,
+  validateAgentWeights,
+  containsPlaceholder,
   planRollback,
   toPublicResource,
 };

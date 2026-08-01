@@ -294,3 +294,155 @@ anywhere is named like a credential**.
    can be installed.
 7. Confirm published rate limits before any bulk operation.
 8. Legal wording for recording/transcription (carried over from M2).
+
+---
+
+# M7B — Contract correction (2026-08-01)
+
+**Documentation review date: 1 August 2026.** Official `docs.retellai.com` only —
+no blog posts, community examples, Stack Overflow, or payloads copied from
+earlier milestones.
+
+**No sandbox execution was performed. No Retell resource was created. No phone
+or web call was placed.** This section records what the documentation says and
+what the code now does; it is not evidence that either works against the live
+API.
+
+## Pages reviewed
+
+| Page | Used for |
+|---|---|
+| `/api-references/create-retell-llm` | Response-engine request and response |
+| `/api-references/create-agent` | Agent request, response engine, analysis, storage |
+| `/api-references/update-phone-number` | Inbound/outbound agent binding |
+| `/api-references/create-knowledge-base` | KB transport, fields, status lifecycle |
+| `/api-references/add-knowledge-base-sources` | Whether KB update exists |
+| `/api-references/create-web-call` | Web-call contract for future validation |
+| `/build/dynamic-variables` | Defaults vs per-call variables |
+| `/features/inbound-call-webhook` | How inbound calls receive variables |
+
+## Findings: five contract mismatches
+
+M3 and M7A shipped assumptions that the documentation contradicts. Fixture tests
+could not have caught any of them — a mock accepts whatever shape it is handed.
+
+### 1. Phone binding used a field that does not exist
+
+`inbound_agent_id` is not a current field. Binding uses **weighted agent
+arrays**:
+
+```
+PATCH /update-phone-number/{phone_number}
+{ "inbound_agents": [ { "agent_id": "...", "agent_version": 3, "weight": 1 } ] }
+```
+
+Each `weight` must be `> 0` and `<= 1`, and the weights in an array **must total
+exactly 1**. `outbound_agents`, `inbound_sms_agents` and `outbound_sms_agents`
+follow the same shape.
+
+**Corrected.** `validateAgentWeights()` enforces the contract before any request
+is built, and a binding with invalid weights fails without contacting anything.
+
+### 2. The knowledge base is multipart, not JSON
+
+`POST /create-knowledge-base` is **`multipart/form-data`**. The adapter sent
+JSON. `knowledge_base_texts` is an array of `{title, text}` objects, encoded as
+indexed fields.
+
+**Corrected** in `src/services/retell-multipart.js`, kept separate from any
+transport so the wire format is testable without a network stack — the only way
+to gain confidence in an encoding we cannot yet exercise for real.
+
+### 3. There is no knowledge-base update endpoint
+
+The documented surface is create, `add-knowledge-base-sources`, and
+delete-source. `PATCH /update-knowledge-base/:id` — which the adapter declared —
+does not exist.
+
+**Corrected.** A changed KB is now a **create-and-replace**: `updateOperation` is
+`null`, the diff emits a `create` carrying `replacesProviderId`, and the old
+resource is superseded in the registry.
+
+### 4. Knowledge-base processing is asynchronous
+
+Creation returns `status: "in_progress"`. States are `in_progress`, `complete`,
+`error`, `refreshing_in_progress`. A KB is **not usable until `complete`**.
+
+**Modelled** in `assessKnowledgeBase()`. Attaching an incomplete KB would give an
+agent answering callers from a partially-indexed corpus — worse than none,
+because it looks like it is working.
+
+### 5. `llm_id` was null, and nothing filled it in
+
+`response_engine` requires `type` and, for `retell-llm`, `llm_id`. The compiler
+emitted `llm_id: null` with a comment claiming it would be filled in later.
+
+**Corrected** via the reference-resolution system: the agent carries a token
+resolved from the response engine created earlier in the same run. An
+unresolvable reference fails before any request; a dry-run placeholder reaching
+a live payload fails too.
+
+## Confirmed contracts
+
+**`POST /create-retell-llm`** — `application/json`. `general_prompt`,
+`begin_message`, `general_tools`, `states`, `starting_state`,
+`default_dynamic_variables`, `knowledge_base_ids` all optional. Returns
+`llm_id`, `version` (integer), `is_published`.
+
+> `knowledge_base_ids` belongs on the **LLM**, not the agent. AIDA previously
+> created a knowledge base and never attached it to anything. Now attached by
+> reference.
+
+**`POST /create-agent`** — `application/json`. Required: `response_engine` and
+**`voice_id`**. The compiler previously emitted `voice_id: null` when
+unconfigured, producing a request that could only be rejected.
+`post_call_analysis_data` belongs on the **agent** (AIDA's placement was already
+correct). `data_storage_setting` accepts `everything`,
+`everything_except_pii`, `basic_attributes_only` — now driven by the client's
+approved privacy decision rather than a deployment default, defaulting to the
+stricter `everything_except_pii`.
+
+**`POST /v2/create-web-call`** — `agent_id` required; accepts `agent_version`,
+`retell_llm_dynamic_variables`, `metadata`. Returns `access_token`, `call_id`,
+`call_status` (`registered`, `not_connected`, `ongoing`, `ended`, `error`).
+
+## Dynamic variables — a design assumption corrected
+
+| Mechanism | Where | Behaviour |
+|---|---|---|
+| `default_dynamic_variables` | on the Retell LLM | fallback only |
+| `retell_llm_dynamic_variables` | create-phone-call / create-web-call | overrides defaults |
+| `call_inbound.dynamic_variables` | **inbound webhook response** | the only route for an inbound call |
+
+**All values must be strings.** An unsupplied variable renders as the literal
+`{{name}}` in the prompt rather than erroring.
+
+M3 kept transfer numbers out of compiled artefacts and resolved them "at call
+time through a dynamic variable" — the right instinct, but the mechanism was
+never built, and a *default* is baked in at provisioning time. A locksmith's
+on-call number changes; baking it in transfers a 2am emergency to whoever was on
+call the day the agent was last built.
+
+`splitDefaultsFromRuntime()` now strips runtime-sensitive keys
+(`current_transfer_number`, `current_backup_number`, `current_business_status`,
+`on_call_state`, `call_kind`) from the defaults, and
+`buildInboundWebhookResponse()` produces the documented `call_inbound` shape.
+A test asserts **no phone number appears in any default variable**.
+
+The inbound webhook must answer **2xx within 10 seconds** (3 retries, then
+fallback). The builder is pure and does no I/O for that reason.
+
+## Post-call analysis remains untrusted
+
+Provider analysis may never approve a profile, apply a change, replace
+deterministic validation, or override client confirmation. Presets are limited to
+`call_summary`, `call_successful`, `user_sentiment`; custom items are validated
+for type and name.
+
+## Still unvalidated
+
+Everything above is **documentation-derived**. Not yet proven against the live
+API: whether the compiled `general_prompt` is accepted at its length; whether
+`en-AU` is a supported locale; whether the multipart encoding is accepted
+verbatim; whether an inbound webhook actually injects variables end to end;
+real KB processing time; and error/rate-limit shapes.
