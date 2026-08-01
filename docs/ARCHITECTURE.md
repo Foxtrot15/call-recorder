@@ -66,6 +66,8 @@ validated; **operator** = `requireLogin`; **client** = `requireClientAuth`;
 | `/locksmith-founder/provisioning/*` | routes/locksmith-onboarding.js | operator | Retell provisioning preview, dry-run and mock execution (M3). Dormant with the onboarding flag; live execution is hidden unless every Retell gate passes |
 | `/client/locksmith` | routes/locksmith-portal.js | client | Locksmith client portal (M5), 7 server-rendered tabs + change-request, notification and forwarding POSTs. **Dormant**: 404s unless `LOCKSMITH_PORTAL_ENABLED="true"` — a flag deliberately independent of the public-page flag. Reads `calls` with a STRICT tenant scope (no legacy `default`/NULL widening). See [LOCKSMITH_CLIENT_PORTAL_SPEC.md](LOCKSMITH_CLIENT_PORTAL_SPEC.md) |
 | `/locksmith-founder/clients[/:clientId]` | routes/locksmith-portal.js | operator | Client-operations view (M5). Cross-tenant reads, GET-only by design: there is no operator path that approves a client's change or alters their receptionist |
+| `/client/locksmith/billing` | routes/billing.js | client | Billing page, plan change and Stripe portal session (M6). **Dormant**: 404s unless `BILLING_ENABLED="true"`, so with the flag off no route exists from which a card could be charged. See [LOCKSMITH_BILLING_SPEC.md](LOCKSMITH_BILLING_SPEC.md) |
+| `/webhooks/stripe` | routes/stripe-webhook.js | signature | Stripe events (M6). Dormant unless `BILLING_ENABLED` **and** `BILLING_WEBHOOK_ENABLED` are both `"true"`. Mounted with its own `express.raw` parser so signature verification sees the exact signed bytes; verification is delegated to the official Stripe library, never reimplemented |
 | `/webhooks/retell` | routes/retell-webhook.js | signature | Retell event webhook (M3). **Dormant**: 404s unless `RETELL_ENABLED` and `RETELL_WEBHOOK_ENABLED` are both `"true"`. Mounted with its own `express.raw` parser so signature verification sees the exact bytes. See [RETELL_INTEGRATION_SPEC.md](RETELL_INTEGRATION_SPEC.md) |
 | `/health` | inline | public | Liveness probe |
 
@@ -166,6 +168,7 @@ file order; each references the one before it.
 | `lpm3_create_retell_provisioning.sql` | provider resources + provisioning plans | [M3](RETELL_INTEGRATION_SPEC.md) |
 | `lpm4_create_onboarding_call_runtime.sql` | `onboarding_call_consents`, `onboarding_calls` | [M4](LOCKSMITH_ONBOARDING_RUNTIME_SPEC.md) |
 | `lpm5_create_client_portal.sql` | `locksmith_change_requests`, `locksmith_notification_settings`, `locksmith_call_forwarding` | [M5](LOCKSMITH_CLIENT_PORTAL_SPEC.md) |
+| `lpm6_create_billing.sql` | `billing_accounts`, `billing_usage_periods`, `billing_meter_events` | [M6](LOCKSMITH_BILLING_SPEC.md) |
 
 The portal adds **no** call or enquiry table: its call and enquiry lists are
 projections over the existing `calls` table, so there is exactly one count of

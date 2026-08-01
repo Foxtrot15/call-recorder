@@ -35,6 +35,16 @@ app.use(require("./routes/locksmith-onboarding"));
 // call history are different surfaces with different risk, and switching one on
 // must never switch the other on (see docs/LOCKSMITH_CLIENT_PORTAL_SPEC.md).
 app.use(require("./routes/locksmith-portal"));
+// Locksmith billing (M6): the client's billing page and plan controls, behind
+// requireClientAuth. Dormant — without BILLING_ENABLED="true" every path 404s
+// before any auth runs, so with the flag off there is no route from which a
+// card could be charged (see docs/LOCKSMITH_BILLING_SPEC.md).
+app.use(require("./routes/billing"));
+// Stripe webhook (M6). Dormant twice: needs BILLING_ENABLED and
+// BILLING_WEBHOOK_ENABLED both "true". Mounted with its own express.raw parser
+// so signature verification sees the exact bytes Stripe signed — the same
+// reason the Retell webhook below sits apart from the JSON parser.
+app.use(require("./routes/stripe-webhook"));
 // Retell webhook (M3). Dormant: without RETELL_ENABLED and
 // RETELL_WEBHOOK_ENABLED both "true" the path 404s before any handler runs.
 // Mounted with its own express.raw body parser so signature verification sees
