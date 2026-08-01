@@ -457,3 +457,184 @@ turn a successful API proof into a timeout.
 - No real customer data is used — the demonstration business is fictional.
 - The custom voice id is read from `RETELL_DEFAULT_VOICE_ID` and appears nowhere
   in the repository.
+
+---
+
+# M7C — AIDA browser web-call proof (Proof C integration)
+
+**Status: BUILT, NOT EXECUTED.** No `RETELL_API_KEY` exists in this environment,
+so no Retell request was made, no resource created, and no call placed.
+**Proof C remains unexecuted.**
+
+## The three proofs, and why they are not interchangeable
+
+| | What it proves | Status |
+|---|---|---|
+| **Proof A** | AIDA's backend creates a Retell web call and receives a valid call id and access token | **Unexecuted** (built in M7B) |
+| **Proof B** | The configured agent can speak, listen, use the LLM and use the knowledge base — via Retell's **dashboard** | **Unexecuted** |
+| **Proof C** | AIDA's **own browser** receives the backend-issued token and completes a voice session through AIDA's integration | **Unexecuted** (built in M7C) |
+
+**A + B is not C.** The dashboard creates its own web call through its own path;
+it exercises none of AIDA's token issuance, handoff or browser integration.
+Proof C is the only one that tests them as a single flow.
+
+## What M7C built
+
+`src/services/retell-browser-harness.js` — a standalone loopback server and a
+single self-contained page.
+
+### Architecture
+
+```
+browser (localhost)                 harness (127.0.0.1, one run)        Retell
+  │                                        │                              │
+  │  GET /            ── page, no call ──▶ │                              │
+  │  ◀── HTML + SDK import ───────────────  │                              │
+  │                                        │                              │
+  │  [operator clicks Start]               │                              │
+  │  POST /api/web-call ──────────────────▶│                              │
+  │       x-aida-sandbox-key               │  createSandboxWebCall()       │
+  │                                        │  → shared adapter (fetch) ──▶ │
+  │                                        │  ◀── call_id + access_token ──│
+  │  ◀── {callId, agentId, callType,       │                              │
+  │       accessToken, tokenWindowSeconds} │                              │
+  │                                        │                              │
+  │  RetellWebClient.startCall({token}) ─────────────────────────────────▶│
+  │  ◀────────────────── two-way audio ───────────────────────────────────│
+```
+
+**It is not a route in `src/server.js`.** Mounting it there would create a
+production route defended only by a flag, and "the flag was off" is weaker than
+"the code is not deployed". This binds to `127.0.0.1`, lives for one run, and is
+started only by the sandbox script.
+
+### The 30-second window shapes the whole design
+
+A web-call access token is invalidated ~30 seconds after creation
+(`docs.retellai.com/deploy/web-call`, reviewed 2026-08-01). So the call is
+**created by the click**, not during provisioning: `--browser` tells the runner
+to provision the agent and stop, and the harness mints the call when the browser
+asks. Minting it earlier and hoping someone opens a browser in time is a race
+that cannot be won.
+
+### Browser SDK
+
+- **Package:** `retell-client-js-sdk` (official)
+- **Where:** a `<script type="module">` import in the served page **only**
+- **Why browser-only:** joining a web call needs microphone capture and a WebRTC
+  session — things that exist only in a browser. The server never joins a call;
+  it only creates one, and that is plain REST.
+- **How it consumes the token:** `client.startCall({ accessToken })`, then
+  `client.stopCall()`.
+- **Not installed:** loaded from a pinned ESM CDN specifier, so
+  `package.json`/`package-lock.json` are untouched. `--sdk <specifier>` overrides
+  it, and an offline alternative is an isolated `npm install` **outside** the
+  repository.
+- **Browser constraints found:** microphone access requires a secure context
+  (`localhost` qualifies); the browser prompts for permission on first use; audio
+  playback may need a user gesture — which the Start button provides.
+
+A test asserts **no** module under `src/services`, `src/config`, `src/routes` or
+`scripts` imports the browser SDK, and that the domain layer contains no browser
+concepts (`RetellWebClient`, `startCall(`, `navigator.mediaDevices`).
+
+### Endpoint and security controls
+
+| Control | Behaviour |
+|---|---|
+| Binding | `127.0.0.1` only — never a configurable interface |
+| Page load | `GET /` creates **nothing** |
+| `GET /api/web-call` | **405** — a prefetch or crawler cannot spend money |
+| Auth | `x-aida-sandbox-key`, constant-time compared |
+| Key delivery | URL **fragment**, which browsers never send to a server; removed from the address bar on load |
+| Rate | **one call per run**; a second POST is 429 |
+| Trigger | explicit button click only |
+| Lifetime | closes after the run; 15-minute hard ceiling |
+| Labelling | the page states in a banner that it is an internal sandbox placing a real billable call |
+
+### Token handling
+
+- Returned **only** in the response to the authenticated initiating POST
+- **Never** logged — the harness logs the call id and agent id, never the token
+- **Never** persisted — no manifest field, no database, no file
+- **Never** in a URL, and never in the HTML source
+- **Never** in an error report — displayed errors scrub anything token-shaped
+- Cleared in the page (`token = null`) whether the call connected or failed
+- The adapter exposes it through a **one-shot reader**: `takeAccessToken()`
+  returns it once then forgets it, so `JSON.stringify(result)` cannot serialise
+  it and a second reader gets `null`
+
+### Dynamic variables
+
+Built through the **shared runtime path** — `buildInboundCallVariables()` from
+`services/retell-dynamic-variables.js`, the same function the production inbound
+webhook would call. No parallel test-only object.
+
+Values used (all fictional, all strings, all supplied **per call** rather than
+baked into the agent's defaults):
+
+| Variable | Value |
+|---|---|
+| `current_transfer_number` | an ACMA fictitious number (reserved range, never allocated) |
+| `current_business_status` | `open` |
+| `on_call_state` | `demo_on_call` |
+| `call_kind` | `residential_lockout` |
+
+A test asserts every key is allow-listed **and** appears in `RUNTIME_ONLY_KEYS`,
+which is what proves the transfer number is not baked into the provisioned
+agent.
+
+### Browser states
+
+`idle → requesting call from AIDA… → connecting… → connected (microphone live)
+→ connected (agent ready) → agent speaking ⇄ listening → disconnecting… →
+ended`, plus `error` and `failed`. Driven by the documented SDK events:
+`call_started`, `call_ready`, `agent_start_talking`, `agent_stop_talking`,
+`call_ended`, `error`.
+
+## Two defects M7C found in the M7B work
+
+Both were invisible to a green suite, and both had the same root cause: **the
+test fakes were richer than the real provider boundary.**
+
+1. **The access token never reached callers.** The sandbox read
+   `callResponse.raw.access_token`. The live adapter has no `raw` — only the
+   hand-written fakes did. Against a real account the token would always have
+   been `undefined`, and `verify_web_call` would have failed. Fixed with the
+   one-shot reader.
+
+2. **A web call was recorded under its agent's id.** `extractResource` scanned
+   `agent_id` before `call_id`, and a call response carries both. So
+   `resource.id` was the agent. Fixed by resolving call operations first.
+
+The mock adapter in `voice-platform-port.js` now mirrors the live result shape
+exactly, so this class of bug cannot recur silently.
+
+## How to execute Proof C
+
+```
+RETELL_ENABLED=true RETELL_LIVE_WRITES_ENABLED=true RETELL_DRY_RUN=false \
+RETELL_SANDBOX_WEB_CALL_ENABLED=true RETELL_SANDBOX_EXECUTE=true \
+RETELL_ALLOWED_TAG=dev RETELL_API_KEY=... RETELL_DEFAULT_VOICE_ID=... \
+node scripts/retell-web-sandbox.js --execute --browser
+```
+
+It provisions the knowledge base, LLM and agent, prints a loopback URL
+containing the harness key, and waits. Open the URL, press **Start test call**,
+grant microphone access, speak, then press **Disconnect** and `Ctrl+C`.
+Resources are cleaned up automatically.
+
+### What to check while connected
+
+- two-way audio (you hear the agent; it responds to you)
+- the agent uses the **configured voice** and **language**
+- **knowledge-base influence** — ask whether they do automotive key replacement;
+  the demonstration knowledge says they do not
+- **dynamic-variable influence** — ask where the locksmith is coming from, or
+  what happens next; the per-call variables should shape the answer
+- it never quotes a price, never promises an arrival time, and admits to being
+  automated
+
+Record those observations yourself: **the script can confirm the backend issued
+a call to the browser, but only the person at the browser can confirm that audio
+worked.**

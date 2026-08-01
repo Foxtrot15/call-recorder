@@ -4,6 +4,7 @@
 //   node scripts/retell-web-sandbox.js                      assess only, free
 //   node scripts/retell-web-sandbox.js --execute            creates resources
 //   node scripts/retell-web-sandbox.js --execute --keep-resources
+//   node scripts/retell-web-sandbox.js --execute --browser   Proof C harness
 //   node scripts/retell-web-sandbox.js --cleanup-manifest <path>
 //
 // DEFAULT BEHAVIOUR SPENDS NOTHING AND CONTACTS NOTHING. Without --execute this
@@ -22,6 +23,22 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+// Load .env, the same way src/server.js does.
+//
+// Without this the script read process.env only, so every variable placed in
+// .env was invisible: a fully-configured sandbox still reported all nine gates
+// missing, looking exactly like nothing had been set. The alternative was
+// exporting the API key in a shell, which puts it in shell history.
+//
+// The path is pinned to the repository root rather than left to the working
+// directory. The server is always started from the root; a standalone script is
+// not, and a silent "no .env found" is the confusing failure this fixes.
+//
+// dotenv does NOT overwrite variables already present in process.env, so an
+// exported shell value still wins over .env. That is the default and is the
+// precedence we want — no override flag is passed, deliberately.
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+
 const { evaluateSandboxGate, evaluateKeepResources } = require("../src/config/retell-sandbox");
 const { getRetellConfig } = require("../src/config/retell");
 const sandbox = require("../src/services/retell-web-sandbox");
@@ -35,7 +52,9 @@ const valueOf = (flag) => {
 
 const WANT_EXECUTE = has("--execute");
 const WANT_KEEP = has("--keep-resources");
+const WANT_BROWSER = has("--browser");
 const CLEANUP_MANIFEST = valueOf("--cleanup-manifest");
+const SDK_SPECIFIER = valueOf("--sdk");
 
 const line = (c = "─") => console.log(c.repeat(74));
 const heading = (t) => { console.log(); line(); console.log(`  ${t}`); line(); };
@@ -115,6 +134,10 @@ async function main() {
     adapter,
     config: gate.config,
     logger: console,
+    // With --browser the call is NOT created during provisioning. The access
+    // token lives about 30 seconds, so it is minted by the browser's own click
+    // instead — see the harness section below.
+    createCall: !WANT_BROWSER,
   });
 
   heading("Result");
@@ -163,6 +186,23 @@ async function main() {
     console.log("  browser joins — see docs/RETELL_SANDBOX_VALIDATION_PLAN.md.");
   }
 
+  // ── Browser harness (Proof C) ─────────────────────────────────────
+  if (WANT_BROWSER && runResult.ok && runResult.created.agentId) {
+    const outcome = await runBrowserHarness({ adapter, runResult });
+    heading("Cleanup");
+    const cleanup = await sandbox.cleanupSandbox({ adapter, resources: runResult.created, logger: console });
+    for (const o of cleanup.outcomes) console.log(`  ${o.outcome === "failed" ? "✗" : "·"} ${o.kind.padEnd(18)} ${o.outcome}`);
+    if (cleanup.callNote) console.log(`  · ${cleanup.callNote}`);
+    updateManifest(manifestPath, { cleanupState: cleanup.ok ? "cleaned" : "partial_failure", browserProof: outcome });
+    if (!cleanup.ok) {
+      console.log();
+      console.log("  Still present — delete these in the Retell dashboard:");
+      for (const r of cleanup.remaining) console.log(`      ${r.kind}: ${r.id}`);
+      return 3;
+    }
+    return outcome.callCreated ? 0 : 4;
+  }
+
   // ── Cleanup ───────────────────────────────────────────────────────
   let exitCode = runResult.ok ? 0 : 1;
 
@@ -194,6 +234,82 @@ async function main() {
   }
 
   return exitCode;
+}
+
+// ── Proof C: the browser harness ────────────────────────────────────
+
+/**
+ * Serve the isolated harness and wait for the operator to run one call.
+ *
+ * The call is created by the browser's POST — not here — because the access
+ * token is invalidated about 30 seconds after creation. Minting it during
+ * provisioning and expecting someone to open a browser in time is a race that
+ * cannot be won.
+ */
+async function runBrowserHarness({ adapter, runResult }) {
+  const harnessModule = require("../src/services/retell-browser-harness");
+
+  const outcome = { callCreated: false, callId: null, agentId: runResult.created.agentId, error: null };
+
+  const harness = harnessModule.createBrowserHarness({
+    agentId: runResult.created.agentId,
+    language: getRetellConfig(process.env).defaultLanguage,
+    sandboxNames: runResult.names,
+    sdkSpecifier: SDK_SPECIFIER || undefined,
+    logger: console,
+    createCall: async () => {
+      const created = await sandbox.createSandboxWebCall({
+        adapter,
+        agentId: runResult.created.agentId,
+        logger: console,
+      });
+      if (created.ok) {
+        outcome.callCreated = true;
+        outcome.callId = created.callId;
+      } else {
+        outcome.error = created.code;
+      }
+      return created;
+    },
+  });
+
+  const started = await harnessModule.startBrowserHarness(harness, { logger: console });
+
+  heading("PROOF C — AIDA's own browser web-call");
+  console.log("  A local harness is now serving on loopback only. Nothing has been called yet.");
+  console.log();
+  console.log(`  OPEN THIS IN A BROWSER:`);
+  console.log(`    ${started.url}`);
+  console.log();
+  console.log("  The key is in the URL fragment, which browsers never send to a server.");
+  console.log("  Then press \"Start test call\". That click — and only that click — creates");
+  console.log(`  the web call and joins it within the provider's ~${harnessModule.TOKEN_WINDOW_SECONDS}-second token window.`);
+  console.log();
+  console.log("  ⚠  This places a REAL, BILLABLE Retell web call. Keep it short.");
+  console.log();
+  console.log("  Press Ctrl+C when you have finished to clean up the sandbox resources.");
+  console.log();
+
+  await new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    process.once("SIGINT", () => { console.log("\n  Stopping the harness…"); finish(); });
+    // Bounded so an unattended run cannot leave a server and paid resources
+    // alive indefinitely.
+    setTimeout(() => { console.log("\n  Harness time limit reached."); finish(); }, 15 * 60 * 1000).unref();
+  });
+
+  await started.close();
+
+  console.log();
+  console.log(`  browser call created : ${outcome.callCreated ? `yes (${outcome.callId})` : "no"}`);
+  if (outcome.error) console.log(`  last error           : ${outcome.error}`);
+  console.log();
+  console.log("  NOTE: this script can confirm the backend issued a call to this browser.");
+  console.log("  Whether two-way AUDIO actually worked is something only the person at the");
+  console.log("  browser can confirm — record that observation yourself.");
+
+  return outcome;
 }
 
 // ── Cleanup from a manifest ─────────────────────────────────────────

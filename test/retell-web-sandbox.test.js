@@ -34,32 +34,52 @@ const SANDBOX_CONFIG = Object.freeze({
   timeoutMs: 1000,
 });
 
-/** A deterministic in-memory Retell. Records every call; opens no socket. */
+/**
+ * A deterministic in-memory Retell. Records every call; opens no socket.
+ *
+ * IT MIRRORS THE LIVE ADAPTER'S RESULT SHAPE EXACTLY. An earlier version of this
+ * fake returned a `raw` provider body that the live adapter never produces, and
+ * the sandbox was written against that fiction — so the real path was broken
+ * while these tests passed. A fake richer than the boundary it stands in for
+ * does not catch that bug, it causes it.
+ *
+ * Live contract: { ok, resource: { id, agentId?, callType?, status, version },
+ *                  takeAccessToken? }  — and NO raw body.
+ */
 function fakeAdapter(overrides = {}) {
   const calls = [];
   let kbPolls = 0;
 
-  const okResult = (id, extra = {}, raw = {}) => ({ ok: true, resource: { id, version: 0, status: extra.status || null }, raw: { ...raw }, mode: "live" });
+  const okResult = (id, extra = {}) => ({ ok: true, resource: { id, version: 0, status: extra.status || null, ...extra }, mode: "live" });
   const failResult = (code) => ({ ok: false, error: { code, message: code, retryable: false }, mode: "live" });
 
   const base = {
     mode: "live",
-    async createKnowledgeBase(r) { calls.push({ op: "createKnowledgeBase", payload: r.payload }); return okResult("kb_1", {}, { knowledge_base_id: "kb_1", status: "in_progress" }); },
+    async createKnowledgeBase(r) { calls.push({ op: "createKnowledgeBase", payload: r.payload }); return okResult("kb_1", { status: "in_progress" }); },
     async getKnowledgeBase(r) {
       calls.push({ op: "getKnowledgeBase", providerId: r.providerId });
       kbPolls += 1;
       const status = kbPolls >= (overrides.kbCompleteAfter || 1) ? "complete" : "in_progress";
-      return okResult("kb_1", { status }, { knowledge_base_id: "kb_1", status });
+      return okResult("kb_1", { status });
     },
-    async createResponseEngine(r) { calls.push({ op: "createResponseEngine", payload: r.payload }); return okResult("llm_1", {}, { llm_id: "llm_1", version: 0 }); },
-    async createAgent(r) { calls.push({ op: "createAgent", payload: r.payload }); return okResult("agent_1", {}, { agent_id: "agent_1", version: 0 }); },
+    async createResponseEngine(r) { calls.push({ op: "createResponseEngine", payload: r.payload }); return okResult("llm_1", {}); },
+    async createAgent(r) { calls.push({ op: "createAgent", payload: r.payload }); return okResult("agent_1", {}); },
     async getAgent(r) {
+      // getAgent is the one place a body IS needed — the sandbox verifies
+      // fields the port does not model. The live adapter surfaces it via
+      // `raw` for this operation only.
       calls.push({ op: "getAgent", providerId: r.providerId });
       return { ok: true, resource: { id: "agent_1", version: 0 }, raw: { agent_id: "agent_1", version: 0, response_engine: { type: "retell-llm", llm_id: "llm_1" }, voice_id: "custom_voice_test", language: "en-AU" }, mode: "live" };
     },
     async createWebCall(r) {
       calls.push({ op: "createWebCall", payload: r.payload });
-      return { ok: true, resource: { id: "call_1", status: "registered" }, raw: { call_id: "call_1", agent_id: "agent_1", call_type: "web_call", call_status: "registered", access_token: "tok_secret_value" }, mode: "live" };
+      let held = "tok_secret_value";
+      return {
+        ok: true,
+        resource: { id: "call_1", agentId: "agent_1", callType: "web_call", status: "registered", version: 0 },
+        takeAccessToken: () => { const v = held; held = null; return v; },
+        mode: "live",
+      };
     },
     async deleteAgent(r) { calls.push({ op: "deleteAgent", providerId: r.providerId }); return okResult(null); },
     async deleteResponseEngine(r) { calls.push({ op: "deleteResponseEngine", providerId: r.providerId }); return okResult(null); },
@@ -638,7 +658,18 @@ describe("sandbox reuses the corrected production builders", () => {
   test("uses only fictional data — no real client, number or customer", () => {
     const payload = sandbox.buildSandboxWebCallPayload({ agentId: "a" });
     const json = JSON.stringify(payload) + sandbox.DEMO_KNOWLEDGE;
-    assert.ok(!/\+?61\d{9}/.test(json), "no phone number anywhere");
+
+    // A transfer number IS present now, supplied per call through the shared
+    // runtime builder — that is how the sandbox exercises dynamic-variable
+    // influence. So the rule is not "no number" but "no number that could
+    // possibly ring a real person": every one must sit in the ACMA fictitious
+    // range 0491 570 006–156, which is reserved and never allocated.
+    const numbers = json.match(/\+?61\d{9}/g) || [];
+    assert.ok(numbers.length > 0, "the sandbox does exercise a transfer number");
+    for (const n of numbers) {
+      assert.match(n, /^\+?61491570(0(0[6-9]|[1-9]\d)|1[0-5]\d)$/, `${n} must be an ACMA fictitious number`);
+    }
+
     assert.match(sandbox.DEMO.businessName, /Demo/);
     assert.equal(payload.metadata.aida_client_id, "none");
   });

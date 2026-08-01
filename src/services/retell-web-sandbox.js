@@ -135,17 +135,39 @@ function buildSandboxAgentPayload({ llmId, voiceId, language, names }) {
   };
 }
 
+/**
+ * Per-call variables, built through the SHARED runtime path.
+ *
+ * `buildInboundCallVariables` is the same function the production inbound
+ * webhook would call, so this exercises the real allow-list, the real
+ * string-coercion rule and the real runtime-vs-default split rather than a
+ * parallel test object. If a key were ever added that the allow-list rejects,
+ * this would fail here rather than at a caller.
+ *
+ * These are supplied PER CALL precisely because they are the runtime-sensitive
+ * ones — a transfer number baked into the agent's defaults would be whoever was
+ * on call the day the agent was provisioned.
+ */
+function buildSandboxDynamicVariables() {
+  const built = dynamicVars.buildInboundCallVariables({
+    // ACMA fictitious range. Never a real number.
+    transferPrimary: "+61491570006",
+    businessStatus: "open",
+    onCallState: "demo_on_call",
+    callKind: DEMO.scenario,
+  });
+  if (!built.ok) {
+    throw new Error(`sandbox dynamic variables were rejected by the shared validator: ${built.errors.join("; ")}`);
+  }
+  return built.variables;
+}
+
 /** Per-call variables. Every value a string, per the provider contract. */
 function buildSandboxWebCallPayload({ agentId }) {
   if (!agentId) throw new Error("the sandbox web call needs a real agent_id");
   return {
     agent_id: agentId,
-    retell_llm_dynamic_variables: {
-      business_name: DEMO.businessName,
-      caller_suburb: "Frankston",
-      sandbox_mode: "true",
-      test_scenario: DEMO.scenario,
-    },
+    retell_llm_dynamic_variables: buildSandboxDynamicVariables(),
     // Stored against the call, never injected into the prompt. Marks the call
     // as a non-billable test not associated with any client.
     metadata: {
@@ -316,14 +338,31 @@ async function runWebCallSandbox({
     }
     created.callId = callResponse.resource.id;
     created.callStatus = callResponse.resource.status;
-    // The access token is returned to the caller in memory ONLY. It is never
-    // written to the manifest, never logged, never persisted.
-    const accessToken = (callResponse.raw && callResponse.raw.access_token) || null;
+
+    // The token comes through the adapter's ONE-SHOT reader. It is never a
+    // property on the result, so it cannot be serialised, logged or read twice.
+    //
+    // An earlier version read `callResponse.raw.access_token`. The live adapter
+    // has no `raw` — only the test fakes did — so this was always undefined in
+    // reality while the suite stayed green. The fakes were richer than the
+    // provider boundary, which is the only kind of bug a green suite hides.
+    const accessToken = typeof callResponse.takeAccessToken === "function" ? callResponse.takeAccessToken() : null;
+
     record("create_web_call", true, created.callId);
     logger.log(`[sandbox] web call created: ${created.callId} (status ${created.callStatus}) — access token held in memory only`);
 
     // ── 7. Verify the call belongs to our agent ────────────────────
-    const callCheck = verifyWebCall({ response: callResponse.raw || {}, expectedAgentId: created.agentId });
+    const callCheck = verifyWebCall({
+      response: {
+        call_id: callResponse.resource.id,
+        agent_id: callResponse.resource.agentId,
+        call_type: callResponse.resource.callType,
+        call_status: callResponse.resource.status,
+        // Presence only — the value never enters the verification path.
+        access_token: accessToken ? "present" : null,
+      },
+      expectedAgentId: created.agentId,
+    });
     validations.push(...callCheck.checks);
     if (!callCheck.ok) {
       record("verify_web_call", false, "the call is not associated with the sandbox agent");
@@ -357,6 +396,59 @@ async function runWebCallSandbox({
       accessToken: outcome.accessToken || null,
     };
   }
+}
+
+/**
+ * Create ONE web call against an already-provisioned sandbox agent.
+ *
+ * Separated from runWebCallSandbox because of the 30-second token window: the
+ * browser harness must create the call at the instant the operator clicks, not
+ * during provisioning minutes earlier. Provisioning happens once; this runs on
+ * demand.
+ *
+ * Returns the browser-safe fields and the token. The token is read from the
+ * adapter's one-shot reader and passed straight to the caller — it is never
+ * placed on a durable object here.
+ */
+async function createSandboxWebCall({ adapter, agentId, logger = console }) {
+  if (!agentId) return { ok: false, code: "no_agent", message: "There is no sandbox agent to call." };
+
+  const payload = buildSandboxWebCallPayload({ agentId });
+  const response = await adapter.createWebCall({ payload, idempotencyKey: null });
+
+  if (!response.ok) {
+    logger.error(`[sandbox] web call creation failed: ${response.error.code}`);
+    return { ok: false, code: response.error.code, message: "The provider did not create the call." };
+  }
+
+  const accessToken = typeof response.takeAccessToken === "function" ? response.takeAccessToken() : null;
+
+  const verdict = verifyWebCall({
+    response: {
+      call_id: response.resource.id,
+      agent_id: response.resource.agentId,
+      call_type: response.resource.callType,
+      call_status: response.resource.status,
+      access_token: accessToken ? "present" : null,
+    },
+    expectedAgentId: agentId,
+  });
+
+  if (!verdict.ok) {
+    const failedChecks = verdict.checks.filter((c) => !c.ok).map((c) => c.check);
+    logger.error(`[sandbox] web call rejected by verification: ${failedChecks.join(",")}`);
+    return { ok: false, code: "call_verification_failed", message: `The created call failed verification: ${failedChecks.join(", ")}.`, checks: verdict.checks };
+  }
+
+  return {
+    ok: true,
+    callId: response.resource.id,
+    agentId: response.resource.agentId,
+    callType: response.resource.callType,
+    callStatus: response.resource.status,
+    accessToken,
+    checks: verdict.checks,
+  };
 }
 
 /**
@@ -633,7 +725,9 @@ module.exports = {
   buildSandboxResponseEnginePayload,
   buildSandboxAgentPayload,
   buildSandboxWebCallPayload,
+  buildSandboxDynamicVariables,
   runWebCallSandbox,
+  createSandboxWebCall,
   awaitKnowledgeBase,
   verifyAgent,
   verifyWebCall,

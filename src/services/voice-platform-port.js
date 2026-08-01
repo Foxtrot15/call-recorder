@@ -335,6 +335,40 @@ function createMockAdapter({ failures = {}, store = new Map(), clock = () => 0 }
         operation: "createPhoneCall",
       });
     },
+    /**
+     * A mock web call, shaped EXACTLY like the live adapter's result.
+     *
+     * The shape matters more than the values. M7C found that the sandbox read
+     * `response.raw.access_token` — a field only the hand-written test fakes
+     * had. The live adapter never returned it, so the real path was broken while
+     * the suite stayed green. A fake that is richer than the boundary it stands
+     * in for cannot catch that class of bug; it causes it.
+     *
+     * So this mirrors the live contract: `resource.{id, agentId, callType,
+     * status}` plus the one-shot `takeAccessToken()`, and nothing else.
+     */
+    createWebCall: async (request = {}) => {
+      const failure = failures.createWebCall;
+      if (failure) {
+        const normalised = normaliseProviderError({ status: failure.status || 500, providerRequestId: "mock-req" });
+        return fail({ ...normalised, mode: MODES.mock, operation: "createWebCall" });
+      }
+      const payload = request.payload || request;
+      const agentId = payload.agent_id || null;
+      const callId = mockId("webcall", { agent: agentId, vars: payload.retell_llm_dynamic_variables });
+      store.set(callId, { version: 0, status: "registered" });
+
+      let held = `mock_access_token_${callId.slice(-8)}`;
+      return ok({
+        resource: Object.freeze({ id: callId, agentId, callType: "web_call", status: "registered", version: 0 }),
+        providerRequestId: `mock-${callId.slice(-8)}`,
+        mode: MODES.mock,
+        operation: "createWebCall",
+        extra: {
+          takeAccessToken: () => { const v = held; held = null; return v; },
+        },
+      });
+    },
     retrieveCall: async ({ callId } = {}) => {
       const entry = store.get(callId);
       if (!entry) {

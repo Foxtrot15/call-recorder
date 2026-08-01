@@ -210,3 +210,20 @@ a transcript — is written under the OS temp directory, outside the repository.
 
 Full procedure, browser path and cleanup:
 [docs/RETELL_SANDBOX_VALIDATION_PLAN.md](docs/RETELL_SANDBOX_VALIDATION_PLAN.md).
+
+### Browser web-call harness (M7C — dormant, never deployed)
+
+`node scripts/retell-web-sandbox.js --execute --browser` provisions a temporary
+agent and serves an isolated page on **127.0.0.1 only** that joins a web call
+using the official browser SDK. It is **not a route in the application** and is
+never deployed: mounting it would create a production endpoint defended only by
+a flag.
+
+A web-call access token is invalidated ~30 seconds after creation, so the call
+is created by the operator’s click, not during provisioning. The token is
+returned only to the initiating browser and is never logged, persisted, placed
+in a URL, or written to the manifest.
+
+The browser SDK (`retell-client-js-sdk`) is loaded from a pinned CDN specifier
+in the served page only — it is not added to package.json, so the historical
+package-lock.json is untouched. Server-side calls continue to use native fetch.

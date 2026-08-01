@@ -187,6 +187,8 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
         latencyMs: Date.now() - startedAt,
         mode: MODES.live,
         operation,
+        // Only a web call carries a token, and only ever as a one-shot reader.
+        extra: operation === "createWebCall" ? { takeAccessToken: oneShotToken(parsed && parsed.access_token) } : {},
       });
     } catch (err) {
       const normalised = normaliseProviderError({ status: null, cause: err && err.name === "AbortError" ? "timeout" : err && err.message });
@@ -204,15 +206,52 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
    */
   function extractResource(operation, body) {
     if (!body || typeof body !== "object") return Object.freeze({ id: null, version: null });
-    const id =
-      body.agent_id || body.llm_id || body.knowledge_base_id || body.conversation_flow_id || body.call_id || body.phone_number || null;
+
+    // Order matters. A call response carries BOTH call_id and agent_id, and a
+    // generic "first id wins" scan picked agent_id — so a created web call was
+    // recorded under its agent's id. For call operations the call IS the
+    // resource, so it is resolved first.
+    const isCall = operation === "createWebCall" || operation === "createPhoneCall" || operation === "retrieveCall";
+    const id = isCall
+      ? body.call_id || null
+      : body.agent_id || body.llm_id || body.knowledge_base_id || body.conversation_flow_id || body.call_id || body.phone_number || null;
+
     return Object.freeze({
       id,
       version: typeof body.version === "number" ? body.version : null,
       status: body.call_status || body.status || null,
+      // The agent a call belongs to, so a caller can verify the association
+      // without needing the raw body.
+      agentId: isCall ? body.agent_id || null : null,
+      callType: isCall ? body.call_type || null : null,
       assignedTags: Array.isArray(body.assigned_tags) ? body.assigned_tags.slice(0, 10) : null,
       lastModified: body.last_modification_timestamp || null,
     });
+  }
+
+  /**
+   * A web call's access token, exposed through a ONE-SHOT reader.
+   *
+   * The port deliberately does not return provider bodies — that is what keeps
+   * secrets out of results a caller might log. But a web-call token has to reach
+   * the browser, so it needs exactly one narrow channel.
+   *
+   * `takeAccessToken()` returns the token once and then forgets it. The value is
+   * held in a closure, never as an enumerable property, so:
+   *   * JSON.stringify(result) cannot serialise it
+   *   * a debug dump of the result shows a function, not a secret
+   *   * a second reader gets null, so it cannot be harvested twice
+   *
+   * This is the "clear in-memory references after use" requirement expressed in
+   * the type rather than left to callers' discipline.
+   */
+  function oneShotToken(rawToken) {
+    let held = typeof rawToken === "string" && rawToken.length ? rawToken : null;
+    return function takeAccessToken() {
+      const value = held;
+      held = null;
+      return value;
+    };
   }
 
   return Object.freeze({
