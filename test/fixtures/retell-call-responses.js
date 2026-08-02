@@ -450,6 +450,93 @@ const transferBridged = Object.freeze({
 });
 
 /**
+ * 24. THE M7E-LV SHAPE: a call that ended CLEANLY on a user hang-up, with a
+ * properly punctuated final agent turn — and an unfinished agent turn in the
+ * MIDDLE, overlapping the caller's speech.
+ *
+ * This is the structure the live read of the retained M7D call actually
+ * returned, reproduced with entirely fictional content. It is the case the
+ * first implementation could not see: it examined only the final turn, so it
+ * answered "was the agent cut off?" with "no" while the evidence sat in the
+ * timeline it had already computed.
+ *
+ * Turn 2 stops at 24.92s without terminal punctuation; turn 4 STARTS at 24.92s,
+ * before turn 3 ends at 26.06s. Truncation and disconnection are different
+ * events, and this fixture exists to keep them distinguishable.
+ */
+const cleanEndingWithMidCallTruncation = Object.freeze({
+  ...BASE_WEB_CALL,
+  call_id: "call_fixture000000000000000024",
+  call_status: "ended",
+  start_timestamp: 1754002000000,
+  end_timestamp: 1754002107799,
+  duration_ms: 107799,
+  disconnection_reason: "user_hangup",
+  transcript_object: [
+    {
+      role: "agent",
+      content: "Good afternoon, Harbour Locksmith Demo.",
+      words: [{ word: "Good", start: 0.24, end: 1.2 }, { word: "Demo.", start: 1.2, end: 2.71 }],
+    },
+    {
+      role: "user",
+      content: "Hello there.",
+      words: [{ word: "Hello", start: 4.7, end: 4.9 }, { word: "there.", start: 4.9, end: 5.1 }],
+    },
+    {
+      // 146 characters, stops without terminal punctuation.
+      role: "agent",
+      content: "I can help with that. We cover Frankston and the surrounding suburbs, and a locksmith would normally reach you within the hour depending on where you",
+      words: [{ word: "I", start: 17.05, end: 17.2 }, { word: "you", start: 24.7, end: 24.92 }],
+    },
+    {
+      role: "user",
+      content: "Sorry, go on.",
+      words: [{ word: "Sorry,", start: 25.26, end: 25.6 }, { word: "on.", start: 25.6, end: 26.06 }],
+    },
+    {
+      // Starts BEFORE the previous turn ends — overlapping speech.
+      role: "agent",
+      content: "are and how busy they",
+      words: [{ word: "are", start: 24.92, end: 25.4 }, { word: "they", start: 25.4, end: 26.53 }],
+    },
+    {
+      role: "agent",
+      content: "Could I take your name and a number to ring you back on?",
+      words: [{ word: "Could", start: 96.55, end: 96.9 }, { word: "on?", start: 106.4, end: 106.724 }],
+    },
+  ],
+  latency: healthyLatency(),
+  call_analysis: {
+    call_summary: "A fictional caller asked about coverage and a callback was arranged.",
+    in_voicemail: false,
+    user_sentiment: "Neutral",
+    call_successful: true,
+    custom_analysis_data: { caller_name: "Fictional Caller", suburb: "Frankston" },
+  },
+});
+
+/**
+ * 25. A response carrying a top-level field this build does not model.
+ *
+ * `tool_calls` was returned by the live provider on 2026-08-02 and is not in
+ * the Get Call response documented that same day. Undocumented live fields are
+ * treated conservatively: reported by NAME so nothing arrives unnoticed, never
+ * consumed, and never copied into a summary.
+ */
+const undocumentedTopLevelField = Object.freeze({
+  ...BASE_WEB_CALL,
+  call_id: "call_fixture000000000000000025",
+  call_status: "ended",
+  start_timestamp: 1754002200000,
+  end_timestamp: 1754002210000,
+  duration_ms: 10000,
+  disconnection_reason: "user_hangup",
+  transcript_object: conversation(),
+  tool_calls: [{ name: "check_service_area", arguments: "{\"suburb\":\"Frankston\"}" }],
+});
+
+/**
  * The custom analysis schema these fixtures were "configured" with, in the same
  * shape the AIDA compilers emit. Used to prove type validation.
  */
@@ -488,4 +575,6 @@ module.exports = {
   ongoingCall,
   registeredCall,
   transferBridged,
+  cleanEndingWithMidCallTruncation,
+  undocumentedTopLevelField,
 };

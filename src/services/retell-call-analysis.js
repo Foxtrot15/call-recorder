@@ -221,10 +221,19 @@ function validateCallAnalysis(analysis, { expectedCustomFields = [], includeCont
       for (const spec of expectedCustomFields || []) {
         if (spec && typeof spec.name === "string") expected.set(spec.name, spec);
       }
+      // No schema supplied is not the same as "the provider sent something we
+      // did not ask for". The M7E-LV live read reported every returned field as
+      // "not in the requested schema" when in fact no schema had been given to
+      // compare against — a message asserting a check the code never performed.
+      const schemaSupplied = expected.size > 0;
 
       for (const [name, value] of Object.entries(raw)) {
         const spec = expected.get(name);
         if (!spec) {
+          if (!schemaSupplied) {
+            warnings.push({ code: "no_schema_supplied", message: `"${String(name).slice(0, 40)}" was returned; no expected schema was supplied, so its type was not checked.` });
+            continue;
+          }
           // Not an error: the agent's schema can legitimately be ahead of this
           // caller's expectations. Recorded so nothing arrives unnoticed.
           warnings.push({ code: "unexpected_custom_field", message: `The provider returned "${String(name).slice(0, 40)}", which was not in the requested schema.` });

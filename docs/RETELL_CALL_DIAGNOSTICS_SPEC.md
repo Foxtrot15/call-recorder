@@ -1,6 +1,13 @@
 # Retell Call Diagnostics & Australian Phone Speech — M7E
 
 **Status:** built, dormant. **No live execution occurred during M7E.**
+
+> **M7E-LV (2026-08-02) has since exercised the read path against the real
+> provider**, read-only, on one retained call. It corrected the dropout
+> narrative in Part 8 and found four defects fixtures had not exposed. Read
+> [RETELL_LIVE_DIAGNOSTICS_VALIDATION.md](RETELL_LIVE_DIAGNOSTICS_VALIDATION.md)
+> alongside this document; where the two disagree, the live result wins.
+
 No Retell resource was created, updated or deleted. No call was created, placed
 or received. No phone number was purchased, imported or bound. No webhook was
 enabled. No SQL was applied and no database was connected. Nothing was deployed
@@ -541,18 +548,30 @@ web call carries `access_token` as a **required** field.
 
 ## Part 8 — What remains unproven
 
-### The M7D dropout is still undiagnosed
+### The M7D dropout — **partly answered by M7E-LV**
 
-M7E did not diagnose it and does not claim to. It built the instrument, not the
-answer.
+> M7E did not diagnose it. **M7E-LV read the retained call back** and corrected
+> most of what this section originally assumed. Full sanitised result:
+> [RETELL_LIVE_DIAGNOSTICS_VALIDATION.md](RETELL_LIVE_DIAGNOSTICS_VALIDATION.md).
 
-What can be said: the operator's connection dropped earlier in the same session,
-which is what made a cleanup pass fail. That is **circumstantial and unproven**.
-Browser connectivity, an interruption, transport termination, endpointing, TTS
-and LLM latency all remain possible; none is established.
+The provider record shows the call **ended cleanly on a `user_hangup`** after
+~108 seconds and 18 turns, with a final agent turn that **does** end in terminal
+punctuation, no provider error, and healthy latency throughout. The prediction
+written here — "final agent turn visibly unfinished, no disconnection reason" —
+was wrong on both counts.
 
-The one thing that would settle it is a Get Call read of that specific call. That
-read has not been performed, because M7E made no external request.
+The truncation was **mid-call**: two agent turns around the 25-second mark stop
+without terminal punctuation, overlapping the caller's speech. **Why** they are
+unfinished is still not established — a truncation that does not end the call is
+reported by no field in the Get Call response, so barge-in, audio loss, a
+transport hiccup and endpointing are indistinguishable from this record.
+
+That gap was also an implementation gap: `finalTurnAppearsIncomplete` examined
+only the *last* turn, so the first live read reported no truncation at all. The
+design had assumed a truncation must also be a disconnection; this call contains
+one without the other. Mid-call detection and overlap detection were added, and
+they deliberately do **not** touch `cause` — a cause explains how a call ended,
+not that nothing went wrong before it.
 
 ### Still not validated
 
@@ -560,12 +579,37 @@ read has not been performed, because M7E made no external request.
 * **The inbound webhook.** Not enabled. Per-call variable delivery *for a phone
   call* therefore remains unproven — M7D's Proof C delivered variables through
   `create-web-call`, which is a different mechanism.
-* **Post-call analysis against the live provider.** Implemented and tested against
-  fixtures; never retrieved from Retell.
+* ~~**Post-call analysis against the live provider.**~~ **Validated by M7E-LV**:
+  a real analysis object was retrieved, `ready` on the first read with no polling
+  needed. Field names, types and the `user_sentiment` capitalisation matched the
+  documented contract.
 * **Proof B** (the Retell dashboard path) — never performed.
-* **Provider error and rate-limit shapes** beyond those seen during M7D.
+* **Rate-limit behaviour.** Retell documents no rate-limit status for Get Call —
+  only `200`, `400`, `401`, `422` and `500` — and none was encountered.
 * **`caller_number_spoken` end to end** — the conversion is deterministic and
   tested, but nothing can deliver it until the inbound webhook exists.
+
+### Documented error responses (reviewed 2026-08-02)
+
+| Condition | Status | Body |
+|---|---|---|
+| Call not found | **`422`** | `{"status": "error", "message": "Cannot find requested asset under given api key."}` |
+| Missing/invalid key | `401` | same `{status, message}` shape |
+| Rate limited | **not documented** for this endpoint |
+
+`422` maps to `invalid_request` in the port, not `notFound`. Left as is: the
+provider's message is carried through, so a missing call reports understandably.
+Worth noting that M7D observed the *delete* endpoints returning `404` where the
+docs said `422` — documented and live behaviour in this family has already
+diverged once, so neither should be assumed.
+
+**`access_token` is documented as REQUIRED on a web-call response regardless of
+call status** — the schema does not relax it for an ended call. That is precisely
+why the body travels through a one-shot reader and the summary strips it
+unconditionally, and M7E-LV confirmed live that it never reaches the output.
+
+**Retention is not documented.** The M7D call was still fully readable months
+later, which is an observation about one call and not a policy.
 
 ### Before M7F inbound telephony validation
 

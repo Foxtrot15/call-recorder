@@ -177,6 +177,26 @@ describe("custom analysis fields", () => {
     assert.equal(v.ok, true, JSON.stringify(v.errors));
   });
 
+  test("with NO schema supplied, fields are not accused of being unrequested", () => {
+    // The M7E-LV live read printed "the provider returned X, which was not in
+    // the requested schema" for every custom field — while no schema had been
+    // supplied to compare against. The message asserted a check that never ran.
+    const v = analysis.validateCallAnalysis({ custom_analysis_data: { caller_name: "X", suburb: "Y" } });
+    assert.equal(v.ok, true);
+    assert.equal(v.warnings.every((w) => w.code === "no_schema_supplied"), true);
+    assert.equal(v.warnings.some((w) => w.code === "unexpected_custom_field"), false);
+    assert.match(v.warnings[0].message, /no expected schema was supplied/);
+  });
+
+  test("with a schema supplied, a genuinely unrequested field still warns", () => {
+    const v = analysis.validateCallAnalysis(
+      { custom_analysis_data: { caller_name: "X", something_new: "Y" } },
+      { expectedCustomFields: expected }
+    );
+    assert.ok(v.warnings.some((w) => w.code === "unexpected_custom_field"));
+    assert.equal(v.warnings.some((w) => w.code === "no_schema_supplied"), false);
+  });
+
   test("an unexpected field warns rather than failing", () => {
     const v = analysis.validateCallAnalysis(
       { custom_analysis_data: { something_new: "value" } },

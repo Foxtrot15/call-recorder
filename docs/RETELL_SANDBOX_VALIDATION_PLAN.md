@@ -794,7 +794,12 @@ compiled spec.
 **Not yet confirmed aloud.** The fix is proven in tests, not in a caller's ear.
 It should be heard on a live call before any receptionist takes real traffic.
 
-## Finding 2 — the mid-sentence dropout: **STILL UNDIAGNOSED**
+## Finding 2 — the mid-sentence dropout
+
+> **Superseded by M7E-LV (2026-08-02).** The retained call was read back from
+> the provider and several statements below turned out to be wrong. Corrections
+> are marked inline; the full sanitised result is in
+> [RETELL_LIVE_DIAGNOSTICS_VALIDATION.md](RETELL_LIVE_DIAGNOSTICS_VALIDATION.md).
 
 M7E built the instrument, not the answer, and does not claim otherwise.
 
@@ -804,36 +809,47 @@ from a documented provider classification**; there is no path that promotes an
 observation to a cause. An incomplete final sentence does not prove a network
 failure, and audio stopping does not prove a Retell fault.
 
-For the M7D shape specifically — ended, connected, final agent turn visibly
-unfinished, no `disconnection_reason` at all — the report concludes:
+~~For the M7D shape specifically — ended, connected, final agent turn visibly
+unfinished, no `disconnection_reason` at all~~
 
-> An incomplete final turn was observed. Retell did not provide a disconnection
-> reason or provider error establishing the cause. Browser connectivity,
-> interruption and transport termination remain possible but unproven.
+**CORRECTED.** That description of the retained call was a guess, and it was
+wrong on both counts. The provider record shows the call **ended cleanly on a
+`user_hangup`**, with a final agent turn that **does** end in terminal
+punctuation, after nearly 108 seconds and 18 turns. There was no missing
+disconnection reason and no unfinished final turn.
 
-The operator's connection dropped earlier in that session, which is what made a
-cleanup pass fail. That remains **circumstantial and unproven**.
+The truncation the operator heard was **mid-call, not at the end** — two agent
+turns around the 25-second mark stop without terminal punctuation, overlapping
+the caller's speech. Why they are unfinished remains unestablished: no provider
+field reports a truncation that does not end the call.
 
-The one thing that would settle it is a Get Call read of that specific call:
+~~The operator's connection dropped earlier in that session, which is what made a
+cleanup pass fail. That remains circumstantial and unproven.~~
 
-```bash
-node scripts/retell-call-diagnostics.js --fetch-call "call_53578d921719ab68121360c9fdf"
-```
+**Still unproven, and now less likely to be the whole story**: the call ran to
+its natural end with healthy latency throughout (no AIDA heuristic exceeded), so
+whatever happened at ~25 seconds did not degrade the remaining 80 seconds.
 
-That read **has not been performed**, because M7E made no external request. It
-needs `RETELL_DIAGNOSTICS_ENABLED=true` and `RETELL_DIAGNOSTICS_EXECUTE=true`, and
-it requires **neither live writes nor live calls** — reading a call back must
-never require permission to create agents.
+The read **has been performed** — see the M7E-LV document. It needed
+`RETELL_DIAGNOSTICS_ENABLED=true` and `RETELL_DIAGNOSTICS_EXECUTE=true`, and it
+ran with `RETELL_LIVE_WRITES_ENABLED=false`, confirming in practice that reading
+a call back requires no permission to create agents.
 
-Note that Retell's retention of a call from 2026-08-02 is not something this
-milestone verified; the read may return nothing.
+~~Note that Retell's retention of a call from 2026-08-02 is not something this
+milestone verified; the read may return nothing.~~ **Retention confirmed**: the
+call was still retrievable in full, including transcript, latency and analysis.
 
-## Post-call analysis — implemented, not run
+The call id is deliberately not recorded in this repository.
+
+## Post-call analysis — ~~implemented, not run~~ **retrieved live**
 
 `src/services/retell-call-analysis.js` distinguishes `ready`, `pending`,
 `not_applicable` (the call never connected, so polling would never end),
 `unknown` and `provider_error`, and validates built-in and custom fields against
 the schema AIDA asked for. Polling is bounded by construction.
 
-It is tested against fixtures only. **No analysis has been retrieved from
-Retell.**
+**M7E-LV retrieved a real analysis object.** It came back `ready` on the first
+read — no polling was needed — with `call_summary`, `user_sentiment`,
+`call_successful` and `in_voicemail` all populated and two custom fields
+returned. The built-in field names, types and the `user_sentiment` capitalisation
+all matched the documented contract.

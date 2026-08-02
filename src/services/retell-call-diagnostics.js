@@ -340,6 +340,42 @@ function summariseTimeline(body, thresholds) {
     ? finalTurn.endsWithTerminalPunctuation === false && finalTurn.characterCount >= thresholds.incompleteTurnMinChars
     : null;
 
+  // ── Mid-call truncation ────────────────────────────────────────────
+  // Added after the M7E-LV live read (2026-08-02) found this blind spot the
+  // hard way. The M7D operator reported the agent "dropping out mid sentence";
+  // the retained record shows the call ending cleanly on a user hang-up with a
+  // properly punctuated FINAL turn — and an unfinished agent turn in the
+  // MIDDLE, which this function had already computed and then ignored, because
+  // only the last turn was ever examined.
+  //
+  // A tool built to answer "was the agent cut off?" answered "no" while the
+  // evidence sat in its own timeline. Looking only at the end assumed a
+  // truncation must also be a disconnection. They are different events.
+  const incompleteTurns = speaking.filter(
+    (t) => t.endsWithTerminalPunctuation === false && t.characterCount >= thresholds.incompleteTurnMinChars
+  );
+  const midCallIncomplete = incompleteTurns.filter((t) => !finalTurn || t.index !== finalTurn.index);
+
+  // ── Overlapping speech ─────────────────────────────────────────────
+  // A turn that STARTS before the previous one ENDS. Structural evidence of
+  // barge-in or interruption, and the thing most likely to sit alongside a
+  // truncated agent turn. Reported as an observation only: overlap is normal
+  // in a barge-in-enabled agent and proves nothing on its own.
+  const overlaps = [];
+  for (let i = 1; i < speaking.length; i += 1) {
+    const prev = speaking[i - 1];
+    const cur = speaking[i];
+    if (prev.endSeconds === null || cur.startSeconds === null) continue;
+    if (cur.startSeconds < prev.endSeconds) {
+      overlaps.push(Object.freeze({
+        afterIndex: prev.index,
+        index: cur.index,
+        role: cur.role,
+        overlapSeconds: Number((prev.endSeconds - cur.startSeconds).toFixed(3)),
+      }));
+    }
+  }
+
   return Object.freeze({
     present: true,
     turnCount: turns.length,
@@ -347,6 +383,14 @@ function summariseTimeline(body, thresholds) {
     lastCompletedSpeaker: lastCompleted ? lastCompleted.role : null,
     finalTurnRole: finalTurn ? finalTurn.role : null,
     finalTurnAppearsIncomplete,
+    // Structure only — index, role, size and timing. Never content.
+    incompleteTurns: Object.freeze(incompleteTurns.map((t) => Object.freeze({
+      index: t.index, role: t.role, characterCount: t.characterCount, startSeconds: t.startSeconds, endSeconds: t.endSeconds,
+    }))),
+    midCallIncompleteCount: midCallIncomplete.length,
+    midCallIncompleteAgentCount: midCallIncomplete.filter((t) => t.role === "agent").length,
+    overlaps: Object.freeze(overlaps),
+    overlapCount: overlaps.length,
     finalEventAtSeconds,
     toolCallCount: withTools ? withTools.filter((u) => isPlainObject(u) && u.role === "tool_call_invocation").length : 0,
     agentTurns: speaking.filter((t) => t.role === "agent").length,
@@ -709,6 +753,27 @@ function buildDropoutEvidenceReport(summary, { thresholds: overrides = {} } = {}
     } else if (summary.timeline.finalTurnAppearsIncomplete === false) {
       add(EVIDENCE_LEVELS.observed, `The final ${summary.timeline.finalTurnRole} turn ends in terminal punctuation.`);
     }
+
+    // A clean ending does NOT mean nothing went wrong mid-call. Reported
+    // whichever way the final turn came out, because the two are independent
+    // events — see the M7E-LV note in summariseTimeline.
+    if (summary.timeline.midCallIncompleteAgentCount > 0) {
+      const where = summary.timeline.incompleteTurns
+        .filter((t) => t.role === "agent" && t.index !== (summary.timeline.turns.length - 1))
+        .map((t) => `#${t.index} (${t.endSeconds}s, ${t.characterCount} chars)`)
+        .slice(0, 5)
+        .join(", ");
+      add(EVIDENCE_LEVELS.observed, `${summary.timeline.midCallIncompleteAgentCount} agent turn(s) MID-CALL do not end in terminal punctuation: ${where}. This is consistent with a truncated or interrupted turn and establishes neither.`);
+      unknowns.push("Why those mid-call agent turns are unfinished: a truncation that does not end the call is reported by no provider field, so interruption, barge-in and audio loss are indistinguishable here.");
+    } else if (summary.timeline.midCallIncompleteCount > 0) {
+      add(EVIDENCE_LEVELS.observed, `${summary.timeline.midCallIncompleteCount} mid-call turn(s) do not end in terminal punctuation, none of them the agent's.`);
+    }
+
+    if (summary.timeline.overlapCount > 0) {
+      const sample = summary.timeline.overlaps.slice(0, 3).map((o) => `#${o.index} overlaps #${o.afterIndex} by ${o.overlapSeconds}s`).join(", ");
+      add(EVIDENCE_LEVELS.observed, `${summary.timeline.overlapCount} turn(s) start before the previous turn ends: ${sample}. Overlapping speech is normal for a barge-in-capable agent and proves nothing on its own.`);
+    }
+
     if (summary.timeline.finalEventAtSeconds !== null) add(EVIDENCE_LEVELS.observed, `The last word timing in the transcript is at ${summary.timeline.finalEventAtSeconds}s.`);
   } else {
     unknowns.push("The shape of the conversation: no transcript_object was returned.");
@@ -742,11 +807,19 @@ function buildDropoutEvidenceReport(summary, { thresholds: overrides = {} } = {}
     unknowns.push("Client-side or transport causes — browser connectivity, a websocket close, local audio, an interruption — remain possible and are not observable in a Get Call response.");
   }
 
+  // A cause explains how the call ENDED. It does not certify that nothing went
+  // wrong before that, so a mid-call truncation is appended rather than
+  // overwritten — the M7E-LV read found exactly this combination, and reporting
+  // only "user_hangup" would have closed a question that is still open.
+  const midCallNote = summary.timeline.midCallIncompleteAgentCount > 0
+    ? ` Separately, ${summary.timeline.midCallIncompleteAgentCount} agent turn(s) mid-call do not end in terminal punctuation; that is consistent with a truncated turn, and no provider field explains it.`
+    : "";
+
   const conclusion = hasCause
-    ? `Retell classified this call as ${summary.category} (${summary.disconnectionReason}).`
+    ? `Retell classified this call as ${summary.category} (${summary.disconnectionReason}).${midCallNote}`
     : summary.timeline.finalTurnAppearsIncomplete === true
-      ? "An incomplete final turn was observed. Retell did not provide a disconnection reason or provider error establishing the cause. Browser connectivity, interruption and transport termination remain possible but unproven."
-      : "There is not enough evidence in this response to assign a cause.";
+      ? `An incomplete final turn was observed. Retell did not provide a disconnection reason or provider error establishing the cause. Browser connectivity, interruption and transport termination remain possible but unproven.${midCallNote}`
+      : `There is not enough evidence in this response to assign a cause.${midCallNote}`;
 
   return Object.freeze({
     version: DIAGNOSTICS_VERSION,

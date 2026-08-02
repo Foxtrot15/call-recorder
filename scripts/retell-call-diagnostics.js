@@ -217,6 +217,10 @@ function printSummary(s) {
     console.log(`  ${s.timeline.turnCount} turn(s): ${s.timeline.agentTurns} agent, ${s.timeline.userTurns} caller, ${s.timeline.toolCallCount} tool call(s)`);
     console.log(`  last completed turn : ${s.timeline.lastCompletedSpeaker || "none ended in terminal punctuation"}`);
     console.log(`  final turn          : ${s.timeline.finalTurnRole || "?"}${s.timeline.finalTurnAppearsIncomplete === true ? "  ⚠ APPEARS INCOMPLETE (heuristic)" : ""}`);
+    // A clean final turn does not mean nothing went wrong earlier. These two
+    // lines are what M7E-LV was missing on its first live read.
+    console.log(`  mid-call unfinished : ${s.timeline.midCallIncompleteAgentCount} agent, ${s.timeline.midCallIncompleteCount} total${s.timeline.midCallIncompleteAgentCount > 0 ? "  ⚠ (heuristic)" : ""}`);
+    console.log(`  overlapping turns   : ${s.timeline.overlapCount}${s.timeline.overlapCount ? `  (${s.timeline.overlaps.slice(0, 3).map((o) => `#${o.index}/${o.overlapSeconds}s`).join(", ")})` : ""}`);
     console.log(`  last word at        : ${s.timeline.finalEventAtSeconds === null ? "?" : `${s.timeline.finalEventAtSeconds}s`}`);
     console.log();
     for (const t of s.timeline.turns) {
@@ -338,11 +342,24 @@ function buildLiveAdapter() {
   });
 }
 
+// `process.exitCode`, NOT `process.exit()`.
+//
+// The M7E-LV live read completed every step, printed "Done", and then aborted:
+//   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), src\win\async.c:76
+// exiting -1073740791 instead of 0. Calling process.exit() from a promise
+// continuation tears libuv down while fetch's keep-alive handles are still
+// closing, and on Windows that trips an assertion rather than exiting quietly.
+//
+// Setting the exit code and letting the loop drain naturally keeps the same
+// exit semantics without racing the socket pool. The process may linger for a
+// few seconds while keep-alive sockets idle out; a correct exit code is worth
+// more than a prompt one, because a script whose success reports as a crash is
+// unusable in anything automated.
 main()
-  .then((code) => process.exit(code || 0))
+  .then((code) => { process.exitCode = code || 0; })
   .catch((err) => {
     console.error();
     console.error("Diagnostics failed:", err.message);
     console.error(err.stack);
-    process.exit(1);
+    process.exitCode = 1;
   });

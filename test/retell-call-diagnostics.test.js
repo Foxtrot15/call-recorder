@@ -172,13 +172,29 @@ describe("missing and unknown fields", () => {
   test("the fixtures carry only documented fields", () => {
     // The M7D rule: a fake richer than the boundary cannot catch a wire-format
     // error, it causes one.
+    //
+    // `undocumentedTopLevelField` is the deliberate exception: it reproduces a
+    // field the LIVE provider returned on 2026-08-02 that the documentation
+    // reviewed the same day does not list. Exempted by name so the exemption is
+    // visible rather than a hole in the rule.
     for (const [name, fixture] of Object.entries(F)) {
+      if (name === "undocumentedTopLevelField") continue;
       if (!fixture || typeof fixture !== "object" || Array.isArray(fixture) || typeof fixture === "function") continue;
       if (!fixture.call_id) continue;
       for (const key of Object.keys(fixture)) {
         assert.ok(diagnostics.MODELLED_FIELDS.includes(key), `fixture ${name} carries "${key}", which is not a documented Get Call field`);
       }
     }
+  });
+
+  test("an undocumented live field is named, never consumed", () => {
+    const s = diagnostics.summariseCall(F.undocumentedTopLevelField);
+    assert.ok(s.unknownFields.includes("tool_calls"), "an unmodelled field must be reported by name");
+    // Its VALUE must not reach the summary, and it must not be silently
+    // absorbed into any modelled field.
+    assert.equal(JSON.stringify(s).includes("check_service_area"), false);
+    assert.equal(JSON.stringify(s).includes("Frankston"), false);
+    assert.equal(s.timeline.toolCallCount, 0, "tool_calls is not transcript_with_tool_calls and must not be counted as one");
   });
 });
 
@@ -277,6 +293,44 @@ describe("speech-turn timeline", () => {
     assert.equal(JSON.stringify(s).includes("Frankston"), false);
   });
 
+  test("a MID-CALL unfinished agent turn is found even when the ending is clean", () => {
+    // The blind spot the M7E-LV live read exposed. The retained M7D call ended
+    // on a user hang-up with a properly punctuated final turn, and had an
+    // unfinished agent turn in the middle. Looking only at the last turn
+    // answered "was the agent cut off?" with "no".
+    const s = diagnostics.summariseCall(F.cleanEndingWithMidCallTruncation);
+
+    assert.equal(s.category, "user_disconnected");
+    assert.equal(s.timeline.finalTurnAppearsIncomplete, false, "the ending really is clean");
+    // TWO, not one: both halves of the interrupted utterance are unfinished —
+    // the turn that was cut off (#2) and the fragment that resumed over the
+    // caller (#4). The live record had exactly this pair, and collapsing them
+    // to one would misdescribe what the transcript shows.
+    assert.equal(s.timeline.midCallIncompleteAgentCount, 2, "and there really are truncated agent turns before it");
+    assert.deepEqual(s.timeline.incompleteTurns.filter((t) => t.role === "agent").map((t) => t.index), [2, 4]);
+    // The caller's short "Sorry, go on." ends in a full stop and is not counted.
+    assert.equal(s.timeline.incompleteTurns.some((t) => t.role === "user"), false);
+  });
+
+  test("overlapping speech is detected structurally", () => {
+    const s = diagnostics.summariseCall(F.cleanEndingWithMidCallTruncation);
+    assert.equal(s.overlapCount === undefined, true, "overlaps live on the timeline, not the summary root");
+    assert.equal(s.timeline.overlapCount, 1);
+    assert.equal(s.timeline.overlaps[0].index, 4);
+    assert.equal(s.timeline.overlaps[0].afterIndex, 3);
+    assert.ok(s.timeline.overlaps[0].overlapSeconds > 1);
+  });
+
+  test("the character threshold is what keeps backchannels out", () => {
+    // Raising it above every turn suppresses the finding entirely, which proves
+    // the threshold is doing the filtering rather than the punctuation check
+    // alone. A one-word "mhm" without a full stop must never read as a
+    // truncated turn.
+    const s = diagnostics.summariseCall(F.cleanEndingWithMidCallTruncation, { thresholds: { incompleteTurnMinChars: 500 } });
+    assert.equal(s.timeline.midCallIncompleteAgentCount, 0, "raising the threshold must suppress it");
+    assert.equal(s.timeline.incompleteTurns.length, 0);
+  });
+
   test("no transcript_object is reported as absent, not as zero turns", () => {
     const s = diagnostics.summariseCall(F.minimalRequiredFieldsOnly);
     assert.equal(s.timeline.present, false);
@@ -313,6 +367,39 @@ describe("uncertain evidence STAYS uncertain", () => {
     assert.match(unknowns, /browser connectivity/i);
     assert.match(unknowns, /websocket|transport/i);
     assert.match(unknowns, /Retell returned no disconnection_reason/i);
+  });
+
+  test("a clean ending does NOT close a mid-call question", () => {
+    const s = diagnostics.summariseCall(F.cleanEndingWithMidCallTruncation);
+    const r = diagnostics.buildDropoutEvidenceReport(s);
+
+    // The ENDING is explained by the provider...
+    assert.equal(r.cause, "user_disconnected");
+    assert.equal(r.causeEvidence, "provider_classified");
+    // ...and the mid-call truncation is still reported and still unexplained.
+    assert.match(r.conclusion, /Separately, 2 agent turn\(s\) mid-call/);
+    assert.match(r.unknowns.join(" "), /truncation that does not end the call is reported by no provider field/);
+    const statements = r.findings.map((f) => f.statement).join(" ");
+    assert.match(statements, /MID-CALL do not end in terminal punctuation/);
+    assert.match(statements, /establishes neither/);
+  });
+
+  test("mid-call truncation never becomes a cause", () => {
+    const s = diagnostics.summariseCall(F.cleanEndingWithMidCallTruncation);
+    const r = diagnostics.buildDropoutEvidenceReport(s);
+    // It is an observation about the middle of the call, not about how it
+    // ended. It must not overwrite or invent a cause.
+    assert.notEqual(r.cause, "provider_error");
+    assert.equal(r.sufficientEvidence, true, "the ENDING is established");
+    const text = `${r.conclusion} ${r.findings.map((f) => f.statement).join(" ")}`;
+    assert.doesNotMatch(text, /caused by|interrupted by the|due to/i);
+  });
+
+  test("overlapping speech is reported without being blamed", () => {
+    const r = diagnostics.buildDropoutEvidenceReport(diagnostics.summariseCall(F.cleanEndingWithMidCallTruncation));
+    const statements = r.findings.map((f) => f.statement).join(" ");
+    assert.match(statements, /start before the previous turn ends/);
+    assert.match(statements, /proves nothing on its own/);
   });
 
   test("a provider classification IS enough to assign a cause", () => {
