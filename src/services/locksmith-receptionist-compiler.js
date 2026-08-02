@@ -365,7 +365,7 @@ const UNANSWERED_INSTRUCTION = Object.freeze({
  * Stage one: profile → provider-neutral spec. This is where every judgement is
  * made; nothing below stage one decides anything.
  */
-function compileReceptionistSpec({ profile, profileVersion, clientId, templateVersion, config = {} }) {
+function compileReceptionistSpec({ profile, profileVersion, clientId, templateVersion, config = {}, toolFree = false }) {
   const flags = [];
   const collect = (result) => {
     flags.push(...result.flags);
@@ -469,8 +469,23 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       extendedAreas.length ? `Will sometimes travel to: ${extendedAreas.join(", ")}.` : null,
       declinedAreas.length ? `Does not travel to: ${declinedAreas.join(", ")}.` : null,
       afterHoursAreas ? `After hours the area is smaller: ${afterHoursAreas.join(", ")}.` : "After hours the same area applies.",
-      `If the caller is outside the area: ${OUTSIDE_AREA_INSTRUCTION[areas.outsideAreaAction] || "take their details and let the locksmith decide."}`,
-      "Never assume a suburb is covered because it sounds close to one that is. If you are unsure, use the service-area check.",
+      // ── THREE STATES, NOT TWO (M7I-B) ──────────────────────────────
+      // The first live call refused Springvale because the model read a
+      // positive scope ("Frankston and surrounding suburbs") as a closed list
+      // and treated anything unnamed as excluded. That costs real work: a
+      // locksmith who covers more than the profile happens to name loses the
+      // job, and the caller is told something untrue.
+      //
+      // So the three cases are spelled out separately, and the UNKNOWN case is
+      // named explicitly rather than being folded into "outside the area".
+      "A suburb is in one of three states, and they are not the same:",
+      `1. LISTED ABOVE AS COVERED — say yes, the business covers it.`,
+      declinedAreas.length
+        ? `2. IN THE "does not travel to" LIST — say politely that it is not an area the business covers, so they can ring someone closer.`
+        : `2. NOT APPLICABLE — no suburb has been ruled out.`,
+      `3. NOT IN ANY LIST ABOVE — this is UNKNOWN, which is NOT the same as excluded. Do not say it is outside the area, and do not say it is covered. ${OUTSIDE_AREA_INSTRUCTION[areas.outsideAreaAction] || "Take their details and let the locksmith decide."}`,
+      areas.outsideAreaWording ? `Approved wording for an unknown suburb: ${asQuotedData(collect(cleanProse(areas.outsideAreaWording, { max: BOUNDS.wording, field: "serviceAreas.outsideAreaWording" })))}` : null,
+      "Never infer that a suburb is covered OR excluded because it sounds close to one that is listed. Proximity is not coverage.",
     ].filter(Boolean),
   });
 
@@ -553,9 +568,57 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     lines: [
       alwaysCollect.length ? "Before the call ends you need:" : "Get at least the caller's name and a number to ring back on.",
       ...alwaysCollect.map((f) => `- ${S.CALLER_INFO_LABELS[f] || f}`),
-      "Ask naturally, one thing at a time. Read the callback number back digit by digit and confirm it.",
+      // ── CAPTURE POLICY (M7I-B) ─────────────────────────────────────
+      // The first live call asked for a name and number in EVERY reply — five
+      // times in thirteen turns. Answering the caller's question and then
+      // re-requesting the same details is how a receptionist sounds like a
+      // form, and it is the fastest way to lose somebody who is already
+      // locked out and annoyed.
+      "Ask for one thing at a time, and only for what you still do not have.",
+      "ANSWER THE CALLER'S QUESTION FIRST. Do not make a simple question about services, areas or hours conditional on getting their details.",
+      "If they have already told you something, do not ask for it again. Repeat it back once only if you genuinely need to confirm it.",
+      "Do not end every reply by asking for a name and number. Ask when you actually need the detail — normally as the call moves toward a next step.",
+      "Read the callback number back digit by digit and confirm it, once.",
       "If the caller will not give a callback number, say plainly that the locksmith cannot ring them back without it.",
     ].filter(Boolean),
+  });
+
+  // ── WHAT THIS AGENT CANNOT DO (M7I-B, tool-free only) ───────────────
+  // In tool-free mode the agent has no way to record an enquiry, look a suburb
+  // up, notify anybody or transfer a call. Saying "I've sent that through" when
+  // nothing was sent is a lie told to a person in trouble, so the prompt is
+  // told the truth and given wording that stays honest.
+  if (toolFree) {
+    sections.push({
+      id: "capability_limits",
+      title: "What you cannot do on this call",
+      lines: [
+        "You have NO tools on this call. You cannot save an enquiry, look anything up, send a message, notify anyone or transfer the call.",
+        "So never say any of these, because none of them would be true: \"I've logged that\", \"I've sent that through\", \"the locksmith has your details\", \"someone will call you back\", \"I've booked that in\".",
+        "You may still take the caller's details in conversation — just do not claim they went anywhere.",
+        "If you need to explain, say plainly that this is a test line and the details are not being passed to a locksmith.",
+        "If a caller needs someone urgently, tell them to ring a locksmith directly rather than implying help is coming.",
+      ],
+    });
+  }
+
+  // ── HOW TO SOUND (M7I-B) ────────────────────────────────────────────
+  // The first live call produced good empathy — "I understand this is
+  // frustrating" — entirely by model default. Nothing in the prompt or the
+  // knowledge base asked for it. Behaviour nobody specified is behaviour that
+  // changes silently when the model changes, so it is pinned here.
+  sections.push({
+    id: "tone",
+    title: "How to sound",
+    lines: [
+      "Calm, concise and respectful. Short sentences.",
+      "If the caller is frustrated, acknowledge it ONCE, briefly, then move to the next useful step.",
+      "Do not repeat empathy phrases. Saying you understand in every reply sounds hollow.",
+      "Never argue with the caller and never tell them to calm down.",
+      "Do not sound therapeutic and do not over-apologise. One apology is enough.",
+      "Never promise an outcome to smooth things over — no arrival time, no price, no guarantee that someone will attend.",
+      "One question at a time. Answer what was asked, clarify only if you must, and stop once the next step is clear.",
+    ],
   });
 
   // ── Saying a phone number ─────────────────────────────────────────
@@ -625,8 +688,17 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     privacy: { callsMayBeRecorded: (profile.privacy || {}).callsMayBeRecorded === true },
     forbiddenPromises,
     dynamicVariables: buildDynamicVariables({ profile, profileVersion, clientId }),
-    tools: buildToolContracts(),
-    knowledge: buildKnowledgeContent({ profile, collect }),
+    // ── TOOL-FREE MODE (M7I-B) ──────────────────────────────────────
+    // Explicit and visible on the spec, never an ad-hoc strip after the fact.
+    // Six of the seven compiled tool endpoints do not exist as routes, and no
+    // emitted tool carries a `url`, so provisioning them would give an agent
+    // eight actions it cannot perform — including recording the enquiry.
+    //
+    // An agent that believes it saved a job and says so is worse than one that
+    // admits it cannot, so tool-free ALSO changes what the prompt claims.
+    toolFree: toolFree === true,
+    tools: toolFree === true ? Object.freeze([]) : buildToolContracts(),
+    knowledge: buildKnowledgeContent({ profile, collect, toolFree: toolFree === true }),
     reviewFlags: flags,
   };
 
@@ -640,7 +712,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
  * exclusions or pricing authority stays in the instructions above — a
  * retrieval miss must never change what the receptionist is allowed to do.
  */
-function buildKnowledgeContent({ profile, collect }) {
+function buildKnowledgeContent({ profile, collect, toolFree = false }) {
   const sections = [];
   const identity = profile.identity || {};
   const areas = profile.serviceAreas || {};
@@ -662,7 +734,14 @@ function buildKnowledgeContent({ profile, collect }) {
   if (allAreas.length) {
     sections.push({
       title: "Suburbs we are asked about",
-      body: `${collect(cleanList(allAreas, { field: "kb:areas" })).join(", ")}.\n\nThis list is background only. Use the service-area check to decide whether a job can be taken.`,
+      // In tool-free mode there IS no service-area check, so pointing at one
+      // would be an instruction the agent cannot follow — the same class of
+      // untruth as claiming an enquiry was saved.
+      body: `${collect(cleanList(allAreas, { field: "kb:areas" })).join(", ")}.\n\nThis list is background only. ${
+        toolFree
+          ? "The service-area rules in the instructions decide whether a job can be taken."
+          : "Use the service-area check to decide whether a job can be taken."
+      }`,
     });
   }
 
@@ -715,7 +794,7 @@ function hash(value) {
  * refusal. Refuses anything that is not an APPROVED, provisioning-ready
  * profile: compiling a draft would produce an artefact nobody agreed to.
  */
-function compileReceptionist({ profile, profileVersion, profileStatus, clientId, templateVersion, config = {}, generatedAt = null }) {
+function compileReceptionist({ profile, profileVersion, profileStatus, clientId, templateVersion, config = {}, generatedAt = null, toolFree = false }) {
   if (profileStatus !== "approved") {
     return { ok: false, code: "profile_not_approved", message: `Only an approved profile can be compiled (this one is "${profileStatus}").` };
   }
@@ -728,7 +807,7 @@ function compileReceptionist({ profile, profileVersion, profileStatus, clientId,
     return { ok: false, code: "profile_not_ready", message: "The profile is not provisioning-ready.", blockers: assessment.blockers };
   }
 
-  const spec = compileReceptionistSpec({ profile, profileVersion, clientId, templateVersion, config });
+  const spec = compileReceptionistSpec({ profile, profileVersion, clientId, templateVersion, config, toolFree });
   assertNoTranscript(spec);
 
   // Safety validation: the floor must be intact in the compiled output.

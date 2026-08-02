@@ -134,10 +134,17 @@ describe("receptionist compiler — critical facts are preserved", () => {
   });
 
   it("keeps the out-of-area rule and the urgency rules", () => {
-    assert.match(prompt, /If the caller is outside the area:/);
+    // M7I-B replaced the single "If the caller is outside the area:" line with
+    // three explicitly separated states. The guarantee this test protects — that
+    // the approved out-of-area action survives compilation — is unchanged and
+    // now stronger: an UNLISTED suburb is UNKNOWN, not excluded, which is the
+    // defect the first live call exposed when Springvale was refused.
+    assert.match(prompt, /A suburb is in one of three states/);
+    assert.match(prompt, /NOT IN ANY LIST ABOVE — this is UNKNOWN, which is NOT the same as excluded/);
     assert.match(prompt, /tell them the locksmith will confirm whether they can come out/);
     assert.match(prompt, /locked out of a residence after hours/i);
-    assert.match(prompt, /Never assume a suburb is covered because it sounds close/);
+    // Proximity still never implies coverage — and now never implies exclusion.
+    assert.match(prompt, /Never infer that a suburb is covered OR excluded because it sounds close/);
   });
 
   it("always includes every mandatory safety limit", () => {
