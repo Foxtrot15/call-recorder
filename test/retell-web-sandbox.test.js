@@ -9,6 +9,7 @@ const assert = require("node:assert/strict");
 const cfg = require("../src/config/retell-sandbox");
 const sandbox = require("../src/services/retell-web-sandbox");
 const multipart = require("../src/services/retell-multipart");
+const dynamicVars = require("../src/services/retell-dynamic-variables");
 
 const SILENT = { log() {}, error() {} };
 const NO_SLEEP = async () => {};
@@ -642,7 +643,7 @@ describe("sandbox reuses the corrected production builders", () => {
     const built = sandbox.buildSandboxKnowledgeBaseRequest(names);
     const direct = multipart.buildCreateKnowledgeBaseRequest({
       knowledgeBaseName: names.knowledgeBase,
-      texts: [{ title: "Demonstration business", text: sandbox.DEMO_KNOWLEDGE }],
+      texts: [{ title: sandbox.SANDBOX_KNOWLEDGE_TITLE, text: sandbox.buildSandboxKnowledgeText() }],
     });
     assert.equal(built.request.boundary, direct.request.boundary, "same builder, same bytes");
   });
@@ -658,7 +659,7 @@ describe("sandbox reuses the corrected production builders", () => {
 
   test("uses only fictional data — no real client, number or customer", () => {
     const payload = sandbox.buildSandboxWebCallPayload({ agentId: "a" });
-    const json = JSON.stringify(payload) + sandbox.DEMO_KNOWLEDGE;
+    const json = JSON.stringify(payload) + sandbox.buildSandboxKnowledgeText();
 
     // The sandbox still exercises a transfer number, but since M7G it does so
     // through the SPOKEN form only — the canonical E.164 value is no longer
@@ -679,8 +680,118 @@ describe("sandbox reuses the corrected production builders", () => {
       assert.match(n, /^\+?61491570(0(0[6-9]|[1-9]\d)|1[0-5]\d)$/, `${n} must be an ACMA fictitious number`);
     }
 
-    assert.match(sandbox.DEMO.businessName, /Demo/);
+    // The business must still be obviously not real. The name changed with M7I
+    // (the sandbox now compiles the AIDA Locksmith Sandbox profile rather than
+    // the hand-written Harbour Locksmith Demo), so the assertion is on the
+    // property that matters rather than on the old literal.
+    assert.match(sandbox.DEMO.businessName, /Sandbox|Demo/);
+    assert.match(sandbox.buildSandboxKnowledgeText(), /not a real business/i);
     assert.equal(payload.metadata.aida_client_id, "none");
+  });
+
+  test("the sandbox business name is the profile's, not a second one", () => {
+    // Two names would mean an agent greeting callers as one business and
+    // answering questions as another.
+    const { buildSandboxProfile } = require("../src/services/locksmith-sandbox-profile");
+    assert.equal(sandbox.DEMO.businessName, buildSandboxProfile().identity.spokenName);
+  });
+
+  // ── M7I: the Springvale regression, at the layer that actually shipped ──
+  //
+  // The founder's live agent was built by THIS module, not by the compiler. Its
+  // whole service-area knowledge was one sentence — "It services Frankston and
+  // surrounding suburbs" — in the knowledge base, with no rule anywhere about a
+  // suburb nobody had classified. These assertions are on the payloads that
+  // reach the provider, because that is what the caller hears.
+  describe("the sandbox receptionist is compiled, not hand-written (M7I)", () => {
+    const engine = () => sandbox.buildSandboxResponseEnginePayload({ knowledgeBaseId: "kb_1", defaults: {} });
+    const prompt = () => engine().general_prompt;
+
+    test("the prompt carries the three service-area states", () => {
+      const p = prompt();
+      assert.match(p, /A suburb is in one of three states/);
+      assert.match(p, /LISTED ABOVE AS COVERED — say yes/);
+      assert.match(p, /does not travel to" LIST — say politely/);
+      assert.match(p, /NOT IN ANY LIST ABOVE — this is UNKNOWN, which is NOT the same as excluded/);
+    });
+
+    test("an unknown suburb is never an immediate refusal", () => {
+      const p = prompt();
+      assert.match(p, /NEVER refuse a caller only because their suburb is not on a list/);
+      assert.match(p, /not completely sure whether the business covers that suburb/);
+      assert.match(p, /the locksmith will confirm whether they can come out shortly/);
+      assert.match(p, /Do not promise that they will/);
+    });
+
+    test("the covered and excluded suburbs are in the PROMPT, not only the knowledge base", () => {
+      // A rule that decides whether someone gets a locksmith must not depend on
+      // a retrieval hit. This is the half the old sandbox got wrong.
+      const p = prompt();
+      assert.match(p, /Core area: Frankston/);
+      assert.match(p, /Does not travel to: Dandenong, Geelong/);
+    });
+
+    test("the knowledge base no longer states a closed-sounding scope", () => {
+      const kb = sandbox.buildSandboxKnowledgeText();
+      assert.equal(/Frankston and surrounding suburbs/.test(kb), false, "the exact sentence that caused the refusal must be gone");
+      assert.match(kb, /NOT a complete list of everywhere the business will go/);
+      assert.match(kb, /unknown, not excluded/);
+    });
+
+    test("Springvale appears nowhere — it must land in the unknown state by rule", () => {
+      assert.equal(/Springvale/i.test(prompt() + sandbox.buildSandboxKnowledgeText()), false);
+    });
+
+    test("the hand-written prompt is gone, including its arbitrary turn limit", () => {
+      const p = prompt();
+      assert.equal(/Keep it under six turns/.test(p), false);
+      assert.equal(/Harbour/i.test(p), false);
+    });
+
+    test("the prompt names no dynamic variable, so none can render literally", () => {
+      // An unsupplied variable renders as literal text at this provider. The old
+      // sandbox prompt named four; the compiled one names none.
+      assert.deepEqual([...new Set([...prompt().matchAll(/\{\{([a-z_]+)\}\}/g)].map((m) => m[1]))], []);
+    });
+
+    test("it is tool-free and says so, rather than claiming an enquiry was saved", () => {
+      assert.deepEqual(engine().general_tools, []);
+      assert.match(prompt(), /You have NO tools on this call/);
+    });
+
+    test("the real knowledge base id replaces the compiler's reference token", () => {
+      const built = engine();
+      assert.deepEqual(built.knowledge_base_ids, ["kb_1"]);
+      assert.equal(JSON.stringify(built).includes("$aidaRef"), false, "no unresolved reference may be sent");
+    });
+
+    test("a missing knowledge base id is refused rather than sent as a reference", () => {
+      assert.throws(() => sandbox.buildSandboxResponseEnginePayload({ knowledgeBaseId: null }), /real knowledge_base_id/);
+    });
+
+    test("compiled defaults win over anything the runner passes", () => {
+      const built = sandbox.buildSandboxResponseEnginePayload({ knowledgeBaseId: "kb_1", defaults: { business_name: "Someone Else" } });
+      assert.equal(built.default_dynamic_variables.business_name, sandbox.DEMO.businessName);
+    });
+
+    test("no runtime-sensitive value is baked into the provisioned defaults", () => {
+      const defaults = engine().default_dynamic_variables;
+      for (const key of Object.keys(defaults)) {
+        assert.equal(dynamicVars.RUNTIME_ONLY_KEYS.includes(key), false, `${key} must not be a provisioned default`);
+      }
+      assert.equal(/\{\{/.test(JSON.stringify(defaults)), false, "no placeholder may survive into defaults");
+    });
+
+    test("the compiled sandbox raises no review flags", () => {
+      // A flag here would mean the fixture profile itself is configured in a way
+      // the compiler had to correct — worth knowing before a founder call.
+      assert.deepEqual(sandbox.sandboxReceptionist().reviewFlags, []);
+    });
+
+    test("compilation is deterministic — same bytes every time", () => {
+      assert.equal(prompt(), prompt());
+      assert.equal(sandbox.buildSandboxKnowledgeText(), sandbox.buildSandboxKnowledgeText());
+    });
   });
 
   test("the sandbox agent carries the same field names the production compiler emits", () => {

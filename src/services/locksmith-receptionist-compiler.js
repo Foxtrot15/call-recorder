@@ -330,6 +330,24 @@ function buildSafetyInstructions() {
 
 // ── Instruction compilation ─────────────────────────────────────────
 
+/**
+ * Look a value up in a lookup table by OWN key only.
+ *
+ * `TABLE[key]` walks the prototype chain, so a profile value of "constructor",
+ * "toString" or "valueOf" returns a truthy function — which then renders into a
+ * prompt as "function Object() { [native code] }", or worse, passes a guard that
+ * was meant to reject it. compileReceptionist validates enums before any of this
+ * runs, but compileReceptionistSpec is exported and does not, so the tables that
+ * build prompt prose look up defensively rather than trusting the caller.
+ *
+ * Returns undefined for anything that is not an own key, so `lookup(T, k) || k`
+ * keeps its original meaning at every call site.
+ */
+function lookup(table, key) {
+  if (typeof key !== "string") return undefined;
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
 function describeHours(hours) {
   const ordinary = hours.ordinary || {};
   const lines = [];
@@ -348,12 +366,62 @@ function describeHours(hours) {
   return lines;
 }
 
-const OUTSIDE_AREA_INSTRUCTION = Object.freeze({
-  collect_details_for_confirmation: "Take their name, number, suburb and what they need, and tell them the locksmith will confirm whether they can come out. Do not promise that they will.",
-  politely_decline: "Tell them politely that it is outside the area the business covers, and suggest they try a locksmith closer to them. Do not take the job.",
-  transfer_for_manual_assessment: "Put them through so the locksmith can decide, following the transfer rules below.",
-  other_reviewed_action: "Follow the reviewed wording recorded for out-of-area callers.",
+// ── UNKNOWN IS NOT EXCLUDED (M7I) ───────────────────────────────────
+//
+// `outsideAreaAction` is ONE field answering TWO different questions, and the
+// difference decides whether a caller gets a locksmith:
+//
+//   EXCLUDED  the owner named this suburb and said no. A polite decline is the
+//             right answer, and it is true.
+//   UNKNOWN   nobody has classified this suburb. A decline here is a guess
+//             delivered as a fact — and it is the guess that loses the job.
+//
+// M7I-B separated the two cases in the prose but still rendered the UNKNOWN
+// branch from the owner's raw `outsideAreaAction`. With `politely_decline` — an
+// ordinary in-schema choice, and arguably the most natural reading of the review
+// UI's "If someone calls from outside the area" — the compiled line read:
+//
+//   "…this is UNKNOWN, which is NOT the same as excluded. Do not say it is
+//    outside the area … Tell them politely that it is outside the area the
+//    business covers … Do not take the job."
+//
+// A self-contradiction whose second half is exactly the refusal the founder
+// heard. So the unknown branch has its OWN table, containing only actions that
+// keep the caller in play. `politely_decline` is deliberately absent: a refusal
+// is not expressible here, rather than being expressible and discouraged.
+//
+// The EXCLUDED branch does not read this field at all — an explicit exclusion
+// has one correct answer, and it is stated inline below.
+const UNKNOWN_AREA_INSTRUCTION = Object.freeze({
+  collect_details_for_confirmation: "Apologise, say plainly that you are not completely sure whether the business covers that suburb, take their name, number, suburb and what they need, and tell them the locksmith will confirm whether they can come out shortly. Do not promise that they will.",
+  transfer_for_manual_assessment: "Apologise, say you are not completely sure whether the business covers that suburb, then put them through so the locksmith can decide, following the transfer rules below. If nobody answers, take their details — never turn them away instead.",
+  other_reviewed_action: "Apologise, say you are not completely sure whether the business covers that suburb, then follow the reviewed wording recorded for callers whose suburb is not on the lists.",
 });
+
+// Where an unclassifiable configuration lands. Collecting details is the only
+// action that is safe under every profile: it neither promises attendance nor
+// refuses one.
+const UNKNOWN_AREA_DEFAULT_ACTION = "collect_details_for_confirmation";
+
+// Actions that end the call with a "no". Legitimate for an explicitly excluded
+// suburb; never correct for one nobody has classified.
+const REFUSAL_AREA_ACTIONS = Object.freeze(["politely_decline"]);
+
+/**
+ * Which instruction the UNKNOWN branch gets, given what the owner configured.
+ *
+ * Returns { action, degradedFrom }. `degradedFrom` is non-null when a configured
+ * refusal was overridden, so the caller can surface it for review instead of
+ * quietly ignoring the owner's choice.
+ */
+function resolveUnknownAreaAction(configured) {
+  if (REFUSAL_AREA_ACTIONS.includes(configured)) {
+    return { action: UNKNOWN_AREA_DEFAULT_ACTION, degradedFrom: configured };
+  }
+  if (lookup(UNKNOWN_AREA_INSTRUCTION, configured)) return { action: configured, degradedFrom: null };
+  // Unset or unrecognised. Not a degradation — there was nothing to override.
+  return { action: UNKNOWN_AREA_DEFAULT_ACTION, degradedFrom: null };
+}
 
 const UNANSWERED_INSTRUCTION = Object.freeze({
   try_backup_number: "try the backup contact, then take a message if that also goes unanswered",
@@ -390,7 +458,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     .filter((s) => s && s.enabled === true)
     .map((s) => ({
       serviceId: s.serviceId,
-      label: S.SERVICE_LABELS[s.serviceId] || s.serviceId,
+      label: lookup(S.SERVICE_LABELS, s.serviceId) || s.serviceId,
       mayBeUrgent: s.mayBeUrgent === true,
       notes: collect(cleanProse(s.notes, { max: BOUNDS.notes, field: `service:${s.serviceId}` })),
       mustCollect: Array.isArray(s.mustCollect) ? s.mustCollect.filter((f) => S.CALLER_INFO_FIELDS.includes(f)) : [],
@@ -398,7 +466,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
 
   const declined = (Array.isArray(profile.servicesDeclined) ? profile.servicesDeclined : []).map((s) => ({
     serviceId: s.serviceId,
-    label: S.SERVICE_LABELS[s.serviceId] || s.serviceId,
+    label: lookup(S.SERVICE_LABELS, s.serviceId) || s.serviceId,
     reason: collect(cleanProse(s.reason, { max: BOUNDS.notes, field: `declined:${s.serviceId}` })),
   }));
 
@@ -421,7 +489,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
 
   const forbiddenPromises = (Array.isArray(profile.forbiddenPromises) ? profile.forbiddenPromises : [])
     .filter((p) => p && p.enabled === true)
-    .map((p) => ({ promiseId: p.promiseId, label: S.FORBIDDEN_PROMISE_LABELS[p.promiseId] || p.promiseId, note: collect(cleanProse(p.note, { max: BOUNDS.notes, field: `forbidden:${p.promiseId}` })) }));
+    .map((p) => ({ promiseId: p.promiseId, label: lookup(S.FORBIDDEN_PROMISE_LABELS, p.promiseId) || p.promiseId, note: collect(cleanProse(p.note, { max: BOUNDS.notes, field: `forbidden:${p.promiseId}` })) }));
 
   // ── Instruction sections. Order is stable for hashing. ──
   const sections = [];
@@ -461,6 +529,34 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     ].filter(Boolean),
   });
 
+  // ── THREE STATES, NOT TWO (M7I-B), AND THE THIRD NEVER REFUSES (M7I) ──
+  // The first live call refused Springvale because the model read a positive
+  // scope ("Frankston and surrounding suburbs") as a closed list and treated
+  // anything unnamed as excluded. That costs real work: a locksmith who covers
+  // more than the profile happens to name loses the job, and the caller is told
+  // something untrue.
+  //
+  // M7I-B named the three cases. M7I makes the third one structurally safe: the
+  // unknown branch is resolved through UNKNOWN_AREA_INSTRUCTION, which cannot
+  // express a refusal, and a configured refusal is downgraded and FLAGGED rather
+  // than silently honoured or silently dropped.
+  const unknownArea = resolveUnknownAreaAction(areas.outsideAreaAction);
+  if (unknownArea.degradedFrom) {
+    flags.push({
+      field: "serviceAreas.outsideAreaAction",
+      code: "unknown_area_refusal_downgraded",
+      message:
+        `"${unknownArea.degradedFrom}" is applied to suburbs this business has explicitly ruled out. ` +
+        "A suburb on none of the lists is unknown, not excluded, so the receptionist takes the caller's details and lets the locksmith confirm rather than turning them away. " +
+        "If the business genuinely covers nowhere beyond the listed suburbs, add the ones it refuses to the declined list.",
+    });
+  }
+
+  // Collected once, then attached to the branch it actually describes. Owner
+  // wording written for a decline is decline wording: presenting it as approved
+  // wording for an UNKNOWN suburb would reintroduce the refusal through prose.
+  const outsideAreaWording = collect(cleanProse(areas.outsideAreaWording, { max: BOUNDS.wording, field: "serviceAreas.outsideAreaWording" }));
+
   sections.push({
     id: "service_area",
     title: "Where the business goes",
@@ -469,22 +565,21 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       extendedAreas.length ? `Will sometimes travel to: ${extendedAreas.join(", ")}.` : null,
       declinedAreas.length ? `Does not travel to: ${declinedAreas.join(", ")}.` : null,
       afterHoursAreas ? `After hours the area is smaller: ${afterHoursAreas.join(", ")}.` : "After hours the same area applies.",
-      // ── THREE STATES, NOT TWO (M7I-B) ──────────────────────────────
-      // The first live call refused Springvale because the model read a
-      // positive scope ("Frankston and surrounding suburbs") as a closed list
-      // and treated anything unnamed as excluded. That costs real work: a
-      // locksmith who covers more than the profile happens to name loses the
-      // job, and the caller is told something untrue.
-      //
-      // So the three cases are spelled out separately, and the UNKNOWN case is
-      // named explicitly rather than being folded into "outside the area".
       "A suburb is in one of three states, and they are not the same:",
       `1. LISTED ABOVE AS COVERED — say yes, the business covers it.`,
       declinedAreas.length
         ? `2. IN THE "does not travel to" LIST — say politely that it is not an area the business covers, so they can ring someone closer.`
         : `2. NOT APPLICABLE — no suburb has been ruled out.`,
-      `3. NOT IN ANY LIST ABOVE — this is UNKNOWN, which is NOT the same as excluded. Do not say it is outside the area, and do not say it is covered. ${OUTSIDE_AREA_INSTRUCTION[areas.outsideAreaAction] || "Take their details and let the locksmith decide."}`,
-      areas.outsideAreaWording ? `Approved wording for an unknown suburb: ${asQuotedData(collect(cleanProse(areas.outsideAreaWording, { max: BOUNDS.wording, field: "serviceAreas.outsideAreaWording" })))}` : null,
+      // The decline wording belongs here, with the callers it was written for.
+      declinedAreas.length && outsideAreaWording && unknownArea.degradedFrom
+        ? `Approved wording for a suburb on that list: ${asQuotedData(outsideAreaWording)}`
+        : null,
+      `3. NOT IN ANY LIST ABOVE — this is UNKNOWN, which is NOT the same as excluded. Do not say it is outside the area, and do not say it is covered. ${lookup(UNKNOWN_AREA_INSTRUCTION, unknownArea.action)}`,
+      outsideAreaWording && !unknownArea.degradedFrom ? `Approved wording for an unknown suburb: ${asQuotedData(outsideAreaWording)}` : null,
+      // The floor. Unconditional, and last in the block, so it is the rule that
+      // survives whatever the profile above happens to say.
+      "NEVER refuse a caller only because their suburb is not on a list. A suburb you were not given is one you do not know about, and telling that caller the business does not come to them would be false.",
+      "The lists above are what this business named. They are not a complete map of everywhere it will go.",
       "Never infer that a suburb is covered OR excluded because it sounds close to one that is listed. Proximity is not coverage.",
     ].filter(Boolean),
   });
@@ -532,7 +627,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       transfer.requiredUrgency ? `Only transfer calls you have classified as ${transfer.requiredUrgency} or above.` : null,
       transfer.preTransferWording ? `Before transferring, say words to this effect: ${asQuotedData(collect(cleanProse(transfer.preTransferWording, { max: BOUNDS.wording, field: "preTransferWording" })))}` : null,
       transfer.maxAttempts ? `Try at most ${transfer.maxAttempts} time(s).` : null,
-      `If nobody answers: ${UNANSWERED_INSTRUCTION[transfer.unansweredAction] || "take a message"}.`,
+      `If nobody answers: ${lookup(UNANSWERED_INSTRUCTION, transfer.unansweredAction) || "take a message"}.`,
       "Only the transfer function tells you whether anyone actually answered. Never tell the caller they are being connected to someone who has not picked up.",
     ].filter(Boolean),
   });
@@ -545,7 +640,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         ? [
             "You may give the approved indicative wording below, and nothing beyond it:",
             ...(Array.isArray(pricing.indicativePrices) ? pricing.indicativePrices : []).map(
-              (p) => `- ${S.SERVICE_LABELS[p.serviceId] || p.serviceId}: ${asQuotedData(collect(cleanProse(p.wording, { max: BOUNDS.wording, field: `price:${p.serviceId}` })))}`
+              (p) => `- ${lookup(S.SERVICE_LABELS, p.serviceId) || p.serviceId}: ${asQuotedData(collect(cleanProse(p.wording, { max: BOUNDS.wording, field: `price:${p.serviceId}` })))}`
             ),
             pricing.disclaimer ? `Always add: ${asQuotedData(collect(cleanProse(pricing.disclaimer, { max: BOUNDS.wording, field: "priceDisclaimer" })))}` : null,
             pricing.humanConfirmsEveryPrice === true ? "The locksmith confirms every price. Never present a figure as final." : null,
@@ -567,7 +662,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     title: "What to get from every caller",
     lines: [
       alwaysCollect.length ? "Before the call ends you need:" : "Get at least the caller's name and a number to ring back on.",
-      ...alwaysCollect.map((f) => `- ${S.CALLER_INFO_LABELS[f] || f}`),
+      ...alwaysCollect.map((f) => `- ${lookup(S.CALLER_INFO_LABELS, f) || f}`),
       // ── CAPTURE POLICY (M7I-B) ─────────────────────────────────────
       // The first live call asked for a name and number in EVERY reply — five
       // times in thirteen turns. Answering the caller's question and then
@@ -724,7 +819,7 @@ function buildKnowledgeContent({ profile, collect, toolFree = false }) {
       body: accepted
         .map((s) => {
           const notes = collect(cleanProse(s.notes, { max: BOUNDS.notes, field: `kb:${s.serviceId}` }));
-          return `${S.SERVICE_LABELS[s.serviceId] || s.serviceId}${notes ? `: ${notes}` : ""}`;
+          return `${lookup(S.SERVICE_LABELS, s.serviceId) || s.serviceId}${notes ? `: ${notes}` : ""}`;
         })
         .join("\n"),
     });
@@ -737,7 +832,13 @@ function buildKnowledgeContent({ profile, collect, toolFree = false }) {
       // In tool-free mode there IS no service-area check, so pointing at one
       // would be an instruction the agent cannot follow — the same class of
       // untruth as claiming an enquiry was saved.
-      body: `${collect(cleanList(allAreas, { field: "kb:areas" })).join(", ")}.\n\nThis list is background only. ${
+      //
+      // THE "NOT EXHAUSTIVE" LINE IS NOT DECORATION (M7I). A retrieved list of
+      // suburbs is precisely what the model read as a closed set on the founder's
+      // first live call. It is stated here, on the retrieved text itself, because
+      // that is the surface being misread — the deciding rules stay in the
+      // instructions, where a retrieval miss cannot reach them.
+      body: `${collect(cleanList(allAreas, { field: "kb:areas" })).join(", ")}.\n\nThis list is background only, and it is NOT a complete list of everywhere the business will go. A suburb missing from it is unknown, not excluded. ${
         toolFree
           ? "The service-area rules in the instructions decide whether a job can be taken."
           : "Use the service-area check to decide whether a job can be taken."
@@ -1065,6 +1166,10 @@ module.exports = {
   DYNAMIC_VARIABLE_ALLOWLIST,
   DYNAMIC_VARIABLE_FORBIDDEN,
   INSTRUCTION_LIKE,
+  UNKNOWN_AREA_INSTRUCTION,
+  UNKNOWN_AREA_DEFAULT_ACTION,
+  REFUSAL_AREA_ACTIONS,
+  resolveUnknownAreaAction,
   cleanProse,
   cleanList,
   asQuotedData,

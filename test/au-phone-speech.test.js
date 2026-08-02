@@ -465,12 +465,29 @@ describe("PROMPT REGRESSION — no raw E.164 in caller-facing prose", () => {
     assert.equal(stored.change.value, CANONICAL);
   });
 
-  test("the SANDBOX prompt reads the spoken variable, not the canonical one", () => {
-    // This is the exact line that spoke "plus six one" on the live M7D call.
+  test("the SANDBOX prompt speaks NO transfer number — canonical or spoken", () => {
+    // CHANGED BY M7I, deliberately, and this is a real behaviour change.
+    //
+    // The sandbox used to carry a hand-written line naming
+    // {{current_transfer_number_spoken}}, so a tester could ask "who would you
+    // put me through to?" and hear the M7E spoken form. That line existed only
+    // in the sandbox — the production receptionist has always said the opposite:
+    // "You will be given it at the time; do not read it out to the caller."
+    //
+    // The sandbox now compiles the production receptionist, so it inherits the
+    // production rule. That is stricter than what this test originally asserted:
+    // the M7D defect ("plus six one, four nine one…") is impossible because
+    // there is no number variable in the prompt to read at all, not merely
+    // because the safe twin was chosen. The spoken form is still DELIVERED per
+    // call (asserted below) and still unit-tested throughout this file.
     const payload = sandbox.buildSandboxResponseEnginePayload({ knowledgeBaseId: "kb_test", defaults: {} });
-    assert.ok(payload.general_prompt.includes("{{current_transfer_number_spoken}}"));
-    assert.ok(!payload.general_prompt.includes("{{current_transfer_number}}"), "the canonical variable must not be read aloud");
+    assert.ok(!payload.general_prompt.includes("{{current_transfer_number}}"), "the canonical variable must never be read aloud");
+    assert.ok(!payload.general_prompt.includes("{{current_transfer_number_spoken}}"), "the sandbox no longer quotes a transfer number at all");
     assert.equal(speech.containsE164(payload.general_prompt), false);
+    // And the prompt still forbids constructing a reading, which is the rule
+    // that protects any number the agent DOES end up saying.
+    assert.match(payload.general_prompt, /never convert one yourself/i);
+    assert.match(payload.general_prompt, /do not read it out to the caller/i);
   });
 
   test("every variable the sandbox prompt names is actually delivered", () => {
@@ -480,11 +497,23 @@ describe("PROMPT REGRESSION — no raw E.164 in caller-facing prose", () => {
     const named = [...payload.general_prompt.matchAll(/\{\{([a-z_]+)\}\}/g)].map((m) => m[1]);
     const delivered = new Set([
       ...Object.keys(sandbox.buildSandboxWebCallPayload({ agentId: "agent_test" }).retell_llm_dynamic_variables),
-      "business_name",
+      ...Object.keys(payload.default_dynamic_variables || {}),
     ]);
     for (const name of named) {
       assert.ok(delivered.has(name), `{{${name}}} is named in the sandbox prompt but never supplied — it would be read aloud`);
     }
+    // The compiled prompt names none, so the check above is vacuous unless it is
+    // pinned. Nothing named means nothing that can render literally.
+    assert.deepEqual(named, [], "the compiled prompt must name no dynamic variable");
+  });
+
+  test("the spoken transfer number is still DELIVERED per call, prompt or no prompt", () => {
+    // The delivery path is what M7E built. It must stay proven even though the
+    // sandbox prompt no longer quotes the value.
+    const vars = sandbox.buildSandboxWebCallPayload({ agentId: "agent_test" }).retell_llm_dynamic_variables;
+    assert.match(vars.current_transfer_number_spoken, /^oh four nine one, /);
+    assert.equal(speech.containsE164(vars.current_transfer_number_spoken), false);
+    assert.equal(vars.current_transfer_number, undefined, "the canonical value never enters model context");
   });
 });
 

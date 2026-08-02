@@ -16,41 +16,135 @@
 // path is exercised rather than partially reused.
 //
 // ─── NO SECOND SET OF PAYLOADS ──────────────────────────────────────
-// This service builds nothing itself. The multipart knowledge-base request, the
-// dynamic-variable rules and the provider error normalisation all come from the
-// modules the production path uses. A sandbox with its own improvised payloads
-// would validate the sandbox rather than the product.
+// This service builds nothing itself. The receptionist behaviour, the multipart
+// knowledge-base request, the dynamic-variable rules and the provider error
+// normalisation all come from the modules the production path uses. A sandbox
+// with its own improvised payloads would validate the sandbox rather than the
+// product.
 //
-// The agent and response-engine payloads are assembled here from a small
-// fictional profile because the production compiler is client-shaped and this
-// must never touch a client — but every FIELD NAME comes from the corrected
-// contract, and a test asserts the sandbox agent carries the same field set the
-// compiler emits.
+// ─── WHY THE PROMPT IS COMPILED AND NO LONGER HAND-WRITTEN (M7I) ────
+// The founder's first live inbound call refused a caller in Springvale. The
+// agent on that call was NOT built by the receptionist compiler — it was built
+// here, from a six-line hand-written prompt plus a knowledge base whose only
+// service-area statement was "It services Frankston and surrounding suburbs."
+// There was no covered list, no excluded list, and no rule of any kind about a
+// suburb nobody had classified, so the model read a positive scope as a closed
+// list and turned the caller away.
+//
+// The compiler had the correct three-state logic. It simply never ran on this
+// path, which is why fixing the compiler alone could not have changed that call.
+// So the receptionist's BEHAVIOUR now comes from the same compiler and the same
+// approved profile the product uses, and this module keeps only what is
+// genuinely sandbox policy: disposable names, no webhook, no number, recording
+// off, strict data storage.
+//
+// The AGENT envelope is deliberately still assembled here. The compiled agent
+// carries a webhook url, webhook events and an inbound binding — all things a
+// sandbox must never have — so only the response engine and the knowledge base
+// are taken from the compiler. A test asserts the two payloads still agree on
+// field names.
 //
 // Pure orchestration: the adapter is injected. Nothing here opens a socket.
 
 const multipart = require("./retell-multipart");
 const dynamicVars = require("./retell-dynamic-variables");
 
-const SANDBOX_VERSION = "retell-web-sandbox-2026-08-01";
+const SANDBOX_VERSION = "retell-web-sandbox-2026-08-03";
 
 // ── Fictional demonstration business ────────────────────────────────
 // RFC-2606 / ACMA-safe: no real business, no real number, no customer data.
+//
+// There is no `serviceArea` string here any more, deliberately. A prose scope is
+// what the model over-read on the live call; coverage now has exactly one
+// source, the approved profile's primary/extended/declined lists, compiled into
+// instructions rather than left to retrieval.
 const DEMO = Object.freeze({
-  businessName: "Harbour Locksmith Demo",
-  serviceArea: "Frankston and surrounding suburbs",
+  // Must equal the profile's spoken name — asserted by a test, so the two can
+  // never drift into a sandbox that greets callers as one business and answers
+  // questions as another.
+  businessName: "AIDA Locksmith Sandbox",
   scenario: "residential_lockout",
 });
 
-const DEMO_KNOWLEDGE = [
-  `${DEMO.businessName} is a demonstration locksmith business used only for testing.`,
-  `It services ${DEMO.serviceArea}.`,
-  "It accepts residential lockouts.",
-  "It does not perform automotive key replacement.",
-  "Pricing must always be confirmed by a locksmith; never quote a final price.",
-  "Never guarantee an arrival time.",
-  "Never provide lock-bypass or forced-entry instructions to a caller.",
-].join("\n");
+// The knowledge-base section title. Named once because the runner, the request
+// builder and the test all need to agree on it.
+const SANDBOX_KNOWLEDGE_TITLE = "Business information";
+
+// Pinned rather than read from the environment: a sandbox prompt that changes
+// with RETELL_RECEPTIONIST_TEMPLATE_VERSION is one that cannot be reproduced
+// from a manifest weeks later.
+const SANDBOX_TEMPLATE_VERSION = "retell-sandbox-receptionist-2026-08-03";
+
+// The profile version this sandbox provisions. Compiled into the agent name and
+// the default dynamic variables, so a dashboard agent can be traced to a build.
+const SANDBOX_PROFILE_VERSION = 2;
+
+// Minimal, explicit and deterministic — NOT getRetellConfig(process.env).
+//
+// The compiled response engine reads none of this, but toRetellPayload also
+// builds an agent and an inbound binding from it. Passing a real config would
+// let a stray RETELL_INBOUND_DEMO_NUMBER or RETELL_WEBHOOK_BASE_URL produce a
+// binding payload inside a sandbox whose entire promise is that it binds
+// nothing. Explicit nulls make that impossible rather than unlikely.
+const SANDBOX_COMPILE_CONFIG = Object.freeze({
+  responseEngineType: "retell-llm",
+  defaultVoiceId: null,
+  defaultLanguage: null,
+  webhookBaseUrl: null,
+  inboundDemoNumber: null,
+});
+
+// Memoised: compilation is pure and deterministic, and every caller wants the
+// same bytes. Lazy rather than module-scope so requiring this module still costs
+// nothing and a compile failure surfaces at the call that needed it.
+let compiledSandboxReceptionist = null;
+
+/**
+ * The compiled sandbox receptionist.
+ *
+ * Throws rather than degrading. Falling back to a hand-written prompt is exactly
+ * the failure mode this milestone removed — a silent fallback would put the
+ * Springvale behaviour back on a live call with nothing to show for it.
+ */
+function sandboxReceptionist() {
+  if (compiledSandboxReceptionist) return compiledSandboxReceptionist;
+
+  const rc = require("./locksmith-receptionist-compiler");
+  const { buildSandboxProfile, SANDBOX_CLIENT_ID } = require("./locksmith-sandbox-profile");
+
+  const compiled = rc.compileReceptionist({
+    profile: buildSandboxProfile(),
+    profileVersion: SANDBOX_PROFILE_VERSION,
+    profileStatus: "approved",
+    clientId: SANDBOX_CLIENT_ID,
+    templateVersion: SANDBOX_TEMPLATE_VERSION,
+    config: SANDBOX_COMPILE_CONFIG,
+    // Never Date.now(): the compiled artefact stays byte-identical across runs.
+    generatedAt: null,
+    // The compiled tool endpoints do not exist as routes. An agent that believes
+    // it saved an enquiry will tell a caller so — see the profile header.
+    toolFree: true,
+  });
+
+  if (!compiled.ok) {
+    throw new Error(`the sandbox receptionist did not compile: ${compiled.code} — ${compiled.message}`);
+  }
+
+  const payload = rc.toRetellPayload({ compiled, config: SANDBOX_COMPILE_CONFIG });
+
+  compiledSandboxReceptionist = Object.freeze({
+    spec: compiled.spec,
+    responseEngine: payload.responseEngine,
+    knowledgeText: payload.knowledge.knowledge_base_texts[0].text,
+    reviewFlags: compiled.reviewFlags,
+  });
+  return compiledSandboxReceptionist;
+}
+
+/** The knowledge-base text the sandbox uploads. Compiled, never hand-written. */
+function buildSandboxKnowledgeText() {
+  return sandboxReceptionist().knowledgeText;
+}
 
 /** Unique, obviously-disposable names. Under the provider's 40-character limit. */
 function sandboxNames(stamp) {
@@ -72,56 +166,40 @@ function stampFrom(date) {
 function buildSandboxKnowledgeBaseRequest(names) {
   return multipart.buildCreateKnowledgeBaseRequest({
     knowledgeBaseName: names.knowledgeBase,
-    texts: [{ title: "Demonstration business", text: DEMO_KNOWLEDGE }],
+    texts: [{ title: SANDBOX_KNOWLEDGE_TITLE, text: buildSandboxKnowledgeText() }],
   });
 }
 
 /**
- * The sandbox prompt. Short on purpose — this validates a contract, not a
- * receptionist. It still carries the safety rules, because an agent that would
- * quote a price or promise a time is not one we want on a call even in a test.
+ * The sandbox response engine — the compiled production receptionist.
+ *
+ * Everything the agent SAYS comes from the compiler: the safety floor, the
+ * three service-area states, the capture policy, the tone rules and the
+ * tool-free honesty section. Nothing here writes prompt text.
+ *
+ * The prompt names no dynamic variables at all, which is the production
+ * compiler's own rule and a change from the previous hand-written sandbox
+ * prompt. Per-call variables are still SENT (see buildSandboxDynamicVariables)
+ * so the delivery path stays exercised, but an unsupplied variable renders
+ * literally at this provider, and a prompt that names one is a prompt that can
+ * read "{{...}}" to a caller.
  */
-function buildSandboxResponseEnginePayload({ knowledgeBaseId, defaults }) {
-  const prompt = [
-    "# Who you are",
-    `- You answer the phone for {{business_name}}, a locksmith business.`,
-    "- You are an automated assistant. Say so if asked.",
-    "",
-    "# Your rules",
-    "- Never quote a final price. A locksmith confirms every price.",
-    "- Never guarantee an arrival time.",
-    "- Never explain how to bypass or force a lock.",
-    "- Never claim to be a person.",
-    "",
-    "# This call",
-    // Every variable named here MUST be one the allow-list can carry AND that
-    // is actually supplied. An unsupplied variable is not an error at the
-    // provider — it renders LITERALLY, so the agent would read "{{...}}" aloud.
-    //
-    // This prompt originally said "The caller is in {{caller_suburb}}".
-    // caller_suburb is not in DYNAMIC_VARIABLE_ALLOWLIST and was never sent, so
-    // the live agent was given that placeholder as text. Replaced with
-    // variables that are genuinely delivered per call, which is also what makes
-    // the dynamic-variable check meaningful rather than decorative.
-    "- The business is currently {{current_business_status}} and the on-call state is {{on_call_state}}.",
-    "- This call is about {{call_kind}}.",
-    // M7E: this line used {{current_transfer_number}}, the canonical E.164
-    // value, and asked for it "digit by digit" — which is how the live M7D call
-    // came to say "plus six one, four nine one...". The spoken variable is
-    // derived from the same canonical number by services/au-phone-speech.js and
-    // already carries its own grouping, so the instruction is now to read it
-    // verbatim rather than to reformat anything.
-    "- If the caller asks who they would be put through to, say you would transfer them to {{current_transfer_number_spoken}} — read that exactly as written, and never say a number that starts with a plus sign.",
-    "- Take their name and what they need, then say a locksmith will ring back.",
-    "- Keep it under six turns. This is a test call.",
-  ].join("\n");
+function buildSandboxResponseEnginePayload({ knowledgeBaseId, defaults = {} }) {
+  if (!knowledgeBaseId) throw new Error("the sandbox response engine needs a real knowledge_base_id");
+
+  const { responseEngine } = sandboxReceptionist();
 
   return {
-    general_prompt: prompt,
-    begin_message: `Good afternoon, ${DEMO.businessName}.`,
-    general_tools: [],
-    default_dynamic_variables: defaults,
+    ...responseEngine,
+    // The compiler emits a REFERENCE here, because a compiled artefact must
+    // never carry a provider id. This is the one place that resolves it, using
+    // the id the provider returned moments ago.
     knowledge_base_ids: [knowledgeBaseId],
+    // The compiled defaults come from the approved profile and have already had
+    // everything runtime-sensitive stripped by splitDefaultsFromRuntime. They
+    // win: anything the runner passes is merged underneath, so a caller cannot
+    // quietly override the profile's own identity.
+    default_dynamic_variables: { ...defaults, ...responseEngine.default_dynamic_variables },
   };
 }
 
@@ -743,7 +821,12 @@ async function cleanupSandbox({ adapter, resources, logger = console }) {
 module.exports = {
   SANDBOX_VERSION,
   DEMO,
-  DEMO_KNOWLEDGE,
+  SANDBOX_KNOWLEDGE_TITLE,
+  SANDBOX_TEMPLATE_VERSION,
+  SANDBOX_PROFILE_VERSION,
+  SANDBOX_COMPILE_CONFIG,
+  sandboxReceptionist,
+  buildSandboxKnowledgeText,
   STEPS,
   MANIFEST_FORBIDDEN_KEYS,
   ALREADY_GONE_CODES,

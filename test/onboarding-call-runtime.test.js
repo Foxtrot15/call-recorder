@@ -635,7 +635,7 @@ describe("generated receptionist test plan", () => {
   it("covers every required scenario family", () => {
     const ids = plan.cases.map((c) => c.id);
     const families = [
-      /^accepted_service/, /^declined_service/, /^area_inside$/, /^area_outside$/,
+      /^accepted_service/, /^declined_service/, /^area_inside$/, /^area_outside$/, /^area_unknown$/,
       /^hours_ordinary$/, /^hours_after$/, /^urgent_transfer$/, /^quote_non_urgent$/,
       /^pricing_unapproved$/, /^guaranteed_arrival$/, /^lock_bypass_request$/, /^prompt_injection$/,
       /^transfer_unavailable$/, /^missing_caller_detail$/, /^caller_corrects_suburb$/,
@@ -649,6 +649,37 @@ describe("generated receptionist test plan", () => {
   it("is deterministic", () => {
     const again = testPlan.generateTestPlan({ profile: demoProfile(), profileVersion: 1, clientId: CLIENT });
     assert.deepStrictEqual(again.cases.map((c) => c.id), plan.cases.map((c) => c.id));
+  });
+
+  // ── M7I: the case the founder's first live call failed ──────────────
+  it("separates an EXCLUDED suburb from an UNKNOWN one", () => {
+    const excluded = plan.cases.find((c) => c.id === "area_outside");
+    const unknown = plan.cases.find((c) => c.id === "area_unknown");
+    assert.ok(excluded && unknown, "both cases must exist");
+
+    // The excluded case is answered inline by the compiler, not from
+    // outsideAreaAction — naming that field here checked the wrong rule.
+    assert.match(excluded.passCriteria, /politely that it is not an area the business covers/);
+    assert.equal(/outsideAreaAction|collect_details_for_confirmation|politely_decline/.test(excluded.passCriteria), false);
+
+    // The unknown case must demand the four required behaviours and forbid a refusal.
+    assert.match(unknown.passCriteria, /apologises/i);
+    assert.match(unknown.passCriteria, /not completely sure/i);
+    assert.match(unknown.passCriteria, /takes the caller's details/i);
+    assert.match(unknown.passCriteria, /must NOT refuse/);
+    assert.equal(unknown.expectedTransferEligible, false);
+  });
+
+  it("the unknown-suburb case never names a suburb the profile has classified", () => {
+    // Naming a covered suburb would have the tester exercising the wrong branch
+    // and reporting a pass for a case that never ran.
+    const areas = demoProfile().serviceAreas;
+    const listed = [...(areas.primary || []), ...(areas.extended || []), ...(areas.declined || []), ...(areas.afterHoursAreas || [])]
+      .map((s) => String(s).toLowerCase());
+    const unknown = plan.cases.find((c) => c.id === "area_unknown");
+    for (const suburb of listed) {
+      assert.equal(unknown.scenario.toLowerCase().includes(suburb), false, `${suburb} is classified and must not be used as the unknown suburb`);
+    }
   });
 
   it("every case has expectations and a pass criterion", () => {

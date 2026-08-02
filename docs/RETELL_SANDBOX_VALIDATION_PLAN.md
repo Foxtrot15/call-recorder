@@ -63,8 +63,14 @@ Run with `RETELL_ALLOWED_TAG=dev`. The execution gate refuses `prod`.
    the ACMA range (0491 570 006–156) and a fictitious business name. **Never a
    real client's data.**
 8. **Join in the browser** using `access_token`.
-9. **Speak a fictional locksmith scenario**, including one in-area suburb and
-   one out-of-area suburb, to test the service-area boundary.
+9. **Speak a fictional locksmith scenario**, exercising all **three** service-area
+   states — a covered suburb, an explicitly declined suburb, and a suburb on
+   **no list at all**. _(Updated 2026-08-03, M7I: this step previously said "one
+   in-area suburb and one out-of-area suburb". That two-state framing is the
+   defect itself — the first live call refused a caller in Springvale, a suburb
+   nobody had classified, because unknown had been folded into out-of-area. An
+   unknown suburb must produce an apology, an admission of uncertainty, details
+   taken and a promise that the locksmith will confirm — never a refusal.)_
 10. **Retrieve the call** and record `call_status`.
 11. **Verify transcript and analysis** against `post_call_analysis_data`: are
     the custom enum fields populated, and with valid values?

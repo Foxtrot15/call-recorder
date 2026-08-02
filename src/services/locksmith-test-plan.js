@@ -25,6 +25,35 @@ function caseId(prefix, suffix = "") {
   return `${prefix}${suffix ? `_${suffix}` : ""}`;
 }
 
+// Ordinary Australian suburb names spread across several capitals, so at least
+// one is unlisted for any realistic locksmith. Order is fixed — the plan must be
+// deterministic — and Springvale leads because it is the suburb the founder's
+// first live call refused.
+const UNKNOWN_SUBURB_CANDIDATES = Object.freeze([
+  "Springvale",
+  "Ringwood",
+  "Sunshine",
+  "Penrith",
+  "Ipswich",
+]);
+
+/**
+ * The first candidate suburb this profile has not classified.
+ *
+ * Falls back to a description rather than a name if a profile somehow lists all
+ * of them: a plan that names a covered suburb as "unknown" would have the tester
+ * checking the wrong rule and reporting a pass for a case never exercised.
+ */
+function pickUnnamedSuburb(areas = {}) {
+  const listed = new Set(
+    [...(areas.primary || []), ...(areas.extended || []), ...(areas.declined || []), ...(areas.afterHoursAreas || [])]
+      .filter((s) => typeof s === "string")
+      .map((s) => s.trim().toLowerCase())
+  );
+  const found = UNKNOWN_SUBURB_CANDIDATES.find((s) => !listed.has(s.toLowerCase()));
+  return found || "any suburb that appears on none of the lists above";
+}
+
 /**
  * Generate the plan. Deterministic: the same approved profile always produces
  * the same cases in the same order.
@@ -41,6 +70,11 @@ function generateTestPlan({ profile, profileVersion, clientId }) {
 
   const primaryArea = (areas.primary && areas.primary[0]) || "the core service area";
   const declinedArea = (areas.declined && areas.declined[0]) || "a suburb well outside the area";
+  // A suburb in NO list, for the unknown-suburb case. Chosen deterministically
+  // from a fixed candidate list and checked against every list on the profile,
+  // so the generated plan cannot accidentally name a suburb the business has
+  // already classified — which would test the wrong branch entirely.
+  const unknownArea = pickUnnamedSuburb(areas);
   const urgentService = accepted.find((s) => s.mayBeUrgent);
   const routineService = accepted.find((s) => !s.mayBeUrgent) || accepted[0];
 
@@ -90,12 +124,35 @@ function generateTestPlan({ profile, profileVersion, clientId }) {
   });
   cases.push({
     id: "area_outside",
-    title: "Caller outside the service area",
-    scenario: `Caller is in ${declinedArea}.`,
+    title: "Caller in an explicitly excluded suburb",
+    scenario: `Caller is in ${declinedArea}, which the business has ruled out.`,
     expectations: [{ kind: "must_classify", detail: "outside the area" }, { kind: "must_not_say", detail: "that someone will attend" }],
     expectedClassification: "out_of_area",
     expectedTransferEligible: false,
-    passCriteria: `The configured out-of-area action is followed (${areas.outsideAreaAction || "not configured"}).`,
+    // This case is the DECLINED list, and the compiler answers it inline rather
+    // than from `outsideAreaAction` — which describes unknown suburbs (see
+    // area_unknown below). The criterion used to name that field and was
+    // therefore checking the wrong rule.
+    passCriteria: "The caller is told politely that it is not an area the business covers, so they can ring someone closer. No attendance is implied.",
+  });
+
+  // The case the founder's first live call failed (M7I). A suburb in NO list is
+  // UNKNOWN, and an unknown suburb must never be refused — the receptionist does
+  // not know, and saying otherwise loses a job and tells the caller something
+  // untrue. This is where `outsideAreaAction` actually applies.
+  cases.push({
+    id: "area_unknown",
+    title: "Caller in a suburb that is on no list",
+    scenario: `Caller is in ${unknownArea} — it is not in the core area, the extended area, or the declined list.`,
+    expectations: [
+      { kind: "must_not_say", detail: "that the suburb is outside the area, or that it is covered — neither is known" },
+      { kind: "must_capture", detail: ["suburb", "callback_number"].map((f) => S.CALLER_INFO_LABELS[f] || f) },
+      { kind: "must_not_say", detail: "that someone will attend" },
+    ],
+    expectedClassification: "area_unknown",
+    expectedTransferEligible: false,
+    passCriteria:
+      "The receptionist apologises, says it is not completely sure whether the business covers that suburb, takes the caller's details, and says the locksmith will confirm. It must NOT refuse, and must NOT promise attendance.",
   });
 
   // 5–6. Ordinary hours and after hours.
