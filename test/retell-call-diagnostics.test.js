@@ -758,10 +758,22 @@ describe("the diagnostics provider path", () => {
     assert.ok(source.includes("retrieveCallForDiagnostics"));
   });
 
-  test("the diagnostics modules load with no Retell SDK present", () => {
-    assert.throws(() => require.resolve("retell-sdk"));
+  test("the diagnostics modules do not depend on any Retell SDK", () => {
+    // This asserted that retell-sdk was ABSENT from node_modules. M7F-A
+    // installs it deliberately, for webhook signature verification only, so
+    // that assertion is now false by design.
+    //
+    // The guarantee it was actually protecting is stronger and is asserted
+    // here instead: diagnostics import neither SDK, and therefore still work on
+    // a checkout where neither is installed. That holds whether or not the
+    // package happens to be present, which the old test could not say.
+    for (const mod of ["../src/services/retell-call-diagnostics", "../src/services/retell-call-analysis", "../src/config/retell-diagnostics"]) {
+      const source = fs.readFileSync(require.resolve(mod), "utf8");
+      assert.equal(/require\(["']retell-sdk["']\)/.test(source), false, `${mod} must not import the server SDK`);
+      assert.equal(/require\(["']retell-client-js-sdk["']\)/.test(source), false, `${mod} must not import the browser SDK`);
+    }
+    // The browser SDK is still absent, and must stay that way server-side.
     assert.throws(() => require.resolve("retell-client-js-sdk"));
-    // Loading them here proves it: this file has already required both.
     assert.equal(typeof diagnostics.summariseCall, "function");
     assert.equal(typeof gate.evaluateDiagnosticsGate, "function");
   });

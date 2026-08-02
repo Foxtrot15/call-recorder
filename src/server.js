@@ -50,6 +50,15 @@ app.use(require("./routes/stripe-webhook"));
 // Mounted with its own express.raw body parser so signature verification sees
 // the exact bytes — this is why it sits apart from the JSON parser above.
 app.use(require("./routes/retell-webhook"));
+// Retell INBOUND-call webhook (M7F-A). A SEPARATE route from the event webhook
+// above, and dormant behind its own RETELL_INBOUND_WEBHOOK_ENABLED flag.
+//
+// Different provider contract: this URL is set on the phone NUMBER, fires
+// before a caller is answered, and its 200 JSON response configures that call —
+// where the event webhook is set on the AGENT and answers 204 with no body.
+// Keeping them apart is what makes it impossible for the generic path to return
+// the inbound shape, and keeps a database round trip away from a ringing phone.
+app.use(require("./routes/retell-inbound-webhook"));
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.

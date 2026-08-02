@@ -4,7 +4,7 @@
   "description": "Aida — multi-tenant call capture, transcription (Deepgram), AI analysis (Claude), and follow-up (Gmail/Calendar/CRM) on Twilio",
   "main": "src/server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "start": "node src/server.js",

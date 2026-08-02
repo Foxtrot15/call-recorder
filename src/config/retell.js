@@ -125,6 +125,85 @@ function parsePublicUrl(raw) {
   }
 }
 
+// ── Inbound webhook URL (M7F-A) ─────────────────────────────────────
+//
+// The INBOUND webhook is a different thing from the agent event webhook, and
+// conflating them is the mistake this section exists to prevent:
+//
+//   webhook_url          set on the AGENT. Receives call_started / call_ended /
+//                        call_analyzed. Responses are ignored; 204 is correct.
+//   inbound_webhook_url  set on the PHONE NUMBER. Fires BEFORE the call is
+//                        answered, and its RESPONSE BODY configures that call.
+//
+// They have different URLs, different response contracts and different latency
+// budgets, so they get different paths.
+const INBOUND_WEBHOOK_PATH = "/webhooks/retell/inbound";
+const EVENT_WEBHOOK_PATH = "/webhooks/retell";
+
+/**
+ * Refuse a URL that could never receive a provider callback.
+ *
+ * Loopback and private addresses are rejected outright rather than merely
+ * warned about: a provider-facing URL pointing at 127.0.0.1 is not a
+ * misconfiguration that degrades, it is one that silently never fires, and the
+ * symptom (calls answered with no runtime context) looks nothing like the
+ * cause.
+ */
+function isLoopbackOrPrivateHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host === "::1" || host === "[::1]") return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  if (host === "0.0.0.0" || host === "") return true;
+  // A bare hostname with no dot cannot be resolved from the public internet.
+  if (!host.includes(".") && !host.includes(":")) return true;
+  return false;
+}
+
+/**
+ * Build the provider-facing inbound webhook URL from the configured base.
+ *
+ * Returns { ok, url, reason }. Never throws, and never invents a base — a
+ * missing RETELL_WEBHOOK_BASE_URL means no URL, not a guessed one.
+ *
+ * `allowInsecure` exists ONLY for isolated tests of the path-construction
+ * logic. It is never reachable from configuration, so no environment can turn
+ * it on, and a test asserts that.
+ */
+function buildInboundWebhookUrl(env = process.env, { allowInsecure = false } = {}) {
+  const raw = env.RETELL_WEBHOOK_BASE_URL;
+  if (!raw) return { ok: false, url: null, reason: "RETELL_WEBHOOK_BASE_URL is not set" };
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { ok: false, url: null, reason: "RETELL_WEBHOOK_BASE_URL is not a valid URL" };
+  }
+
+  if (parsed.protocol !== "https:" && !allowInsecure) {
+    return { ok: false, url: null, reason: `RETELL_WEBHOOK_BASE_URL must be https (got ${parsed.protocol.replace(":", "")})` };
+  }
+  if (isLoopbackOrPrivateHost(parsed.hostname)) {
+    return { ok: false, url: null, reason: `${parsed.hostname} is not reachable from the provider` };
+  }
+  if (parsed.search || parsed.hash) {
+    return { ok: false, url: null, reason: "RETELL_WEBHOOK_BASE_URL must not carry a query string or fragment" };
+  }
+
+  const base = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
+  return { ok: true, url: `${base}${INBOUND_WEBHOOK_PATH}`, reason: null };
+}
+
+/** The agent event webhook URL, built by the same rules. */
+function buildEventWebhookUrl(env = process.env) {
+  const inbound = buildInboundWebhookUrl(env);
+  if (!inbound.ok) return inbound;
+  return { ok: true, url: inbound.url.replace(new RegExp(`${INBOUND_WEBHOOK_PATH}$`), EVENT_WEBHOOK_PATH), reason: null };
+}
+
 // ── Flags ───────────────────────────────────────────────────────────
 
 function isRetellEnabled(env = process.env) {
@@ -132,6 +211,18 @@ function isRetellEnabled(env = process.env) {
 }
 function isWebhookEnabled(env = process.env) {
   return strictTrue(env.RETELL_WEBHOOK_ENABLED);
+}
+/**
+ * The INBOUND webhook has its own switch (M7F-A).
+ *
+ * Separate from RETELL_WEBHOOK_ENABLED because the two do different things at
+ * different moments: the event webhook observes calls that already happened,
+ * while this one runs BEFORE a caller is answered and its response shapes that
+ * call. Being willing to record events is not the same as being willing to
+ * decide, in real time, how a stranger's phone call is handled.
+ */
+function isInboundWebhookEnabled(env = process.env) {
+  return strictTrue(env.RETELL_INBOUND_WEBHOOK_ENABLED);
 }
 function isLiveWritesEnabled(env = process.env) {
   return strictTrue(env.RETELL_LIVE_WRITES_ENABLED);
@@ -434,6 +525,12 @@ module.exports = {
   parseBaseUrl,
   isRetellEnabled,
   isWebhookEnabled,
+  isInboundWebhookEnabled,
+  INBOUND_WEBHOOK_PATH,
+  EVENT_WEBHOOK_PATH,
+  buildInboundWebhookUrl,
+  buildEventWebhookUrl,
+  isLoopbackOrPrivateHost,
   isLiveWritesEnabled,
   isLiveCallsEnabled,
   isDryRun,

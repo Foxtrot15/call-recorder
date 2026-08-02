@@ -341,15 +341,32 @@ describe("adapter selection is pessimistic", () => {
 
 describe("webhook signature header parsing", () => {
   it("accepts the documented v={ts},d={hex} shape", () => {
-    const parsed = verify.parseSignatureHeader("v=1754006400000,d=abcdef0123456789abcdef0123456789");
+    const parsed = verify.parseSignatureHeader("v=1754006400000,d=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
     assert.ok(parsed);
     assert.strictEqual(parsed.timestampMs, 1754006400000);
   });
 
   it("refuses anything else rather than reading it leniently", () => {
-    for (const bad of ["", "abc", "v=,d=abc", "d=abc,v=123", "v=123", "v=123,d=nothex!!", `v=1,d=${"a".repeat(300)}`, "x".repeat(600)]) {
+    const bads = [
+      "", "abc", "v=,d=abc", "d=abc,v=123", "v=123", "v=123,d=nothex!!",
+      `v=1,d=${"a".repeat(300)}`, "x".repeat(600),
+      // WRONG-LENGTH DIGESTS. The digest is HMAC-SHA256, so it is always
+      // exactly 64 hex characters — the SDK's own parser enforces that
+      // (lib/webhook_auth.js, read 2026-08-02). A short or long digest is a
+      // malformed header, not a failed cryptographic check, and reporting it as
+      // the latter would make two different operational problems look identical.
+      `v=1,d=${"a".repeat(32)}`,
+      `v=1,d=${"a".repeat(63)}`,
+      `v=1,d=${"a".repeat(65)}`,
+    ];
+    for (const bad of bads) {
       assert.strictEqual(verify.parseSignatureHeader(bad), null, `${bad.slice(0, 30)} must be refused`);
     }
+  });
+
+  it("accepts exactly 64 hex characters, in either case", () => {
+    assert.ok(verify.parseSignatureHeader(`v=1754006400000,d=${"a".repeat(64)}`));
+    assert.ok(verify.parseSignatureHeader(`v=1754006400000,d=${"A".repeat(64)}`));
   });
 
   it("enforces the documented 5-minute replay window", () => {
@@ -363,7 +380,7 @@ describe("webhook signature header parsing", () => {
 
 describe("webhook verification fails closed", () => {
   const body = JSON.stringify({ event: "call_started", call: { call_id: "call_1" } });
-  const headers = (extra = {}) => ({ "content-type": "application/json", "x-retell-signature": "v=1754006400000,d=abcdef0123456789abcdef0123456789", ...extra });
+  const headers = (extra = {}) => ({ "content-type": "application/json", "x-retell-signature": "v=1754006400000,d=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", ...extra });
   const now = () => 1754006400000;
 
   it("refuses when the webhook is disabled", async () => {
@@ -523,7 +540,7 @@ describe("webhook handler — the security boundary end to end", () => {
   const rawBody = Buffer.from(JSON.stringify({ event: "call_ended", call: { call_id: "call_abc", call_status: "ended" } }));
   const req = (overrides = {}) => ({
     body: rawBody,
-    headers: { "content-type": "application/json", "x-retell-signature": "v=1,d=abcdef0123456789abcdef0123456789" },
+    headers: { "content-type": "application/json", "x-retell-signature": "v=1,d=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789" },
     ...overrides,
   });
 

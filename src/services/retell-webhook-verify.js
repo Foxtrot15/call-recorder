@@ -70,7 +70,16 @@ function verdict(result, { detail = null } = {}) {
  */
 function parseSignatureHeader(raw) {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 512) return null;
-  const match = raw.match(/^v=(\d{1,20}),d=([a-f0-9]{16,256})$/i);
+  // EXACTLY 64 hex characters. The digest is HMAC-SHA256, so it is always 32
+  // bytes; the SDK's own parser (lib/webhook_auth.js, read 2026-08-02) enforces
+  // SHA_256_HEX_LENGTH = 64 and returns undefined otherwise.
+  //
+  // This was 16–256, which was not a security hole — the SDK is authoritative
+  // and rejects a wrong-length digest anyway — but it meant a malformed header
+  // was reported as `invalid_signature` (a failed cryptographic check) rather
+  // than `malformed_signature` (a header that was never well-formed). Those are
+  // different operational problems and should not look identical in a log.
+  const match = raw.match(/^v=(\d{1,20}),d=([a-f0-9]{64})$/i);
   if (!match) return null;
   const timestampMs = Number(match[1]);
   if (!Number.isFinite(timestampMs) || timestampMs <= 0) return null;

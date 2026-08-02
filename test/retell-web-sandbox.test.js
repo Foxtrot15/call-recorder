@@ -586,14 +586,16 @@ describe("server-side transport needs no SDK", () => {
     assert.match(r.error.message, /no HTTP transport is configured/);
   });
 
-  test("provider requests work through an injected transport, with NO SDK present", async () => {
-    // The correction: M3 chose native fetch over retell-sdk deliberately (the
-    // SDK needs Node 20+, the repo declares >=18). The absence of retell-sdk
-    // therefore does NOT make the server path unrunnable — only an uninjected
-    // transport does.
-    let sdkPresent = true;
-    try { require.resolve("retell-sdk"); } catch { sdkPresent = false; }
-    assert.equal(sdkPresent, false, "this test is only meaningful without the SDK");
+  test("provider requests work through an injected transport, WITHOUT using the SDK", async () => {
+    // The correction: M3 chose native fetch over retell-sdk deliberately. The
+    // presence or absence of retell-sdk does NOT decide whether the server path
+    // runs — only an injected transport does.
+    //
+    // This used to assert the SDK was absent. M7F-A installs it for webhook
+    // signature verification, so the meaningful assertion is that the adapter
+    // still does not IMPORT it and still requires an injected fetch.
+    const adapterSource = require("fs").readFileSync(require.resolve("../src/services/retell-adapter"), "utf8");
+    assert.equal(/require\(["']retell-sdk["']\)/.test(adapterSource), false, "the adapter must not import the SDK");
 
     const { createRetellAdapter } = require("../src/services/retell-adapter");
     const { getRetellConfig } = require("../src/config/retell");
@@ -698,11 +700,18 @@ describe("sandbox reuses the corrected production builders", () => {
 // ── No external contact ─────────────────────────────────────────────
 
 describe("no provider contact", () => {
-  test("no Retell package is installed", () => {
-    for (const pkg of ["retell-sdk", "retell-client-js-sdk"]) {
-      let present = true;
-      try { require.resolve(pkg); } catch { present = false; }
-      assert.equal(present, false, `${pkg} must not be installed in this repository`);
+  test("the sandbox depends on no Retell package", () => {
+    // The BROWSER SDK must never be installed server-side — the harness loads
+    // it in the browser from a CDN, never through node_modules.
+    assert.throws(() => require.resolve("retell-client-js-sdk"), "the browser SDK must not be installed server-side");
+
+    // The server SDK IS installed as of M7F-A, for webhook signature
+    // verification only. What matters is that the sandbox path never touches
+    // it, which is asserted directly rather than inferred from its absence.
+    for (const mod of ["../src/services/retell-web-sandbox.js", "../src/services/retell-adapter.js", "../src/services/retell-multipart.js"]) {
+      const source = require("fs").readFileSync(require.resolve(mod), "utf8");
+      assert.equal(/require\(["']retell-sdk["']\)/.test(source), false, `${mod} must not import the SDK`);
+      assert.equal(/require\(["']retell-client-js-sdk["']\)/.test(source), false, `${mod} must not import the browser SDK`);
     }
   });
 

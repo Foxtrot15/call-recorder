@@ -453,12 +453,30 @@ describe("dynamic variable contract", () => {
 // ── No external contact ─────────────────────────────────────────────
 
 describe("no provider contact", () => {
-  test("no Retell package is installed, so no live call is possible", () => {
-    for (const pkg of ["retell-sdk", "retellai"]) {
-      let present = true;
-      try { require.resolve(pkg); } catch { present = false; }
-      assert.equal(present, false, `${pkg} must not be installed`);
-    }
+  test("no live call is possible, whether or not a package is installed", async () => {
+    // This asserted that retell-sdk was absent. M7F-A installs it deliberately
+    // — for webhook signature verification only — so "the package is missing"
+    // is no longer what keeps calls from happening, and a test that says
+    // otherwise would be false comfort.
+    //
+    // The real invariant is structural and is asserted directly: the adapter
+    // carries no transport unless one is injected, so constructing it in a test
+    // cannot reach the network even with every flag set.
+    const { createRetellAdapter } = require("../src/services/retell-adapter");
+    const wideOpen = {
+      NODE_ENV: "development", RETELL_ENABLED: "true", RETELL_LIVE_WRITES_ENABLED: "true",
+      RETELL_LIVE_CALLS_ENABLED: "true", RETELL_DRY_RUN: "false", RETELL_ALLOWED_TAG: "dev",
+      RETELL_API_KEY: "key_not_real", RETELL_DEFAULT_VOICE_ID: "voice_not_real",
+      RETELL_OUTBOUND_ONBOARDING_NUMBER: "+61491570006",
+    };
+    const adapter = createRetellAdapter({ config: getRetellConfig(wideOpen), env: wideOpen, logger: { error() {} } });
+    const result = await adapter.createPhoneCall({ payload: { to_number: "+61491570006" } });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "provider_misconfigured");
+    assert.match(result.error.message, /no HTTP transport/);
+
+    // The browser SDK must never be installed server-side.
+    assert.throws(() => require.resolve("retell-client-js-sdk"));
   });
 
   test("the shipped configuration cannot write to a provider", () => {
