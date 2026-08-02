@@ -169,13 +169,35 @@ function buildInboundCallVariables({ transferPrimary = null, transferBackup = nu
   // string. Omitting it is safe because the compiled default is "", and the
   // prompt tells the agent to ask the caller to confirm a number it was not
   // given. A partial or invented reading would not be.
+  // ── ONLY THE SPOKEN FORM LEAVES THIS FUNCTION (M7G) ──────────────
+  //
+  // The canonical E.164 numbers used to be sent as well, on the reasoning that
+  // they were "machine-facing". They are not: a dynamic variable goes into the
+  // MODEL's context, and consumer analysis found nothing there that needs them.
+  //
+  //   * the production receptionist prompt names no dynamic variables at all
+  //   * the sandbox prompt names only {{current_transfer_number_spoken}}
+  //   * attempt_urgent_transfer takes enquiry_id + urgency, and the server
+  //     resolves the destination itself
+  //   * get_on_call_recipient returns an opaque reference, never a number
+  //
+  // So sending them bought nothing and cost real exposure. The prompt forbids
+  // reading them aloud, but an instruction is a weaker guarantee than absence,
+  // and the M7G live proof made that concrete: the deployed response carried
+  // two real transfer numbers into the model context that nothing could use.
+  //
+  // The canonical values remain in the approved profile, in server-side transfer
+  // configuration and in every machine path that genuinely needs them. This is a
+  // change to what the MODEL is told, not to what AIDA stores or dials.
+  //
+  // The keys stay allow-listed and runtime-only, and buildInboundWebhookResponse
+  // still accepts them, so a demonstrated future requirement can pass one
+  // explicitly rather than needing this decision reversed wholesale.
   if (transferPrimary) {
-    vars.current_transfer_number = transferPrimary;
     const spoken = describeAuNumber(transferPrimary, { purpose: "transfer_primary" });
     if (spoken.spoken) vars.current_transfer_number_spoken = spoken.spoken;
   }
   if (transferBackup) {
-    vars.current_backup_number = transferBackup;
     const spoken = describeAuNumber(transferBackup, { purpose: "transfer_backup" });
     if (spoken.spoken) vars.current_backup_number_spoken = spoken.spoken;
   }

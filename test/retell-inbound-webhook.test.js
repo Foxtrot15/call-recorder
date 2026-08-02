@@ -187,12 +187,61 @@ describe("Australian phone speech through the shared service", () => {
     assert.equal(d.body.call_inbound.dynamic_variables.caller_number_spoken, undefined);
   });
 
-  test("the transfer number keeps BOTH forms, machine and spoken", async () => {
+  test("the transfer number is sent ONLY as its spoken form", async () => {
     const d = await inbound.decideInboundCall({ parsed: inboundBody(), resolveContext: async () => CONTEXT });
     const vars = d.body.call_inbound.dynamic_variables;
-    assert.equal(vars.current_transfer_number, TRANSFER, "the machine form stays canonical");
     assert.equal(vars.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
     assert.equal(vars.current_backup_number_spoken, "oh three, nine oh oh oh, oh oh oh oh");
+    // M7G: the canonical values never enter the model's context.
+    assert.equal(vars.current_transfer_number, undefined);
+    assert.equal(vars.current_backup_number, undefined);
+    assert.equal(JSON.stringify(vars).includes(TRANSFER), false);
+  });
+
+  test("NO raw E.164 anywhere in a resolved inbound response", async () => {
+    // The blanket assertion, deliberately not narrowed. Covers variables AND
+    // metadata, which is where a client identifier lives and a number must not.
+    const d = await inbound.decideInboundCall({
+      parsed: inboundBody(), resolveContext: async () => CONTEXT, includeCallerNumber: true,
+    });
+    assert.equal(speech.containsE164(JSON.stringify(d.body)), false, JSON.stringify(d.body));
+    assert.equal(speech.containsE164(JSON.stringify(d.body.call_inbound.metadata)), false);
+  });
+
+  test("the resolved response carries only the minimum variables", async () => {
+    const d = await inbound.decideInboundCall({ parsed: inboundBody(), resolveContext: async () => CONTEXT });
+    // The CONTEXT fixture also supplies runtime state, so those keys are
+    // expected. What must be ABSENT is any canonical number.
+    assert.deepEqual(
+      Object.keys(d.body.call_inbound.dynamic_variables).sort(),
+      ["call_kind", "current_backup_number_spoken", "current_business_status", "current_transfer_number_spoken", "on_call_state"]
+    );
+    for (const forbidden of ["current_transfer_number", "current_backup_number", "caller_number", "caller_number_e164"]) {
+      assert.equal(forbidden in d.body.call_inbound.dynamic_variables, false, `${forbidden} must not be sent`);
+    }
+  });
+
+  test("the canonical numbers remain available to server-side transfer execution", async () => {
+    // What changed is what the MODEL is told, not what AIDA holds. The resolver
+    // still returns the canonical values to the server, which is what a transfer
+    // implementation will use.
+    const { createInboundResolver, RESOLUTION } = require("../src/services/retell-inbound-resolver");
+    const resolve = createInboundResolver({
+      expectedTag: "dev",
+      logger: SILENT,
+      access: {
+        async findResourcesByProviderId() {
+          return [{ client_id: "demo-locksmith", provider: "retell", resource_type: "voice_agent", purpose: "receptionist_agent", provider_resource_id: AGENT_ID, provider_tag: "dev", active: true, profile_version: 3 }];
+        },
+        async getApprovedProfile() {
+          return { version: 3, status: "approved", profile: { transfer: { primaryNumber: TRANSFER, backupNumber: "+61390000000" } } };
+        },
+      },
+    });
+    const result = await resolve({ agentId: AGENT_ID });
+    assert.equal(result.resolution, RESOLUTION.resolved);
+    assert.equal(result.context.transferPrimary, TRANSFER, "the server still gets the dialable number");
+    assert.equal(result.context.transferBackup, "+61390000000");
   });
 
   test("no SPOKEN variable ever carries a number in international form", async () => {
@@ -658,8 +707,12 @@ describe("the real resolver, through the handler", () => {
     });
     await handler(x.req, x.res);
     assert.equal(x.out.statusCode, 200);
-    assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number, TRANSFER);
+    // The SPOKEN form, not the canonical one — see the M7G note in
+    // buildInboundCallVariables.
+    assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
+    assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number, undefined);
     assert.equal(x.out.payload.call_inbound.metadata.aida_client_id, "demo-locksmith");
+    assert.equal(speech.containsE164(JSON.stringify(x.out.payload)), false);
   });
 
   for (const resolution of [
@@ -718,8 +771,11 @@ describe("the real resolver, through the handler", () => {
     assert.equal(json.includes(CALLER), false);
     assert.equal(json.includes(TRANSFER), false);
     assert.equal(json.includes("oh four nine one"), false);
-    // transfer number, its spoken twin, and the caller's spoken number.
-    assert.equal(events[0].variableCount, 3);
+    // The transfer number's spoken form and the caller's spoken form. The
+    // canonical transfer number is no longer sent at all (M7G), so this dropped
+    // from three to two — the count is asserted precisely so a silent return of
+    // the raw value would fail here as well as in the shape tests.
+    assert.equal(events[0].variableCount, 2);
   });
 
   test("the audit still runs after the response", async () => {

@@ -310,12 +310,40 @@ describe("the change-request read-back uses the shared service", () => {
 });
 
 describe("runtime dynamic variables", () => {
-  test("a transfer number arrives with a spoken twin", () => {
+  test("a transfer number arrives ONLY as its spoken form", () => {
     const built = dynamicVars.buildInboundCallVariables({ transferPrimary: "+61491570006", transferBackup: "+61391234567" });
     assert.equal(built.ok, true);
-    assert.equal(built.variables.current_transfer_number, "+61491570006");
     assert.equal(built.variables.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
     assert.equal(built.variables.current_backup_number_spoken, "oh three, nine one two three, four five six seven");
+
+    // M7G: the canonical values are NOT sent. A dynamic variable goes into the
+    // model's context, and consumer analysis found nothing there that uses
+    // them — the prompt names no variables, and the transfer tool resolves its
+    // destination server-side from an enquiry id.
+    assert.equal(built.variables.current_transfer_number, undefined);
+    assert.equal(built.variables.current_backup_number, undefined);
+  });
+
+  test("NO variable the model receives contains a number in international form", () => {
+    const built = dynamicVars.buildInboundCallVariables({
+      transferPrimary: "+61491570006", transferBackup: "+61391234567",
+      callerNumber: "+61491570110", businessStatus: "open", onCallState: "primary", callKind: "inbound_enquiry",
+    });
+    for (const [key, value] of Object.entries(built.variables)) {
+      assert.equal(speech.containsE164(value), false, `${key} carries an E.164 number`);
+    }
+    assert.equal(speech.containsE164(JSON.stringify(built.variables)), false);
+  });
+
+  test("the keys stay allow-listed so a demonstrated need can pass one explicitly", () => {
+    // Removing them from the DEFAULT set is not the same as forbidding them.
+    // buildInboundWebhookResponse still accepts a canonical value, so a future
+    // requirement can supply one without reversing this decision wholesale.
+    const explicit = dynamicVars.buildInboundWebhookResponse({ variables: { current_transfer_number: "+61491570006" } });
+    assert.equal(explicit.ok, true);
+    assert.equal(explicit.response.call_inbound.dynamic_variables.current_transfer_number, "+61491570006");
+    assert.ok(dynamicVars.ALLOWED_KEYS.includes("current_transfer_number"));
+    assert.ok(dynamicVars.RUNTIME_ONLY_KEYS.includes("current_transfer_number"));
   });
 
   test("the spoken form cannot be supplied — only derived", () => {

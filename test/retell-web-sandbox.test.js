@@ -660,14 +660,22 @@ describe("sandbox reuses the corrected production builders", () => {
     const payload = sandbox.buildSandboxWebCallPayload({ agentId: "a" });
     const json = JSON.stringify(payload) + sandbox.DEMO_KNOWLEDGE;
 
-    // A transfer number IS present now, supplied per call through the shared
-    // runtime builder — that is how the sandbox exercises dynamic-variable
-    // influence. So the rule is not "no number" but "no number that could
-    // possibly ring a real person": every one must sit in the ACMA fictitious
-    // range 0491 570 006–156, which is reserved and never allocated.
-    const numbers = json.match(/\+?61\d{9}/g) || [];
-    assert.ok(numbers.length > 0, "the sandbox does exercise a transfer number");
-    for (const n of numbers) {
+    // The sandbox still exercises a transfer number, but since M7G it does so
+    // through the SPOKEN form only — the canonical E.164 value is no longer
+    // sent into the model's context, because nothing in the prompt or the tool
+    // schema uses it.
+    assert.match(
+      payload.retell_llm_dynamic_variables.current_transfer_number_spoken,
+      /^oh four nine one, five seven oh, /,
+      "the sandbox must still exercise dynamic-variable influence with a number"
+    );
+    assert.equal(payload.retell_llm_dynamic_variables.current_transfer_number, undefined);
+
+    // And the rule for any digits that DO appear anywhere is unchanged: no
+    // number that could possibly ring a real person. Every one must sit in the
+    // ACMA fictitious range 0491 570 006–156, which is reserved and never
+    // allocated.
+    for (const n of json.match(/\+?61\d{9}/g) || []) {
       assert.match(n, /^\+?61491570(0(0[6-9]|[1-9]\d)|1[0-5]\d)$/, `${n} must be an ACMA fictitious number`);
     }
 
