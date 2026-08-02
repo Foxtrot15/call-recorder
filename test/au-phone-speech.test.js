@@ -43,7 +43,10 @@ function compileDemoReceptionist(mutate = null) {
 
 /** Every digit the input carried must survive into the spoken form. */
 function spokenDigits(spoken) {
-  const words = { oh: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9" };
+  // "oh" is still mapped even though nothing emits it any more (M7I-C2): this
+  // helper proves digits are recoverable, and it should keep working if a
+  // historical string is ever fed through it.
+  const words = { zero: "0", oh: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9" };
   return spoken.split(/[\s,]+/).filter(Boolean).map((w) => {
     assert.ok(words[w] !== undefined, `"${w}" is not a digit word — the spoken form must contain nothing else`);
     return words[w];
@@ -56,7 +59,7 @@ describe("Australian mobile numbers", () => {
     assert.equal(d.ok, true);
     assert.equal(d.e164, "+61491234567");
     assert.equal(d.display, "0491 234 567");
-    assert.equal(d.spoken, "oh four nine one, two three four, five six seven");
+    assert.equal(d.spoken, "zero four nine one, two three four, five six seven");
     assert.equal(d.numberType, "mobile");
     assert.equal(d.localised, true);
   });
@@ -74,19 +77,22 @@ describe("Australian mobile numbers", () => {
     assert.deepEqual({ ...fromLocal }, { ...fromE164 });
   });
 
-  test("zero is \"oh\", never \"zero\"", () => {
+  test("zero is \"zero\", never \"oh\" (founder decision, M7I-C2)", () => {
+    // Reversed from M7E. "Oh" is one unstressed vowel and is the syllable most
+    // easily lost to line noise; "zero" has a hard consonant and survives.
     const d = speech.describeAuNumber("+61491570006");
-    assert.equal(d.spoken, "oh four nine one, five seven oh, oh oh six");
-    assert.ok(!d.spoken.includes("zero"));
+    assert.equal(d.spoken, "zero four nine one, five seven zero, zero zero six");
+    assert.equal(/\boh\b/.test(d.spoken), false, "no \"oh\" may remain in a spoken number");
+    assert.equal(speech.DIGIT_WORDS[0], "zero");
   });
 });
 
 describe("Australian geographic landlines", () => {
   const cases = [
-    { e164: "+61391234567", display: "03 9123 4567", spoken: "oh three, nine one two three, four five six seven" },
-    { e164: "+61291234567", display: "02 9123 4567", spoken: "oh two, nine one two three, four five six seven" },
-    { e164: "+61731234567", display: "07 3123 4567", spoken: "oh seven, three one two three, four five six seven" },
-    { e164: "+61881234567", display: "08 8123 4567", spoken: "oh eight, eight one two three, four five six seven" },
+    { e164: "+61391234567", display: "03 9123 4567", spoken: "zero three, nine one two three, four five six seven" },
+    { e164: "+61291234567", display: "02 9123 4567", spoken: "zero two, nine one two three, four five six seven" },
+    { e164: "+61731234567", display: "07 3123 4567", spoken: "zero seven, three one two three, four five six seven" },
+    { e164: "+61881234567", display: "08 8123 4567", spoken: "zero eight, eight one two three, four five six seven" },
   ];
 
   for (const c of cases) {
@@ -101,7 +107,7 @@ describe("Australian geographic landlines", () => {
 
   test("the area code is its own group, as an Australian says it", () => {
     const d = speech.describeAuNumber("+61391234567");
-    assert.equal(d.spoken.split(", ")[0], "oh three");
+    assert.equal(d.spoken.split(", ")[0], "zero three");
   });
 });
 
@@ -110,7 +116,7 @@ describe("13, 1300 and 1800", () => {
     const d = speech.describeAuNumber("1300 123 456");
     assert.equal(d.e164, "+611300123456");
     assert.equal(d.display, "1300 123 456");
-    assert.equal(d.spoken, "one three oh oh, one two three, four five six");
+    assert.equal(d.spoken, "one three zero zero, one two three, four five six");
     assert.equal(d.numberType, "service_1300");
     assert.ok(!d.display.startsWith("0"), "the leading 1 is part of a 1300 number, not a trunk prefix");
   });
@@ -119,7 +125,7 @@ describe("13, 1300 and 1800", () => {
     const d = speech.describeAuNumber("1800 123 456");
     assert.equal(d.e164, "+611800123456");
     assert.equal(d.display, "1800 123 456");
-    assert.equal(d.spoken, "one eight oh oh, one two three, four five six");
+    assert.equal(d.spoken, "one eight zero zero, one two three, four five six");
     assert.equal(d.numberType, "service_1800");
   });
 
@@ -150,7 +156,7 @@ describe("punctuation, spacing and other input forms", () => {
   const equivalents = ["+61491234567", "0491234567", "0491 234 567", "(04) 9123 4567", "04-9123-4567", "+61 491 234 567", "61491234567"];
 
   test("every written form of the same number converges", () => {
-    const expected = "oh four nine one, two three four, five six seven";
+    const expected = "zero four nine one, two three four, five six seven";
     for (const value of equivalents) {
       assert.equal(speech.describeAuNumber(value).spoken, expected, `${value} did not converge`);
     }
@@ -231,7 +237,7 @@ describe("digits are never lost, added or altered", () => {
     // ambiguous; product rules do not support it, so it must not happen.
     const d = speech.describeAuNumber("+61491570006");
     assert.ok(!/double|triple/i.test(d.spoken));
-    assert.equal(d.spoken, "oh four nine one, five seven oh, oh oh six");
+    assert.equal(d.spoken, "zero four nine one, five seven zero, zero zero six");
   });
 
   test("the canonical value is never altered by describing it", () => {
@@ -279,7 +285,7 @@ describe("the change-request read-back uses the shared service", () => {
     assert.equal(result.ok, true);
     assert.equal(result.change.value, "+61491570006", "storage stays canonical");
     assert.equal(result.change.readBackText, "0491 570 006");
-    assert.equal(result.change.readBackSpoken, "oh four nine one, five seven oh, oh oh six");
+    assert.equal(result.change.readBackSpoken, "zero four nine one, five seven zero, zero zero six");
   });
 
   test("a 1300 read-back no longer invents a leading zero", () => {
@@ -302,7 +308,7 @@ describe("the change-request read-back uses the shared service", () => {
     const before = changeRequest.validateChange({ target: "transferPrimary", value: "0491 570 006" });
     const after = changeRequest.validateChange({ target: "transferPrimary", value: "0491 570 007" });
     assert.notEqual(before.change.readBackSpoken, after.change.readBackSpoken);
-    assert.equal(after.change.readBackSpoken, "oh four nine one, five seven oh, oh oh seven");
+    assert.equal(after.change.readBackSpoken, "zero four nine one, five seven zero, zero zero seven");
     // Nothing is cached anywhere: the spoken form is a pure function of the
     // canonical value, so there is no stale copy that could survive.
     assert.equal(speech.spokenAuNumber(after.change.value), after.change.readBackSpoken);
@@ -313,8 +319,8 @@ describe("runtime dynamic variables", () => {
   test("a transfer number arrives ONLY as its spoken form", () => {
     const built = dynamicVars.buildInboundCallVariables({ transferPrimary: "+61491570006", transferBackup: "+61391234567" });
     assert.equal(built.ok, true);
-    assert.equal(built.variables.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
-    assert.equal(built.variables.current_backup_number_spoken, "oh three, nine one two three, four five six seven");
+    assert.equal(built.variables.current_transfer_number_spoken, "zero four nine one, five seven zero, zero zero six");
+    assert.equal(built.variables.current_backup_number_spoken, "zero three, nine one two three, four five six seven");
 
     // M7G: the canonical values are NOT sent. A dynamic variable goes into the
     // model's context, and consumer analysis found nothing there that uses
@@ -353,7 +359,7 @@ describe("runtime dynamic variables", () => {
       transferPrimary: "+61491570006",
       current_transfer_number_spoken: "nine nine nine",
     });
-    assert.equal(built.variables.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
+    assert.equal(built.variables.current_transfer_number_spoken, "zero four nine one, five seven zero, zero zero six");
   });
 
   test("an unlocalisable number yields no spoken variable rather than a guess", () => {
@@ -364,7 +370,7 @@ describe("runtime dynamic variables", () => {
 
   test("a caller number is sent SPOKEN ONLY — the agent never gets the E.164", () => {
     const built = dynamicVars.buildInboundCallVariables({ callerNumber: "+61491570110" });
-    assert.equal(built.variables.caller_number_spoken, "oh four nine one, five seven oh, one one oh");
+    assert.equal(built.variables.caller_number_spoken, "zero four nine one, five seven zero, one one zero");
     assert.equal(built.variables.caller_number, undefined);
     assert.equal(built.variables.caller_number_e164, undefined);
   });
@@ -386,7 +392,7 @@ describe("runtime dynamic variables", () => {
   test("spoken numbers are runtime-only and refused as provisioning defaults", () => {
     for (const key of ["current_transfer_number_spoken", "current_backup_number_spoken", "caller_number_spoken"]) {
       assert.ok(dynamicVars.RUNTIME_ONLY_KEYS.includes(key), `${key} must be runtime-only`);
-      const result = dynamicVars.validateDynamicVariables({ [key]: "oh four" }, { scope: "default" });
+      const result = dynamicVars.validateDynamicVariables({ [key]: "zero four" }, { scope: "default" });
       assert.equal(result.ok, false, `${key} must not be acceptable as a default`);
     }
   });
@@ -395,8 +401,8 @@ describe("runtime dynamic variables", () => {
     const { defaults, runtimeOnly } = dynamicVars.splitDefaultsFromRuntime({
       business_name: "Harbour Locksmith Demo",
       current_transfer_number: "+61491570006",
-      current_transfer_number_spoken: "oh four nine one, five seven oh, oh oh six",
-      caller_number_spoken: "oh four nine one, five seven oh, one one oh",
+      current_transfer_number_spoken: "zero four nine one, five seven zero, zero zero six",
+      caller_number_spoken: "zero four nine one, five seven zero, one one zero",
     });
     assert.equal(defaults.current_transfer_number, undefined);
     assert.equal(defaults.current_transfer_number_spoken, undefined);
@@ -511,7 +517,7 @@ describe("PROMPT REGRESSION — no raw E.164 in caller-facing prose", () => {
     // The delivery path is what M7E built. It must stay proven even though the
     // sandbox prompt no longer quotes the value.
     const vars = sandbox.buildSandboxWebCallPayload({ agentId: "agent_test" }).retell_llm_dynamic_variables;
-    assert.match(vars.current_transfer_number_spoken, /^oh four nine one, /);
+    assert.match(vars.current_transfer_number_spoken, /^zero four nine one, /);
     assert.equal(speech.containsE164(vars.current_transfer_number_spoken), false);
     assert.equal(vars.current_transfer_number, undefined, "the canonical value never enters model context");
   });

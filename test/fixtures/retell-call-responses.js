@@ -123,7 +123,7 @@ const connectedWebCall = Object.freeze({
   llm_token_usage: { values: [412, 508, 611], average: 510.3, num_requests: 3 },
   retell_llm_dynamic_variables: {
     current_transfer_number: "+61491570006",
-    current_transfer_number_spoken: "oh four nine one, five seven oh, oh oh six",
+    current_transfer_number_spoken: "zero four nine one, five seven zero, zero zero six",
     current_business_status: "open",
   },
   call_analysis: {

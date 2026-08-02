@@ -50,13 +50,13 @@ describe("spoken numbers — consecutive zeros stay one word per digit", () => {
   // Collapsing repeats into "double oh" was implemented and reverted: it was
   // never the defect the founder heard, and it breaks the digit-recovery check
   // that proves no digit was lost. See the comment above digitsToWords().
-  test("a double zero is \"oh oh\", never \"double oh\"", () => {
+  test("a double zero is \"zero zero\", never \"double oh\"", () => {
     // The exact number in the sandbox profile's transfer field.
-    assert.equal(speech.describeAuNumber("+61491570006").spoken, "oh four nine one, five seven oh, oh oh six");
+    assert.equal(speech.describeAuNumber("+61491570006").spoken, "zero four nine one, five seven zero, zero zero six");
   });
 
   test("a triple zero is three words, never \"triple oh\"", () => {
-    assert.equal(speech.describeAuNumber("+61491570000").spoken, "oh four nine one, five seven oh, oh oh oh");
+    assert.equal(speech.describeAuNumber("+61491570000").spoken, "zero four nine one, five seven zero, zero zero zero");
   });
 
   test("no repeated digit of any kind is compressed", () => {
@@ -92,9 +92,11 @@ describe("spoken numbers — consecutive zeros stay one word per digit", () => {
     assert.equal(speech.describeAuNumber("131234").transferEligible, false);
   });
 
-  test("zero is still \"oh\", never \"zero\"", () => {
-    assert.equal(speech.DIGIT_WORDS[0], "oh");
-    assert.equal(/zero/.test(speech.describeAuNumber("+61491570006").spoken), false);
+  test("zero is \"zero\", and no \"oh\" survives anywhere (M7I-C2)", () => {
+    assert.equal(speech.DIGIT_WORDS[0], "zero");
+    for (const n of ["+61491570006", "+61400044400", "+61391234567", "+611300123456", "+611800123456", "131234"]) {
+      assert.equal(/\boh\b/.test(speech.describeAuNumber(n).spoken), false, `${n} still says "oh"`);
+    }
   });
 
   test("E.164 storage and the no-raw-E.164 guard are untouched", () => {
@@ -120,10 +122,16 @@ describe("the prompt forbids the digit-string read-back that actually failed", (
     const p = prompt();
     assert.match(p, /Say every digit separately/);
     assert.match(p, /Do not compress repeats into "double" or "triple"/);
-    assert.match(p, /Say "oh" for zero, never "zero"/);
+    assert.match(p, /Say "zero" for 0, never "oh"/);
+    // "oh" may appear ONLY where the prompt is prohibiting it. Any line that
+    // mentions it without a prohibition is teaching it by example.
+    for (const line of p.split("\n")) {
+      if (!/\boh\b/.test(line)) continue;
+      assert.match(line, /\b(never|not)\b/, `"oh" appears without a prohibition: ${line}`);
+    }
     // And the example in the prompt is exactly what the module would emit.
-    assert.equal(speech.describeAuNumber("+61467745066").spoken, "oh four six seven, seven four five, oh six six");
-    assert.match(p, /"oh four six seven, seven four five, oh six six"/);
+    assert.equal(speech.describeAuNumber("+61467745066").spoken, "zero four six seven, seven four five, zero six six");
+    assert.match(p, /"zero four six seven, seven four five, zero six six"/);
   });
 
   test("the capture rule points at it instead of contradicting it", () => {

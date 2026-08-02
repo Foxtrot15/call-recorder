@@ -723,7 +723,7 @@ which M7B had listed as unvalidated assumptions.
 **Transfer numbers are read aloud in E.164.** The runtime dynamic variable
 carries `+61491570006`, so the agent says *"plus six one, four nine one…"* — the
 operator reported the number "sounded a bit weird". An Australian caller expects
-*"oh four nine one…"*.
+*"zero four nine one…"*.
 
 The product already knows how to do this: `validateChange` produces a
 `readBackText` that converts `+61` → `0` and spaces the digits for
@@ -784,7 +784,7 @@ The runtime path had no spoken form to read, so it read the canonical one. The
 conversion existed only on the configuration path.
 
 `src/services/au-phone-speech.js` now derives both a display form
-(`0491 570 006`) and a spoken form (`oh four nine one, five seven oh, oh oh
+(`0491 570 006`) and a spoken form (`zero four nine one, five seven zero, zero zero
 six`) from the canonical E.164 value, and **both the change-request read-back and
 the receptionist runtime use it**. Storage is unchanged: every number is still
 E.164, and the presentations are derived at the point of use and never stored, so

@@ -374,7 +374,7 @@ service, and both paths use it:
 |---|---|---|
 | storage, provider operations, validation, audit | **E.164**, unchanged | `+61491234567` |
 | anything a human reads | display | `0491 234 567` |
-| anything a model may say | spoken | `oh four nine one, two three four, five six seven` |
+| anything a model may say | spoken | `zero four nine one, two three four, five six seven` |
 
 Three properties make this safe rather than merely tidier:
 

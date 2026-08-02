@@ -492,7 +492,7 @@ describe("what a summary must never carry", () => {
     const s = diagnostics.summariseCall(F.connectedWebCall);
     assert.ok(s.evidence.dynamicVariableKeys.includes("current_transfer_number"));
     assert.equal(JSON.stringify(s).includes("+61491570006"), false);
-    assert.equal(JSON.stringify(s).includes("oh four nine one"), false);
+    assert.equal(JSON.stringify(s).includes("zero four nine one"), false);
   });
 
   test("the leak detector agrees, on every fixture", () => {

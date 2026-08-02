@@ -14,7 +14,7 @@
 // ─── THE RULE ───────────────────────────────────────────────────────
 //   STORAGE and MACHINES use E.164.       +61491234567
 //   HUMANS see the local display form.    0491 234 567
-//   MODELS are given the spoken form.     "oh four nine one, two three four,
+//   MODELS are given the spoken form.     "zero four nine one, two three four,
 //                                          five six seven"
 //
 // The spoken and display forms are DERIVED, never stored and never accepted as
@@ -49,10 +49,28 @@ const { normaliseAuNumber } = require("./locksmith-profile");
 
 const SPEECH_VERSION = "au-phone-speech-2026-08-02";
 
-// "oh", not "zero": this is how an Australian reads a phone number aloud, and
-// the trunk prefix is the single most common digit in the set.
+// ── "zero", not "oh" (founder decision, M7I-C2) ─────────────────────
+//
+// M7E chose "oh" because that is how an Australian reads a number aloud. That
+// was a fair reading of the convention and the wrong trade for this product.
+//
+// A phone number is confirmed over a phone line, often by somebody standing in
+// the dark outside their own front door. "Oh" is a single unstressed vowel: it
+// is the syllable most easily lost to line noise, it collides with the filler
+// "oh" a caller says while thinking, and TTS voices differ in how much weight
+// they give it. "Zero" has two syllables and a hard consonant, and it survives
+// all three. Clarity beats idiom when a mis-heard digit means nobody gets
+// called back.
+//
+// This is the ONE place the convention is defined. The compiler's prompt rules
+// deliberately teach the same word, so the number a caller hears read back is
+// said the same way whether the model composed it or was handed it.
+//
+// INPUT is unaffected and stays tolerant: locksmith-extraction-fixture.js maps
+// BOTH "zero" and "oh" back to 0, because people say both and a transcript
+// records what was said, not what we would have preferred.
 const DIGIT_WORDS = Object.freeze({
-  0: "oh", 1: "one", 2: "two", 3: "three", 4: "four",
+  0: "zero", 1: "one", 2: "two", 3: "three", 4: "four",
   5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
 });
 
@@ -85,7 +103,7 @@ const GEOGRAPHIC_PREFIXES = Object.freeze(["02", "03", "07", "08"]);
 
 // ── ONE DIGIT, ONE WORD (M7E decision, re-affirmed M7I-C) ───────────
 //
-// "006" is "oh oh six", NOT "double oh six", and that is deliberate.
+// "006" is "zero zero six", NOT "double zero", and that is deliberate.
 //
 // M7I-C examined collapsing repeats, because the founder read their own number
 // aloud as "…five zero double six" and Australians plainly do say "double". It
@@ -115,7 +133,7 @@ function digitsToWords(digits) {
  * Join digit groups into speech.
  *
  * A comma between groups is the entire mechanism: it is the pause an Australian
- * leaves between "oh four nine one" and "two three four", and it is what stops
+ * leaves between "zero four nine one" and "two three four", and it is what stops
  * a listener losing their place in a ten-digit run.
  */
 function speakGroups(groups) {

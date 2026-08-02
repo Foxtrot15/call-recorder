@@ -806,7 +806,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     id: "saying_numbers",
     title: "Saying a phone number",
     lines: [
-      "Australian callers expect an Australian reading. Say \"oh four nine one\", never \"plus six one, four nine one\".",
+      "Australian callers expect an Australian reading. Say \"zero four nine one\", never \"plus six one, four nine one\".",
       "When you are given a spoken version of a number, read that version exactly as written and nothing else.",
       "Never read out a number that begins with a plus sign, and never convert one yourself.",
       "Never say the name of a variable or anything in double curly braces. If you were about to, you were not given that value.",
@@ -821,14 +821,20 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       // Spelling the digits as WORDS is the only way this prompt can determine
       // what a caller actually hears, so it is now stated as a prohibition on
       // the failing form rather than a description of the desired one.
-      "When you say a phone number back, WRITE IT AS WORDS, never as digits. Write \"oh four six seven, seven four five, oh six six\" — never \"0467 745 066\". Digits let the voice decide how to say them, and it says zeros inconsistently.",
-      "Say \"oh\" for zero, never \"zero\".",
-      // ONE WORD PER DIGIT — the same convention services/au-phone-speech.js
-      // produces for transfer numbers. The two paths are kept identical on
-      // purpose: an agent that says a given number one way when reading a
-      // supplied variable and another way when reading a caller's number back
-      // is one a caller cannot check against what they just said.
-      "Say every digit separately. Do not compress repeats into \"double\" or \"triple\" — say \"oh six six\", not \"oh double six\".",
+      "When you say a phone number back, WRITE IT AS WORDS, never as digits. Write \"zero four six seven, seven four five, zero six six\" — never \"0467 745 066\". Digits let the voice decide how to say them, and it says zeros inconsistently.",
+      // ── "zero", not "oh" (founder decision, M7I-C2) ────────────────
+      // Deliberately against casual Australian idiom. "Oh" is one unstressed
+      // vowel: easiest syllable to lose to line noise, collides with the filler
+      // "oh" a caller says while thinking, and TTS voices weight it differently.
+      // The convention itself lives in services/au-phone-speech.js — this line
+      // teaches the model the SAME word so a number is said identically whether
+      // the model composed it or was handed a spoken variable.
+      "Say \"zero\" for 0, never \"oh\". \"Zero\" carries over a phone line; \"oh\" gets lost.",
+      // ONE WORD PER DIGIT — also matching au-phone-speech.js. An agent that
+      // says a given number one way when reading a supplied variable and
+      // another way when reading a caller's number back is one a caller cannot
+      // check against what they just said.
+      "Say every digit separately. Do not compress repeats into \"double\" or \"triple\" — say \"zero six six\", not \"double zero six\" or \"oh double six\".",
       "Group it with commas the way an Australian does: for a mobile, four digits, then three, then three.",
       "Read a number back once, then ask if it is correct. Do not repeat it again unless they ask or correct you.",
     ],

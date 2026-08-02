@@ -176,7 +176,7 @@ describe("Australian phone speech through the shared service", () => {
       parsed: inboundBody(), resolveContext: async () => CONTEXT, includeCallerNumber: true,
     });
     const vars = d.body.call_inbound.dynamic_variables;
-    assert.equal(vars.caller_number_spoken, "oh four nine one, five seven oh, one one oh");
+    assert.equal(vars.caller_number_spoken, "zero four nine one, five seven zero, one one zero");
     assert.equal(vars.caller_number, undefined);
     assert.equal(vars.caller_number_e164, undefined);
     assert.equal(JSON.stringify(vars).includes(CALLER), false, "the caller's E.164 number must never be sent to the model");
@@ -190,8 +190,8 @@ describe("Australian phone speech through the shared service", () => {
   test("the transfer number is sent ONLY as its spoken form", async () => {
     const d = await inbound.decideInboundCall({ parsed: inboundBody(), resolveContext: async () => CONTEXT });
     const vars = d.body.call_inbound.dynamic_variables;
-    assert.equal(vars.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
-    assert.equal(vars.current_backup_number_spoken, "oh three, nine oh oh oh, oh oh oh oh");
+    assert.equal(vars.current_transfer_number_spoken, "zero four nine one, five seven zero, zero zero six");
+    assert.equal(vars.current_backup_number_spoken, "zero three, nine zero zero zero, zero zero zero zero");
     // M7G: the canonical values never enter the model's context.
     assert.equal(vars.current_transfer_number, undefined);
     assert.equal(vars.current_backup_number, undefined);
@@ -447,7 +447,7 @@ describe("the handler: signature before anything else", () => {
     assert.equal(all.includes(CALLER), false, "a caller number reached a log line");
     assert.equal(all.includes(TRANSFER), false, "a transfer number reached a log line");
     assert.equal(all.includes(ENV.RETELL_API_KEY), false);
-    assert.equal(all.includes("oh four nine one"), false, "a spoken number reached a log line");
+    assert.equal(all.includes("zero four nine one"), false, "a spoken number reached a log line");
     assert.ok(all.includes("retell.inbound.answered"));
   });
 });
@@ -660,7 +660,7 @@ describe("signature verification through the official seam", () => {
 
     assert.equal(x.out.statusCode, 200);
     const vars = x.out.payload.call_inbound.dynamic_variables;
-    assert.equal(vars.caller_number_spoken, "oh four nine one, five seven oh, one one oh");
+    assert.equal(vars.caller_number_spoken, "zero four nine one, five seven zero, one one zero");
     assert.equal(JSON.stringify(x.out.payload).includes(CALLER), false);
   });
 
@@ -709,7 +709,7 @@ describe("the real resolver, through the handler", () => {
     assert.equal(x.out.statusCode, 200);
     // The SPOKEN form, not the canonical one — see the M7G note in
     // buildInboundCallVariables.
-    assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number_spoken, "oh four nine one, five seven oh, oh oh six");
+    assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number_spoken, "zero four nine one, five seven zero, zero zero six");
     assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number, undefined);
     assert.equal(x.out.payload.call_inbound.metadata.aida_client_id, "demo-locksmith");
     assert.equal(speech.containsE164(JSON.stringify(x.out.payload)), false);
@@ -770,7 +770,7 @@ describe("the real resolver, through the handler", () => {
     const json = JSON.stringify(events[0]);
     assert.equal(json.includes(CALLER), false);
     assert.equal(json.includes(TRANSFER), false);
-    assert.equal(json.includes("oh four nine one"), false);
+    assert.equal(json.includes("zero four nine one"), false);
     // The transfer number's spoken form and the caller's spoken form. The
     // canonical transfer number is no longer sent at all (M7G), so this dropped
     // from three to two — the count is asserted precisely so a silent return of

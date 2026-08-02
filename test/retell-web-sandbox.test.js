@@ -667,7 +667,7 @@ describe("sandbox reuses the corrected production builders", () => {
     // schema uses it.
     assert.match(
       payload.retell_llm_dynamic_variables.current_transfer_number_spoken,
-      /^oh four nine one, five seven oh, /,
+      /^zero four nine one, five seven zero, /,
       "the sandbox must still exercise dynamic-variable influence with a number"
     );
     assert.equal(payload.retell_llm_dynamic_variables.current_transfer_number, undefined);

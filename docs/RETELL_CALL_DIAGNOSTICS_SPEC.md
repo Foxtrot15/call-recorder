@@ -31,7 +31,7 @@ This milestone closes the two findings M7D left open:
 |---|---|---|
 | Storage, provider operations, validation, audit | **E.164** | `+61491234567` |
 | Anything a human reads | **Australian display** | `0491 234 567` |
-| Anything a model may say | **Spoken** | `oh four nine one, two three four, five six seven` |
+| Anything a model may say | **Spoken** | `zero four nine one, two three four, five six seven` |
 
 **Storage did not change.** `normaliseAuNumber()` in
 `src/services/locksmith-profile.js` remains the single canonical gate, and every
@@ -77,25 +77,37 @@ is no second implementation to drift.
 
 | Input | Display | Spoken |
 |---|---|---|
-| `+61491234567` | `0491 234 567` | `oh four nine one, two three four, five six seven` |
-| `+61391234567` | `03 9123 4567` | `oh three, nine one two three, four five six seven` |
-| `+61291234567` | `02 9123 4567` | `oh two, nine one two three, four five six seven` |
-| `+61731234567` | `07 3123 4567` | `oh seven, three one two three, four five six seven` |
-| `+61881234567` | `08 8123 4567` | `oh eight, eight one two three, four five six seven` |
-| `1300 123 456` | `1300 123 456` | `one three oh oh, one two three, four five six` |
-| `1800 123 456` | `1800 123 456` | `one eight oh oh, one two three, four five six` |
+| `+61491234567` | `0491 234 567` | `zero four nine one, two three four, five six seven` |
+| `+61391234567` | `03 9123 4567` | `zero three, nine one two three, four five six seven` |
+| `+61291234567` | `02 9123 4567` | `zero two, nine one two three, four five six seven` |
+| `+61731234567` | `07 3123 4567` | `zero seven, three one two three, four five six seven` |
+| `+61881234567` | `08 8123 4567` | `zero eight, eight one two three, four five six seven` |
+| `1300 123 456` | `1300 123 456` | `one three zero zero, one two three, four five six` |
+| `1800 123 456` | `1800 123 456` | `one eight zero zero, one two three, four five six` |
 | `13 12 34` | `13 12 34` | `one three, one two, three four` |
 
 Grouping rules:
 
-* **Zero is "oh"**, never "zero" — that is how an Australian reads a number.
+* **Zero is "zero"**, never "oh". _(REVERSED 2026-08-03 by founder decision,
+  M7I-C2. This rule previously read: "Zero is 'oh', never 'zero' — that is how
+  an Australian reads a number." The idiom was right and the trade was wrong. A
+  number is confirmed over a phone line, often by somebody locked out in the
+  dark. "Oh" is a single unstressed vowel — the syllable most easily lost to
+  line noise, it collides with the filler "oh" a caller says while thinking, and
+  TTS voices weight it differently. "Zero" has two syllables and a hard
+  consonant and survives all three. Clarity beats idiom when a mis-heard digit
+  means nobody gets called back.)_
 * **Digits are spelled as words.** No TTS engine can then decide `491234567`
   is a quantity. This is why the spoken form contains no digit characters at all.
 * **Commas mark the groups.** Every engine already treats a comma as a pause; we
   do not rely on one inferring that eleven digits is a phone number.
 * **No `double` or `triple` compression.** `0491 570 006` has a natural "double
-  oh" and it is still spoken `oh oh`. Compression is clever and ambiguous;
-  no product rule supports it.
+  zero" and it is still spoken `zero zero`. Compression was implemented and
+  reverted in M7I-C: one word per digit is what lets a test recover the digits
+  from the spoken string and prove none was lost, gained or reordered.
+* **Input stays tolerant.** The extraction fixture maps **both** "zero" and "oh"
+  back to `0`. A transcript records what a caller said, not what we would have
+  preferred them to say — only OUTPUT is opinionated.
 * **No SSML.** Retell's prompt fields have no validated SSML contract in this
   codebase, so nothing emits markup. Plain deterministic text only.
 
@@ -186,7 +198,7 @@ separate. A test asserts the transfer tool's parameter list.
 A dedicated *Saying a phone number* section is now compiled into every
 receptionist prompt:
 
-* Australian callers expect an Australian reading — say "oh four nine one",
+* Australian callers expect an Australian reading — say "zero four nine one",
   never "plus six one, four nine one".
 * Read a supplied spoken version exactly as written, and nothing else.
 * Never read a number beginning with a plus sign, and never convert one yourself.

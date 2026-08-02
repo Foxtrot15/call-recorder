@@ -151,7 +151,7 @@ describe("the deterministic mock transcript produces the expected draft", () => 
 
 describe("spoken number parsing", () => {
   it("reads Australian digit-by-digit read-backs", () => {
-    assert.strictEqual(spokenNumberFrom("AIDA: oh four nine one, five seven oh, oh oh six."), "+61491570006");
+    assert.strictEqual(spokenNumberFrom("AIDA: zero four nine one, five seven zero, zero zero six."), "+61491570006");
     assert.strictEqual(spokenNumberFrom("AIDA: zero three, nine zero zero zero, zero zero zero zero."), "+61390000000");
   });
 
