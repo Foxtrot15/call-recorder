@@ -1,13 +1,13 @@
 const express = require("express");
 const router  = express.Router();
-const twilio  = require("twilio");
 const supabase = require("../services/supabase");
 const { fetchLoopGuardData, decidePstnDial } = require("../services/loop-guard");
-
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// Lazy factory, NOT a client. Importing this route used to construct a Twilio
+// client at module scope, and the Twilio constructor throws `username is
+// required` when the account SID is absent — so a deployment without telephony
+// credentials could not boot at all, including for routes that have nothing to
+// do with Twilio. See services/twilio-client.js.
+const { getTwilioClient } = require("../services/twilio-client");
 
 router.post("/initiate", async (req, res) => {
   const { to } = req.body;
@@ -43,7 +43,15 @@ router.post("/initiate", async (req, res) => {
     }
     const ownerNumber = verdict.ownerNumber;
 
-    const call = await client.calls.create({
+    // Built on first use. A missing credential is a deliberate 503 rather than
+    // a crash: this endpoint is unavailable, the rest of the server is not.
+    const twilioClient = getTwilioClient();
+    if (!twilioClient.ok) {
+      console.error(`call.initiate refused: ${twilioClient.reason}`);
+      return res.status(503).json({ error: "Telephony is not configured on this deployment.", detail: twilioClient.reason });
+    }
+
+    const call = await twilioClient.client.calls.create({
       to:   ownerNumber,
       from: process.env.TWILIO_PHONE_NUMBER,
       twiml: `<Response>
