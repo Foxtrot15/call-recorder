@@ -2,10 +2,17 @@
 // AIDA — Retell web-call sandbox runner (M7B).
 //
 //   node scripts/retell-web-sandbox.js                      assess only, free
-//   node scripts/retell-web-sandbox.js --execute            creates resources
+//   node scripts/retell-web-sandbox.js --execute            resources + ONE web call
+//   node scripts/retell-web-sandbox.js --execute --no-call   resources ONLY, no call
 //   node scripts/retell-web-sandbox.js --execute --keep-resources
 //   node scripts/retell-web-sandbox.js --execute --browser   Proof C harness
 //   node scripts/retell-web-sandbox.js --cleanup-manifest <path>
+//
+// --no-call provisions the knowledge base, response engine and agent, verifies
+// them, and stops. No web call, no browser harness, no call resource of any
+// kind. It exists so an agent can be created for the Retell dashboard — to bind
+// a number to later — without spending a call to do it. It is mutually
+// exclusive with --browser, whose entire purpose is to create one.
 //
 // DEFAULT BEHAVIOUR SPENDS NOTHING AND CONTACTS NOTHING. Without --execute this
 // prints the gate assessment and the plan, then exits.
@@ -39,7 +46,7 @@ const path = require("path");
 // precedence we want — no override flag is passed, deliberately.
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
-const { evaluateSandboxGate, evaluateKeepResources } = require("../src/config/retell-sandbox");
+const { evaluateSandboxGate, evaluateKeepResources, evaluateRunMode } = require("../src/config/retell-sandbox");
 const { getRetellConfig } = require("../src/config/retell");
 const sandbox = require("../src/services/retell-web-sandbox");
 
@@ -53,8 +60,13 @@ const valueOf = (flag) => {
 const WANT_EXECUTE = has("--execute");
 const WANT_KEEP = has("--keep-resources");
 const WANT_BROWSER = has("--browser");
+const WANT_NO_CALL = has("--no-call");
 const CLEANUP_MANIFEST = valueOf("--cleanup-manifest");
 const SDK_SPECIFIER = valueOf("--sdk");
+
+// Which mode the flags select, decided by a PURE function so the combinations
+// are testable without spawning this script. Contradictions fail closed.
+const RUN_MODE = evaluateRunMode({ execute: WANT_EXECUTE, browser: WANT_BROWSER, noCall: WANT_NO_CALL });
 
 const line = (c = "─") => console.log(c.repeat(74));
 const heading = (t) => { console.log(); line(); console.log(`  ${t}`); line(); };
@@ -65,13 +77,21 @@ if ((process.env.NODE_ENV || "development") === "production") {
   process.exit(1);
 }
 
+// Contradictory flags refuse before any gate is even read, so an incoherent
+// command can never reach a provider request.
+if (!RUN_MODE.ok) {
+  console.error("Refusing to run — contradictory flags:");
+  for (const e of RUN_MODE.errors) console.error(`  • ${e}`);
+  process.exit(1);
+}
+
 async function main() {
   if (CLEANUP_MANIFEST) return cleanupFromManifest(CLEANUP_MANIFEST);
 
   const gate = evaluateSandboxGate(process.env);
 
   heading("AIDA — Retell web-call sandbox");
-  console.log(`  mode          : ${WANT_EXECUTE ? "EXECUTE" : "assessment only (no request will be made)"}`);
+  console.log(`  mode          : ${RUN_MODE.mode}${RUN_MODE.mode === "provision" ? " (resources only — NO call of any kind)" : ""}`);
   console.log(`  node env      : ${gate.config.nodeEnv}`);
   console.log(`  allowed tag   : ${gate.config.allowedTag}`);
   console.log(`  voice id      : ${gate.config.voiceId ? "set (from RETELL_DEFAULT_VOICE_ID)" : "NOT SET"}`);
@@ -96,8 +116,14 @@ async function main() {
   console.log(`  3. response engine  "${names.responseEngine}"  (knowledge_base_ids attached)`);
   console.log(`  4. voice agent      "${names.agent}"           (recording off, no webhook, no number)`);
   console.log(`  5. verify agent     response_engine.llm_id, voice_id, language`);
-  console.log(`  6. ONE web call     (no phone number, no dialling)`);
-  console.log(`  7. verify call      bound to the sandbox agent`);
+  if (RUN_MODE.createCall) {
+    console.log(`  6. ONE web call     (no phone number, no dialling)`);
+    console.log(`  7. verify call      bound to the sandbox agent`);
+  } else if (RUN_MODE.startBrowser) {
+    console.log(`  6. browser harness  the call is minted by YOUR click, not by this script`);
+  } else {
+    console.log(`  6. STOP             --no-call: no web call, no browser harness, no call resource`);
+  }
   console.log();
   console.log("  Nothing existing is updated. No number is bought, imported or bound.");
 
@@ -123,6 +149,9 @@ async function main() {
   console.log("  This may incur a small Retell charge.");
   console.log("  No phone number will be bought, imported, bound or called.");
   console.log("  Recording is disabled. No webhook is configured.");
+  if (!RUN_MODE.createCall && !RUN_MODE.startBrowser) {
+    console.log("  --no-call: NO web call and NO telephone call will be created.");
+  }
   console.log();
 
   const keep = evaluateKeepResources(process.env, { commandLineFlag: WANT_KEEP });
@@ -137,7 +166,11 @@ async function main() {
     // With --browser the call is NOT created during provisioning. The access
     // token lives about 30 seconds, so it is minted by the browser's own click
     // instead — see the harness section below.
-    createCall: !WANT_BROWSER,
+    // Decided by the pure mode resolver, not by re-deriving it here. In
+    // `provision` mode this is false and no harness is started either, so the
+    // run creates a knowledge base, a response engine and an agent — and no
+    // call resource of any kind.
+    createCall: RUN_MODE.createCall,
   });
 
   heading("Result");
@@ -187,7 +220,7 @@ async function main() {
   }
 
   // ── Browser harness (Proof C) ─────────────────────────────────────
-  if (WANT_BROWSER && runResult.ok && runResult.created.agentId) {
+  if (RUN_MODE.startBrowser && runResult.ok && runResult.created.agentId) {
     const outcome = await runBrowserHarness({ adapter, runResult });
     heading("Cleanup");
     const cleanup = await sandbox.cleanupSandbox({ adapter, resources: runResult.created, logger: console });

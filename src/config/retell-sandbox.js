@@ -168,8 +168,54 @@ function evaluateKeepResources(env = process.env, { commandLineFlag = false } = 
   return { keep: false, reason: "resources are cleaned up by default" };
 }
 
+/**
+ * Which run mode the command-line flags select, and whether they are coherent.
+ *
+ * PURE, and exported, so the combinations are asserted directly rather than by
+ * spawning the script. M7D taught that lesson expensively: the dotenv gate tests
+ * spawned a subprocess with a restricted environment, which only worked while
+ * the repository's .env was empty — the moment it was genuinely configured, a
+ * fail-closed test reported the gates OPEN.
+ *
+ * Modes:
+ *   assess        no --execute. Contacts nothing. The default.
+ *   provision     --execute --no-call. Creates KB + LLM + agent, verifies them,
+ *                 and creates NO call of any kind.
+ *   web_call      --execute. The original behaviour: provisions and creates one
+ *                 billable web call.
+ *   browser       --execute --browser. Provisions, then serves the loopback
+ *                 harness which mints a call on the operator's click.
+ *
+ * Contradictory combinations FAIL CLOSED — they return ok:false rather than
+ * quietly picking one, because "I asked for no call and got one" is exactly the
+ * failure this flag exists to prevent.
+ */
+function evaluateRunMode({ execute = false, browser = false, noCall = false } = {}) {
+  const errors = [];
+
+  if (noCall && browser) {
+    errors.push("--no-call and --browser are mutually exclusive: the browser harness exists to create a call.");
+  }
+  if (noCall && !execute) {
+    errors.push("--no-call is only meaningful with --execute; without it nothing is created anyway.");
+  }
+  if (browser && !execute) {
+    errors.push("--browser is only meaningful with --execute.");
+  }
+
+  if (errors.length) {
+    return { ok: false, mode: null, createCall: false, startBrowser: false, errors };
+  }
+
+  if (!execute) return { ok: true, mode: "assess", createCall: false, startBrowser: false, errors: [] };
+  if (noCall) return { ok: true, mode: "provision", createCall: false, startBrowser: false, errors: [] };
+  if (browser) return { ok: true, mode: "browser", createCall: false, startBrowser: true, errors: [] };
+  return { ok: true, mode: "web_call", createCall: true, startBrowser: false, errors: [] };
+}
+
 module.exports = {
   SANDBOX_CONFIG_VERSION,
+  evaluateRunMode,
   DEFAULTS,
   isSandboxEnabled,
   isSandboxExecuteEnabled,
