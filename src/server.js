@@ -6,10 +6,35 @@ const express = require("express");
 const path    = require("path");
 const cookieParser = require("cookie-parser");
 const app     = express();
+app.set("trust proxy", true);
+
+// ── SIGNATURE-VERIFYING WEBHOOKS GO FIRST ───────────────────────────
+//
+// These three mount their own `express.raw` parser because verification must
+// see the EXACT bytes the provider signed. They must therefore be registered
+// BEFORE the global body parsers below.
+//
+// They used to sit after them, and the comments claimed they sat "apart from
+// the JSON parser" — they sat BELOW it, which is the opposite. body-parser
+// marks a request `_body = true` once it has read the stream, and every later
+// parser skips a request already marked. So `express.json()` consumed the body,
+// `express.raw()` skipped, and `req.body` arrived as a PARSED OBJECT rather than
+// a Buffer. Verification then hashed `String({...})` — the literal
+// "[object Object]" — and every correctly signed request was rejected as
+// `invalid_signature`.
+//
+// Found on the deployed Railway sandbox (M7F-B2): unsigned and forged requests
+// were refused correctly, so the security boundary looked healthy, while a
+// GENUINE Retell webhook could never have been accepted. Neither of the two
+// passing checks touches the body, which is why the bug hid behind them.
+app.use(require("./routes/stripe-webhook"));      // M6, dormant behind BILLING_* flags
+app.use(require("./routes/retell-webhook"));      // M3 event webhook, dormant
+app.use(require("./routes/retell-inbound-webhook")); // M7F-A inbound, dormant
+
+// ── Global parsers, for every ordinary route ────────────────────────
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(cookieParser());
-app.set("trust proxy", true);
 
 const { twilioWebhook, requireLogin } = require("./middleware/auth");
 
@@ -40,25 +65,15 @@ app.use(require("./routes/locksmith-portal"));
 // before any auth runs, so with the flag off there is no route from which a
 // card could be charged (see docs/LOCKSMITH_BILLING_SPEC.md).
 app.use(require("./routes/billing"));
-// Stripe webhook (M6). Dormant twice: needs BILLING_ENABLED and
-// BILLING_WEBHOOK_ENABLED both "true". Mounted with its own express.raw parser
-// so signature verification sees the exact bytes Stripe signed — the same
-// reason the Retell webhook below sits apart from the JSON parser.
-app.use(require("./routes/stripe-webhook"));
-// Retell webhook (M3). Dormant: without RETELL_ENABLED and
-// RETELL_WEBHOOK_ENABLED both "true" the path 404s before any handler runs.
-// Mounted with its own express.raw body parser so signature verification sees
-// the exact bytes — this is why it sits apart from the JSON parser above.
-app.use(require("./routes/retell-webhook"));
-// Retell INBOUND-call webhook (M7F-A). A SEPARATE route from the event webhook
-// above, and dormant behind its own RETELL_INBOUND_WEBHOOK_ENABLED flag.
+// The three signature-verifying webhooks (Stripe M6, Retell event M3, Retell
+// INBOUND M7F-A) are mounted ABOVE the body parsers — see the note there.
 //
-// Different provider contract: this URL is set on the phone NUMBER, fires
-// before a caller is answered, and its 200 JSON response configures that call —
-// where the event webhook is set on the AGENT and answers 204 with no body.
-// Keeping them apart is what makes it impossible for the generic path to return
-// the inbound shape, and keeps a database round trip away from a ringing phone.
-app.use(require("./routes/retell-inbound-webhook"));
+// The inbound webhook is deliberately a SEPARATE route from the Retell event
+// webhook: its URL is set on the phone NUMBER, it fires before a caller is
+// answered, and its 200 JSON response configures that call, where the event
+// webhook is set on the AGENT and answers 204 with no body. Keeping them apart
+// is what makes it impossible for the generic path to return the inbound shape,
+// and keeps a database round trip away from a ringing phone.
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.
