@@ -367,6 +367,281 @@ database write.
 - **Does not place, schedule or prepare a call.** There is no dialler in this
   build, and no code path that reaches telephony.
 
+---
+
+# A2 (in progress, uncommitted) — calling policy
+
+> **Status:** the modules below are built and tested but deliberately
+> **uncommitted**. Nothing dials. The remaining A2 work — duplicate resolution,
+> the plain-language eligibility engine and founder batch approval — is not yet
+> written.
+
+## A2.1 What exists so far
+
+| File | Purpose |
+|---|---|
+| `src/services/acquisition-phone.js` | AU normalisation to E.164 + classification |
+| `src/services/acquisition-dncr.js` | The DNCR wash port (`disabled` / `fixture` / `import`) |
+| `src/services/acquisition-suppression.js` | Permanent, cross-campaign suppression (G5) |
+| `src/services/acquisition-holidays.js` | Provider-neutral public-holiday interface + fixture |
+| `src/services/acquisition-calling-policy.js` | **The calling-policy gate (G10)** |
+
+## A2.2 The calling-policy gate
+
+One reusable domain service — `createCallingPolicy({...}).evaluate({...})` —
+answers *may this business be called at this instant?* and returns a structured
+decision: `allowed`, a stable `code`, a human-readable `message`, the evaluated
+`timezone` and `localTime`, `nextPermittedAt` where deterministically
+calculable, the `policy` inputs that were applied, and whether the block is
+`temporary`.
+
+It lives in `src/services/`, **not** in a route, scheduler, provider adapter or
+Retell/Twilio handler, so campaign selection, dispatch, retry scheduling,
+founder tooling and simulations all ask the same evaluator. A second
+implementation of this logic anywhere else is a bug.
+
+### Precedence — permanent before temporary
+
+1. `suppressed_permanently` — **always wins.** Reported as suppression even when
+   the call is also outside hours, because "outside calling hours" reads as *try
+   again tomorrow*, and tomorrow it would be called.
+2. `kill_switch_engaged` / `campaign_blocked`
+3. `attempt_cap_reached` (permanent) → `too_soon_since_last_attempt`,
+   `recent_contact_cooldown` (temporary)
+4. `timezone_missing` / `timezone_invalid` (permanent until data is fixed)
+5. `policy_missing`
+6. `holiday_coverage_unknown` → `public_holiday`
+7. `prohibited_day` → `before_permitted_hours` / `after_permitted_hours`
+8. `permitted`
+
+### Fail-closed behaviour
+
+Every uncertainty resolves to *do not call*: no timezone, an unusable timezone,
+no configured window, an unusable window, and — critically — **a holiday lookup
+that returns `known: false`**. A failed holiday lookup is never read as "not a
+holiday". The gate's default holiday provider is the *null* provider, which
+knows nothing about every date, so **forgetting to wire up a calendar stops
+calls rather than silently disabling the check**.
+
+### Timezone handling
+
+All conversion goes through `Intl` (the IANA database built into Node); no UTC
+offset is ever written down or arithmetic'd by hand. `zonedTimeToInstant` is
+two-pass — guess with the offset at the naive instant, correct with the offset
+that actually applies at the guess — then round-trips through `localParts` to
+verify. That is what makes daylight-saving boundaries come out right, and it is
+asserted: a 09:00 Melbourne opening resolves to `23:00Z` under AEST and
+`22:00Z` under AEDT.
+
+There is **no fallback to server local time anywhere**. A missing timezone
+returns `localTime: null`, because producing a local time would mean some clock
+was consulted and the only one available is the server's. A child-process test
+runs the identical evaluation under `TZ=UTC`, `TZ=Pacific/Honolulu` and
+`TZ=Asia/Kathmandu` and requires byte-identical output.
+
+## A2.3 ⚠ Limitations that must be resolved before anything dials
+
+**1. The permitted window is documented, not counsel-approved.**
+The hours come from [OUTBOUND_BDM_ARCHITECTURE.md](OUTBOUND_BDM_ARCHITECTURE.md)
+§2.2 and the G10 row in §5 — Mon–Fri 09:00–20:00, Sat 09:00–17:00, never Sundays
+or public holidays, recipient-local — encoded once as `CALLING_WINDOWS` in
+`src/config/acquisition.js`. They were **derived from the repository, not
+invented here.** But that document carries an explicit disclaimer that its
+compliance content is an engineering synthesis of public sources, not legal
+advice, and its **Phase 0 states: "Nothing dials until this is signed off."**
+
+Accordingly every decision carries `policy.counselApproved: false`. It is in the
+decision rather than in a comment because a reviewer reading a `permitted`
+verdict needs to see it there. It becomes true only when passed explicitly.
+
+**2. The public-holiday calendar is a hand-compiled fixture covering 2026 only.**
+There is no holiday dataset in this repository and no maintained dependency was
+added. `acquisition-holidays.js` is therefore an *interface* with two
+implementations: a fixture and a null provider.
+
+- It is **not** sourced from an authoritative feed and has not been checked by
+  anyone with legal responsibility.
+- The AFL Grand Final Friday holiday is proclaimed annually and its 2026 date
+  was not fixed at time of writing, so it is **deliberately absent rather than
+  guessed** — a guessed holiday is a call placed on a real one.
+- Coverage ends 2026-12-31. From 2027-01-01 the provider answers `known: false`
+  and the gate refuses to dial. The calendar expiring should stop calls loudly,
+  not degrade into calling on Christmas Day 2027.
+
+Replacing it with a provider backed by the data.gov.au Australian public
+holidays dataset (or a maintained library) requires implementing the same two
+methods — `coverage` and `isHoliday` — and changes nothing in the gate.
+
+## A2.4 Duplicate resolution
+
+`src/services/acquisition-dedupe.js`. **Not a fuzzy matcher** — there is no
+similarity score, no edit distance and no threshold. Decisions come from a table
+of **named signals**, and the signals that fired are returned alongside the
+verdict, because "same number, different ABN" is reviewable and "0.82
+confidence" is not. Strength is a *word* (`conclusive`/`strong`/`moderate`/
+`weak`), since a number invites a threshold and a threshold invites tuning.
+
+| Decision | Meaning | Auto-merge? | Founder review? |
+|---|---|---|---|
+| `exact_duplicate` | Same number **and** same identity, or same number **and** same ABN | **Yes** | No |
+| `probable_same_business` | Same identity or ABN, weaker corroboration | No | Yes |
+| `same_business_different_location` | Same entity/name, different locality — separate branches | No | Yes |
+| `possible_duplicate_requires_review` | Conflicting evidence (e.g. same number, different ABN) | No | Yes |
+| `distinct` | Different registered entities, or nothing identifying shared | No | No |
+| `insufficient_evidence` | Not enough on at least one record to compare | No | No |
+
+**Similar names are not evidence.** Locksmith trading names are built almost
+entirely from a small pool of trade and locality words, so a name match counts
+only when it contains a *distinctive* token. "Melbourne Mobile Locksmith" and
+"Mobile Locksmith Melbourne" are `distinct`.
+
+**Only `exact_duplicate` auto-consolidates.** Everything weaker goes to a
+person, because a wrong merge is invisible afterwards.
+
+**Nothing is destroyed.** Consolidation returns a *proposal* carrying the union
+of every source reference, number, name, ABN and timestamp in the cluster.
+
+**Order independence** is asserted: `compareRecords(a,b) === compareRecords(b,a)`,
+and clustering sorts by id before running, so canonical choice cannot depend on
+input order. Canonical is picked by official source → ABN → evidence count →
+earliest discovery → id.
+
+> **Two kinds of duplicate.** A1 derives `prospectId` from the identity
+> fingerprint, so two records for one business in one suburb **already share an
+> id** (an "identity collision"). A cluster can also hold genuinely different
+> ids linked by shared evidence. Counting only distinct ids reported the first
+> kind as *zero duplicates removed* — a founder told "nothing was merged" about
+> a list that contained the same business twice.
+
+## A2.5 The unified eligibility engine
+
+`src/services/acquisition-eligibility.js` answers one question — *can this
+prospect enter the outbound call queue now?* — and **composes** the modules that
+own each check. There is no second copy of suppression matching, DNCR freshness,
+timezone conversion or holiday lookup; a parallel implementation would drift,
+and the copy that drifted would be the one that authorised a call.
+
+### Precedence — permanent beats temporary
+
+1. invalid or unsafe record · 2. **permanent suppression** · 3. DNCR/legal ·
+4. duplicate requiring resolution · 5. campaign or founder block ·
+6. attempt/wash restrictions · 7. timezone/holiday/calling window · 8. eligible
+
+The decisive code is the **highest-precedence** failure, not the first noticed.
+If a suppressed business were reported as "outside calling hours", the message
+reads as *try again tomorrow* — and tomorrow it would be called. All computable
+checks still run, so `failedChecks` shows everything at once.
+
+**Default-deny.** No wash store, no holiday calendar, no suppression list, no
+attempt-policy approval, no batch approval, no timezone — each blocks. Forgetting
+to wire a collaborator makes prospects ineligible; it never skips a check.
+
+**The composition boundary.** The internal calling gate is built *without*
+suppression, campaign or caps: the engine owns those at their own precedence.
+Passing them would make the gate short-circuit on suppression and never evaluate
+the window, hiding a problem the founder still has to fix and returning
+`localTime: null`. The gate keeps those checks for **standalone** callers (a
+future dispatch gate must check everything itself).
+
+**Freshness is evaluated at the evaluation instant.** `washStore.assess(e164,
+{ at })` takes the instant being asked about, so a scheduler asking "can this be
+called next Tuesday?" is told whether the wash is valid *then* — not today.
+
+## A2.6 Founder batch review and approval
+
+`src/services/acquisition-batch.js`. Rows carry the eligibility decision
+produced by the engine; a UI renders them and **must never re-derive**
+eligibility, or there would be two answers to the only question that matters.
+
+Categories: can be called now · blocked only by timing · duplicates merged ·
+possible duplicates needing a decision · must never be contacted · on the DNCR ·
+not checked against the DNCR · timezone problem · holiday · outside hours ·
+attempt/cooling-off · waiting on a policy decision · needs review.
+
+Founder actions: `approve_record`, `reject_record`, `suppress_record`,
+`defer_record`, `resolve_duplicate`. **There is no "start calling" action.**
+Including a record the engine says is not callable is refused; rejecting or
+suppressing requires a reason.
+
+> **Rows are keyed by `rowId`, not `prospectId`.** Because identity collisions
+> share a `prospectId`, keying actions by it meant rejecting one row silently
+> rejected another the founder never looked at. When a `prospectId` collides,
+> *every* one of its rows is suffixed (`#1`, `#2`), and passing the bare
+> colliding id is **refused** as `ambiguous_row` rather than guessed.
+
+### Approval and staleness
+
+Approval is explicit, records actor and timestamp, requires a **named person**
+(`system`/`AIDA`/`bot` are refused), and re-checks that every included record is
+still eligible and every duplicate resolved. It binds to a **hash** over who
+would be called, on what number, and why they were callable.
+
+If any of that changes — a record edited, a wash expired, a suppression
+arrived, an eligibility result flipped — the hash no longer matches and
+`checkApprovalFreshness` reports **stale**. That is the difference between "the
+founder approved this batch" and "the founder approved something once and we
+have been calling ever since". Approval is **revocable**, always, because
+nothing has dispatched.
+
+**The approved batch is inert.** It states on its own artifact: *"Inclusion in a
+future calling batch. This approval does not place, schedule or trigger any
+call."* Tests assert the module exports nothing matching
+`dispatch|dial|call|start|send|queue|execute|trigger`, references no provider,
+and that an approved batch contains no callable behaviour.
+
+## A2.7 ⚠ Attempt and wash policy is NOT approved
+
+`src/services/acquisition-attempt-policy.js` defaults to **`approved: false`**,
+and the eligibility engine treats an unapproved policy as a **blocker**. Reading
+the source documents exactly:
+
+| Rule | Value | Approved? | Source |
+|---|---|---|---|
+| DNCR wash validity | 30 days | **Yes** | Statutory — DNC Register Act 2006 / Industry Standard 2017, §2.2 & G4 |
+| Max attempts | 3 | **No** | G9 says *"(e.g. 3)"* — an illustration, not a decision |
+| Retry spacing | 2 days | **No** | **No source at all.** Proposed during A1 |
+| Recent-contact cooldown | 30 days | **No** | G8 says *"within N days"* — N is literally the letter N |
+| "Not interested" cooldown | 180 days | **No** | §9 says "a long cooldown", duration unspecified |
+| Declined cooldown / callback window | 90 / 14 days | **No** | No source |
+
+Outcome handling: `opt_out` → permanent business suppression and `wrong_person`
+→ number suppression are **approved** (§5 G5, §9 state them outright). Whether an
+unanswered call or a voicemail consumes an attempt is **undecided**.
+
+Approval requires `createAttemptPolicy({ approved: true, approvedBy: "<name>" })`
+— `approved: true` with nobody named is **not** an approval and stays out of
+force.
+
+## A2.8 A2 cannot dispatch calls
+
+Stated plainly, and enforced rather than promised:
+
+- No module in the acquisition engine imports a transport, a provider SDK, or
+  any non-local module. Tests assert every `require` is relative and that no
+  file references Twilio, Retell, an HTTP client, or a URL.
+- The offline boundary (`EXTERNAL_ACCESS_SUPPORTED = false`) is unchanged and
+  still hardcoded, covering `telephony` and `messaging` among others.
+- There is no dispatcher, scheduler, queue worker or dialler anywhere in A1 or
+  A2, and no function that could become one by configuration.
+- The terminal artifact of the entire pipeline is a frozen, hash-bound,
+  revocable **approved batch** — data describing an intention, not an instruction.
+
+## A2.9 Founder / legal decisions still required
+
+| # | Decision | Blocks | Current behaviour |
+|---|---|---|---|
+| **A-L1** | **Counsel sign-off on the permitted calling window** (Phase 0). | Any dialling | Window applied with `counselApproved: false` on every decision |
+| **A-L2** | **An authoritative public-holiday source**, and which state calendars are carried per prospect. | Any dialling outside 2026 / outside VIC | Fixture, VIC + national, 2026 only; everything else refuses |
+| **A-L3** | Whether the **AFL Grand Final Friday** and other proclaimed holidays are in scope. | Accuracy of the VIC calendar | Absent, so those dates are treated as ordinary |
+| **A-L4** | Confirmation that the caps (**3 attempts, 2 days apart, 30-day contact cooldown**) are the intended commercial policy. | Campaign design | `DEFAULT_CAPS` applied as ceilings |
+| **A-L5** | Whether calling a business's **1300/1800 number** carries the same obligations as a geographic one. | Wash scope | Treated identically — everything is washed |
+| **A-L6** | **Attempt limits, retry spacing and cooldown durations** — G9's "3" is an illustration, G8's "N days" is unspecified, and retry spacing has no source at all. | Any dialling | Policy defaults to unapproved; the engine blocks every prospect |
+| **A-L7** | Whether an **unanswered call or a voicemail consumes an attempt**. | Attempt accounting | Proposed as "counts as an attempt", unapproved |
+| **A-L8** | The **"not interested" cooldown duration** — §9 says "a long cooldown" without saying how long. | Retry policy | Proposed 180 days, unapproved |
+| **A-L9** | Who besides the founder may **approve a batch**, and whether a second approver is needed above a size threshold (the architecture's two-person rule, G12). | Batch governance | Single named founder only |
+
+---
+
 ## 14. Open questions carried into A2 and beyond
 
 | # | Question | Default until answered |
