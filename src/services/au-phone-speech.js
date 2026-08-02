@@ -83,6 +83,30 @@ const FALLBACK_REASONS = Object.freeze({
  */
 const GEOGRAPHIC_PREFIXES = Object.freeze(["02", "03", "07", "08"]);
 
+// ── ONE DIGIT, ONE WORD (M7E decision, re-affirmed M7I-C) ───────────
+//
+// "006" is "oh oh six", NOT "double oh six", and that is deliberate.
+//
+// M7I-C examined collapsing repeats, because the founder read their own number
+// aloud as "…five zero double six" and Australians plainly do say "double". It
+// was implemented, then reverted, for two reasons that outrank the idiom:
+//
+//   1. IT WAS NOT THE DEFECT. On the live M7I call the agent never spoke a
+//      transfer number at all — this function's output was never voiced. What
+//      the founder heard was the agent's own read-back of a CALLER-supplied
+//      number, emitted as the digit string "0467 745 066" and pronounced by the
+//      voice engine. That is fixed in the prompt, not here. Changing production
+//      pronunciation on a path nobody heard is a guess wearing a fix's clothes.
+//
+//   2. IT BREAKS A MECHANICAL SAFETY CHECK. One-word-per-digit is what lets a
+//      test recover the digits from the spoken string and prove none was lost,
+//      gained or reordered (see "digits are never lost, added or altered").
+//      "double oh" makes that verification ambiguous, and a silently dropped
+//      digit in a callback number means nobody gets called back.
+//
+// If live audio shows the zeros are still unclear, this is the single place to
+// change and both the transfer and read-back paths move together — the prompt
+// deliberately teaches the same convention this function produces.
 function digitsToWords(digits) {
   return digits.split("").map((d) => DIGIT_WORDS[d]).join(" ");
 }

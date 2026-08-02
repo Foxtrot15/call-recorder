@@ -237,6 +237,36 @@ function emptyProfile() {
       publicHolidays: null, // { closed: true } | { open: "09:00", close: "13:00" } | { byArrangement: true }
       temporaryClosure: null, // reserved for future dynamic availability
       byService: {}, // serviceId -> same shape as `ordinary`
+      // ── APPROVED CALLBACK ESTIMATE (M7I-C) ────────────────────────
+      // How long until a HUMAN RINGS BACK. Deliberately NOT the same thing as
+      // any of these, and never to be conflated with them:
+      //
+      //   notifications.timing   when the LOCKSMITH is alerted. Nothing to do
+      //                          with what the caller is told.
+      //   arrival time           when someone turns up. Permanently forbidden —
+      //                          guaranteed_arrival_time is a mandatory
+      //                          forbidden promise on every profile.
+      //   a guaranteed response  a commitment. This is an ESTIMATE, and the
+      //                          compiler will not let it be spoken as anything
+      //                          stronger.
+      //
+      // `null` is a first-class state meaning "no approved estimate" — the
+      // receptionist then says it cannot give a reliable timeframe rather than
+      // inventing one. Absent is the DEFAULT, so every existing profile keeps
+      // exactly today's behaviour.
+      //
+      // Shape when present (every field optional except `standard`):
+      //   {
+      //     standard:   { minMinutes, maxMinutes },   // ordinary enquiries
+      //     urgent:     { minMinutes, maxMinutes },   // urgent-classified calls
+      //     afterHours: { minMinutes, maxMinutes },   // outside ordinary hours
+      //     wording:    "…"                           // approved override text
+      //   }
+      //
+      // Three optional windows rather than one covers the cases a locksmith
+      // actually distinguishes, without a new section, a new DB column or a new
+      // blocking rule. Anything absent falls back to `standard`.
+      callbackEstimate: null,
     },
     urgencyRules: [], // { ruleId, condition, classification, action, transferEligible, notificationPriority, approvedWording }
     transfer: {

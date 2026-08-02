@@ -430,6 +430,66 @@ const UNANSWERED_INSTRUCTION = Object.freeze({
 });
 
 /**
+ * Describe one approved callback window in speech-ready English.
+ *
+ * "around 15 to 30 minutes" rather than "15-30 min": the agent reads this
+ * aloud, and a hyphen is not a word.
+ */
+function describeCallbackWindow(window) {
+  if (!window || typeof window !== "object") return null;
+  const { minMinutes: min, maxMinutes: max } = window;
+  if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || max < min) return null;
+  if (min === max) return `around ${min} minute${min === 1 ? "" : "s"}`;
+  return `around ${min} to ${max} minutes`;
+}
+
+/**
+ * The callback-estimate instructions (M7I-C).
+ *
+ * The no-estimate branch is the DEFAULT and is not a degraded mode: saying "I
+ * cannot give you a reliable timeframe" is a true statement, and it is what
+ * every profile gets until a business deliberately approves a window.
+ */
+function buildCallbackEstimateLines({ hours, collect }) {
+  const estimate = hours && typeof hours.callbackEstimate === "object" && hours.callbackEstimate !== null ? hours.callbackEstimate : null;
+
+  // Rules that hold in BOTH branches. A caller must never be able to convert
+  // this into an arrival time or a commitment, whichever branch answered them.
+  const invariants = [
+    "A CALLBACK is the locksmith ringing the caller back. It is NOT the locksmith arriving. Never let one answer stand in for the other.",
+    "If they ask how long until someone ARRIVES, say plainly that you cannot give an arrival time — the locksmith works that out with them when they speak.",
+    "Never guarantee a callback. If they ask whether someone will definitely ring within that time, say no, it is an estimate and not a promise, and you cannot guarantee it.",
+    "Never say the callback has been booked, scheduled, queued or requested. You are describing what usually happens, not something you have set in motion.",
+    "Never invent a busier-or-quieter-than-usual excuse, and never claim to know how many jobs are on right now. You do not have that information.",
+  ];
+
+  const standard = describeCallbackWindow(estimate && estimate.standard);
+  if (!estimate || !standard) {
+    return [
+      "You have NO approved callback window for this business.",
+      "So if they ask how long until someone rings back, say honestly that you cannot give a reliable timeframe, and that the locksmith will be in touch as soon as they can.",
+      "Do not estimate, do not guess, and do not offer a range of your own. An invented window is a promise the business never made.",
+      ...invariants,
+    ];
+  }
+
+  const urgent = describeCallbackWindow(estimate.urgent);
+  const afterHours = describeCallbackWindow(estimate.afterHours);
+  const approvedWording = collect(cleanProse(estimate.wording, { max: BOUNDS.wording, field: "hours.callbackEstimate.wording" }));
+
+  return [
+    `The business has approved this callback estimate, and it is the ONLY timeframe you may give: ${standard}.`,
+    urgent ? `For a call you have classified as urgent, the approved estimate is ${urgent}.` : null,
+    afterHours ? `Outside ordinary hours, the approved estimate is ${afterHours}.` : null,
+    !afterHours ? "The same estimate applies outside ordinary hours; do not adjust it yourself." : null,
+    "Always say it as an estimate, never as a commitment. Words like \"usually\", \"typically\" or \"generally\" are how you say it.",
+    approvedWording ? `Approved wording: ${asQuotedData(approvedWording)}` : null,
+    "Give it once, when they ask or when it genuinely helps. Do not repeat it at the end of every reply.",
+    ...invariants,
+  ].filter(Boolean);
+}
+
+/**
  * Stage one: profile → provider-neutral spec. This is where every judgement is
  * made; nothing below stage one decides anything.
  */
@@ -599,6 +659,21 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     ].filter(Boolean),
   });
 
+  // ── CALLBACK ESTIMATE (M7I-C) ───────────────────────────────────────
+  // The founder's live call could not answer "how long before someone calls me
+  // back?" at all, which is commercially weak — a caller who is told nothing
+  // rings the next locksmith.
+  //
+  // What makes this safe rather than a promise machine:
+  //   * a window is spoken ONLY if the business approved that exact range
+  //   * it is always labelled an estimate, and a guarantee is always refused
+  //   * CALLBACK is kept separate from ARRIVAL, which stays forbidden outright
+  //   * no approved window ⇒ the agent says so plainly instead of inventing one
+  //   * the agent never claims the callback has been REQUESTED — that is an
+  //     action, and in tool-free mode no action happened (see capability_limits)
+  const callbackLines = buildCallbackEstimateLines({ hours, collect });
+  sections.push({ id: "callback_estimate", title: "How long until someone rings back", lines: callbackLines });
+
   sections.push({
     id: "urgency",
     title: "What counts as urgent",
@@ -673,7 +748,9 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       "ANSWER THE CALLER'S QUESTION FIRST. Do not make a simple question about services, areas or hours conditional on getting their details.",
       "If they have already told you something, do not ask for it again. Repeat it back once only if you genuinely need to confirm it.",
       "Do not end every reply by asking for a name and number. Ask when you actually need the detail — normally as the call moves toward a next step.",
-      "Read the callback number back digit by digit and confirm it, once.",
+      // Says WHAT to do; the "Saying a phone number" section owns HOW. Kept
+      // pointing at it so the two cannot drift into contradicting each other.
+      "Read the callback number back once to confirm it, spelled out as words — see the rules on saying a phone number below.",
       "If the caller will not give a callback number, say plainly that the locksmith cannot ring them back without it.",
     ].filter(Boolean),
   });
@@ -691,6 +768,10 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "You have NO tools on this call. You cannot save an enquiry, look anything up, send a message, notify anyone or transfer the call.",
         "So never say any of these, because none of them would be true: \"I've logged that\", \"I've sent that through\", \"the locksmith has your details\", \"someone will call you back\", \"I've booked that in\".",
         "You may still take the caller's details in conversation — just do not claim they went anywhere.",
+        // The callback section describes what USUALLY happens. With no tools,
+        // nothing has been set in motion, and the gap between those two is
+        // exactly where a caller in trouble gets misled.
+        "You may still explain the business's usual callback window in general terms. You must NOT say that a callback has been arranged, that anyone has your details, or that someone will ring — because on this call none of that has happened.",
         "If you need to explain, say plainly that this is a test line and the details are not being passed to a locksmith.",
         "If a caller needs someone urgently, tell them to ring a locksmith directly rather than implying help is coming.",
       ],
@@ -730,7 +811,26 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       "Never read out a number that begins with a plus sign, and never convert one yourself.",
       "Never say the name of a variable or anything in double curly braces. If you were about to, you were not given that value.",
       "If you do not have a spoken version of a number you need to say, do not guess and do not read the raw value: ask the caller to tell you the number, or read back what they said to you.",
-      "A number the caller told you is read back to them the way they said it, digit by digit, in groups.",
+      // ── WORDS, NEVER DIGITS (M7I-C) ────────────────────────────────
+      // The live M7I call read a callback number back as the digit string
+      // "0467 745 066". That satisfied the old instruction ("digit by digit, in
+      // groups") to the letter while defeating its purpose: a digit string hands
+      // pronunciation to the voice engine, which decides for itself whether 0 is
+      // "oh" or "zero" and how much space to leave. The zeros came out unclear.
+      //
+      // Spelling the digits as WORDS is the only way this prompt can determine
+      // what a caller actually hears, so it is now stated as a prohibition on
+      // the failing form rather than a description of the desired one.
+      "When you say a phone number back, WRITE IT AS WORDS, never as digits. Write \"oh four six seven, seven four five, oh six six\" — never \"0467 745 066\". Digits let the voice decide how to say them, and it says zeros inconsistently.",
+      "Say \"oh\" for zero, never \"zero\".",
+      // ONE WORD PER DIGIT — the same convention services/au-phone-speech.js
+      // produces for transfer numbers. The two paths are kept identical on
+      // purpose: an agent that says a given number one way when reading a
+      // supplied variable and another way when reading a caller's number back
+      // is one a caller cannot check against what they just said.
+      "Say every digit separately. Do not compress repeats into \"double\" or \"triple\" — say \"oh six six\", not \"oh double six\".",
+      "Group it with commas the way an Australian does: for a mobile, four digits, then three, then three.",
+      "Read a number back once, then ask if it is correct. Do not repeat it again unless they ask or correct you.",
     ],
   });
 

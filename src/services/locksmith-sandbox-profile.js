@@ -147,6 +147,27 @@ function buildSandboxProfile() {
       publicHolidays: { byArrangement: true },
       temporaryClosure: null,
       byService: {},
+
+      // ── APPROVED CALLBACK ESTIMATE (M7I-C) ───────────────────────
+      // Deliberately chosen for this FICTIONAL sandbox so a founder call can
+      // exercise all three windows — not copied from the brief's illustrative
+      // "15 to 30 minutes", which was explicitly not to be hard-coded.
+      //
+      // The three differ on purpose, so the live test can tell which branch
+      // answered rather than getting the same number every time:
+      //   standard    20-40  an ordinary rekeying or quote enquiry
+      //   urgent      5-15   a lockout or break-in already classified urgent
+      //   afterHours  30-60  the on-call locksmith may be asleep or driving
+      //
+      // These are ESTIMATES this fictional business is willing to state. The
+      // compiler will not let any of them be spoken as a guarantee, and none of
+      // them is an arrival time.
+      callbackEstimate: {
+        standard: { minMinutes: 20, maxMinutes: 40 },
+        urgent: { minMinutes: 5, maxMinutes: 15 },
+        afterHours: { minMinutes: 30, maxMinutes: 60 },
+        wording: null,
+      },
     },
 
     urgencyRules: [

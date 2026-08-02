@@ -333,6 +333,74 @@ function validateHours(profile, issues) {
       validateDayHours(issues, "hours", `${serviceId}/${day}`, perDay[day]);
     }
   }
+
+  validateCallbackEstimate(h.callbackEstimate, issues);
+}
+
+// An approved callback window may not exceed this. Four hours stops a typo
+// ("300" meant as minutes, entered as the max) becoming a commitment nobody
+// intended, and anything longer is not a "callback estimate" a caller would
+// find useful — it is a way of saying "we will get to you eventually", which
+// the no-estimate state already expresses honestly.
+const MAX_CALLBACK_ESTIMATE_MINUTES = 240;
+const CALLBACK_ESTIMATE_WINDOWS = Object.freeze(["standard", "urgent", "afterHours"]);
+
+/**
+ * Validate hours.callbackEstimate (M7I-C).
+ *
+ * ABSENT IS VALID and is the default — no approved estimate means the
+ * receptionist says it cannot give a reliable timeframe. Everything below only
+ * applies once a business has actually approved one, and it errors rather than
+ * reviews: a malformed window would be compiled into a spoken commercial
+ * commitment, which is not something to wave through for a human to notice.
+ */
+function validateCallbackEstimate(estimate, issues) {
+  if (estimate === null || estimate === undefined) return;
+  if (!isPlainObject(estimate)) {
+    issues.error("hours", "callbackEstimate", "Callback estimate must be an object, or null when no estimate is approved.");
+    return;
+  }
+
+  for (const key of Object.keys(estimate)) {
+    if (!CALLBACK_ESTIMATE_WINDOWS.includes(key) && key !== "wording") {
+      issues.error("hours", "callbackEstimate", `"${key}" is not a recognised callback-estimate field.`);
+    }
+  }
+
+  // `standard` is the fallback every other window degrades to, so an estimate
+  // object without one can only produce a partial answer.
+  if (!isPlainObject(estimate.standard)) {
+    issues.error("hours", "callbackEstimate", "A callback estimate needs a `standard` window; urgent and after-hours are optional refinements of it.");
+  }
+
+  for (const key of CALLBACK_ESTIMATE_WINDOWS) {
+    const window = estimate[key];
+    if (window === null || window === undefined) continue;
+    if (!isPlainObject(window)) {
+      issues.error("hours", "callbackEstimate", `Callback estimate "${key}" must be an object with minMinutes and maxMinutes.`);
+      continue;
+    }
+    const { minMinutes: min, maxMinutes: max } = window;
+    if (!Number.isInteger(min) || !Number.isInteger(max)) {
+      issues.error("hours", "callbackEstimate", `Callback estimate "${key}" needs whole-minute minMinutes and maxMinutes.`);
+      continue;
+    }
+    if (min < 1 || max < 1) {
+      issues.error("hours", "callbackEstimate", `Callback estimate "${key}" must be at least one minute.`);
+      continue;
+    }
+    if (min > max) {
+      issues.error("hours", "callbackEstimate", `Callback estimate "${key}" has a minimum longer than its maximum.`);
+      continue;
+    }
+    if (max > MAX_CALLBACK_ESTIMATE_MINUTES) {
+      issues.error("hours", "callbackEstimate", `Callback estimate "${key}" exceeds ${MAX_CALLBACK_ESTIMATE_MINUTES} minutes; leave it unset rather than quoting a window that long.`);
+    }
+  }
+
+  if (estimate.wording !== null && estimate.wording !== undefined && !text(estimate.wording)) {
+    issues.error("hours", "callbackEstimate", "Callback-estimate wording must be text when present.");
+  }
 }
 
 function validateUrgencyRules(profile, issues) {
