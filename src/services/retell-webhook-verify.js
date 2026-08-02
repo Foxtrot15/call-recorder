@@ -32,7 +32,7 @@
 //
 // NEVER LOGGED: the API key, the raw signature header, the raw body.
 
-const { getRetellConfig, canVerifyWebhook } = require("../config/retell");
+const { getRetellConfig, canVerifyWebhook, canVerifyInboundWebhook } = require("../config/retell");
 
 const SIGNATURE_HEADER = "x-retell-signature";
 
@@ -114,8 +114,12 @@ function loadOfficialVerifier() {
  * The full pre-flight: everything we can refuse without the provider's help.
  * Runs BEFORE parsing the body as JSON, so a hostile payload is never parsed.
  */
-function preflight({ rawBody, headers = {}, contentType = null, config, nowMs }) {
-  const gate = canVerifyWebhook(config.env || process.env);
+function preflight({ rawBody, headers = {}, contentType = null, config, nowMs, capability = canVerifyWebhook }) {
+  // Which surface is asking. Defaults to the event webhook's capability so the
+  // existing path is byte-identical; the inbound route passes its own, because
+  // it has its own flag and must not need the event one. See
+  // config/retell.js canVerifyInboundWebhook.
+  const gate = capability(config.env || process.env);
   if (!gate.allowed) return verdict(VERIFY_RESULTS.disabled, { detail: gate.reasons.join("; ") });
 
   const type = String(contentType || headers["content-type"] || "").toLowerCase();
@@ -156,7 +160,7 @@ async function verifyRetellWebhook({ rawBody, headers = {}, contentType = null, 
   const config = { ...getRetellConfig(env), env };
   const nowMs = deps.now ? deps.now() : Date.now();
 
-  const refusal = preflight({ rawBody, headers, contentType, config, nowMs });
+  const refusal = preflight({ rawBody, headers, contentType, config, nowMs, capability: deps.capability || canVerifyWebhook });
   if (refusal) return refusal;
 
   const verifier = deps.verifier !== undefined ? deps.verifier : loadOfficialVerifier();
@@ -187,6 +191,7 @@ module.exports = {
   SIGNATURE_HEADER,
   MAX_SIGNATURE_AGE_MS,
   VERIFY_RESULTS,
+  canVerifyInboundWebhook,
   parseSignatureHeader,
   isWithinReplayWindow,
   loadOfficialVerifier,

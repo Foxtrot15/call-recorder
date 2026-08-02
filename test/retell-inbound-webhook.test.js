@@ -911,6 +911,102 @@ describe("the SDK is confined to signature verification", () => {
   });
 });
 
+// ── Verification capability (M7F-B2) ────────────────────────────────
+
+describe("the inbound webhook verifies under its OWN flag", () => {
+  // Exactly what docs/RETELL_SANDBOX_DEPLOYMENT_PLAN.md instructs. Note the
+  // ABSENCE of RETELL_WEBHOOK_ENABLED: that flag governs the post-call EVENT
+  // webhook, whose route is deliberately left dormant for the sandbox.
+  const SANDBOX_ENV = Object.freeze({
+    NODE_ENV: "development",
+    RETELL_ENABLED: "true",
+    RETELL_INBOUND_WEBHOOK_ENABLED: "true",
+    RETELL_API_KEY: "key_fixture_not_real",
+    RETELL_ALLOWED_TAG: "dev",
+  });
+
+  test("canVerifyInboundWebhook does NOT require the event webhook's flag", () => {
+    // The defect: verification asked RETELL_WEBHOOK_ENABLED for permission, so
+    // enabling inbound alone produced 503 verification_disabled on every
+    // request — making the dedicated inbound flag a fiction.
+    assert.equal(cfg.canVerifyInboundWebhook(SANDBOX_ENV).allowed, true);
+    assert.equal(cfg.canVerifyWebhook(SANDBOX_ENV).allowed, false, "the EVENT capability still needs its own flag");
+  });
+
+  test("it requires the inbound flag, the integration flag and a key", () => {
+    for (const [name, env] of [
+      ["RETELL_ENABLED off", { ...SANDBOX_ENV, RETELL_ENABLED: "false" }],
+      ["inbound flag off", { ...SANDBOX_ENV, RETELL_INBOUND_WEBHOOK_ENABLED: "false" }],
+      ["no API key", { ...SANDBOX_ENV, RETELL_API_KEY: undefined }],
+    ]) {
+      assert.equal(cfg.canVerifyInboundWebhook(env).allowed, false, `${name} must refuse`);
+    }
+  });
+
+  test("the deployed sandbox configuration answers 401, not 503", async () => {
+    for (const [label, headers] of [
+      ["unsigned", {}],
+      ["bad signature", { "x-retell-signature": `v=${Date.now()},d=${"a".repeat(64)}` }],
+    ]) {
+      const x = fakeExchange(inboundBody(), { headers });
+      // No injected `verify`: the REAL verification path, which is where the
+      // capability is consulted.
+      const handler = createInboundWebhookHandler({ env: SANDBOX_ENV, logger: SILENT, resolveContext: async () => null });
+      await handler(x.req, x.res);
+      assert.equal(x.out.statusCode, 401, `${label} must be 401, not 503 verification_disabled`);
+      assert.notEqual(x.out.payload.error, "verification_disabled");
+    }
+  });
+
+  test("a really-signed request is accepted under the sandbox configuration", async () => {
+    let sdk = null;
+    try { sdk = require("retell-sdk"); } catch { sdk = null; }
+    if (!sdk) return; // dep-free checkout: the fake-verifier tests still cover the path
+
+    const body = JSON.stringify(inboundBody());
+    const signature = await sdk.sign(body, SANDBOX_ENV.RETELL_API_KEY);
+    const x = fakeExchange(body, { headers: { "x-retell-signature": signature } });
+    const handler = createInboundWebhookHandler({ env: SANDBOX_ENV, logger: SILENT, resolveContext: async () => null });
+    await handler(x.req, x.res);
+
+    assert.equal(x.out.statusCode, 200);
+    assert.deepEqual(x.out.payload, { call_inbound: {} }, "unknown agent, so no variables");
+  });
+
+  test("turning the inbound flag off refuses with 503, never an open door", async () => {
+    const x = fakeExchange(inboundBody());
+    const handler = createInboundWebhookHandler({
+      env: { ...SANDBOX_ENV, RETELL_INBOUND_WEBHOOK_ENABLED: "false" }, logger: SILENT,
+    });
+    await handler(x.req, x.res);
+    assert.equal(x.out.statusCode, 503);
+    assert.equal(x.out.payload.error, "verification_disabled");
+  });
+
+  test("the EVENT webhook's own behaviour is unchanged", async () => {
+    const verify = require("../src/services/retell-webhook-verify");
+    const body = JSON.stringify({ event: "call_ended", call: { call_id: "call_x" } });
+
+    // Without RETELL_WEBHOOK_ENABLED the event path still refuses, exactly as
+    // before — the default capability was not weakened.
+    const refused = await verify.verifyRetellWebhook({
+      rawBody: Buffer.from(body, "utf8"),
+      headers: { "content-type": "application/json", "x-retell-signature": `v=${Date.now()},d=${"a".repeat(64)}` },
+      deps: { env: SANDBOX_ENV },
+    });
+    assert.equal(refused.verified, false);
+    assert.equal(refused.result, verify.VERIFY_RESULTS.disabled);
+
+    // And with it, the event path reaches signature checking as before.
+    const reached = await verify.verifyRetellWebhook({
+      rawBody: Buffer.from(body, "utf8"),
+      headers: { "content-type": "application/json", "x-retell-signature": `v=${Date.now()},d=${"a".repeat(64)}` },
+      deps: { env: { ...SANDBOX_ENV, RETELL_WEBHOOK_ENABLED: "true" }, verifier: async () => false },
+    });
+    assert.equal(reached.result, verify.VERIFY_RESULTS.invalidSignature);
+  });
+});
+
 // ── Deployment and runtime (M7F-B1) ─────────────────────────────────
 
 describe("deployment and runtime", () => {

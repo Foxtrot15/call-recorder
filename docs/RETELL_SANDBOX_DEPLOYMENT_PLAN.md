@@ -56,6 +56,15 @@ signal in the repository.
 | Health endpoint | `GET /health` |
 | Inbound webhook | `POST /webhooks/retell/inbound` |
 | Event webhook | `POST /webhooks/retell` — **not needed** for the inbound proof; leave dormant |
+
+> **Corrected 2026-08-02 (M7F-B2).** Leaving the event webhook dormant is right,
+> and it used not to work: the inbound webhook's signature verification asked
+> `RETELL_WEBHOOK_ENABLED` — the *event* flag — for permission, so a sandbox
+> configured exactly as this document instructs returned **503
+> `verification_disabled`** on every request, and the security proof below would
+> have failed at step 3. The inbound surface now uses its own capability
+> (`canVerifyInboundWebhook`), so `RETELL_INBOUND_WEBHOOK_ENABLED` alone is
+> sufficient — which is what the separate flag was always supposed to mean.
 | Resource tag | `dev` |
 
 A separate *project*, not merely a separate service, so no production variable
@@ -82,7 +91,9 @@ can be inherited by accident.
 
 `RETELL_LIVE_WRITES_ENABLED` · `RETELL_LIVE_CALLS_ENABLED` ·
 `RETELL_SANDBOX_EXECUTE` · `RETELL_SANDBOX_WEB_CALL_ENABLED` ·
-`RETELL_RECORDING_ENABLED` · `RETELL_WEBHOOK_ENABLED` ·
+`RETELL_RECORDING_ENABLED` · `RETELL_WEBHOOK_ENABLED` (the inbound webhook does
+**not** need it, and setting it would mount the event route, whose idempotency
+needs database tables that are deliberately unapplied — so it could only 503) ·
 `RETELL_OUTBOUND_ONBOARDING_NUMBER` · `RETELL_INBOUND_DEMO_NUMBER` ·
 `ANTHROPIC_API_KEY` · production `SUPABASE_*` · production `TWILIO_*` ·
 `STRIPE_*`.

@@ -27,6 +27,7 @@
 
 const { getRetellConfig } = require("../config/retell");
 const { verifyRetellWebhook, VERIFY_RESULTS } = require("../services/retell-webhook-verify");
+const { canVerifyInboundWebhook } = require("../config/retell");
 const inbound = require("../services/retell-inbound-call");
 
 const VERIFY_STATUS = Object.freeze({
@@ -82,7 +83,16 @@ function createInboundWebhookHandler(deps = {}) {
         rawBody,
         headers,
         contentType: headers["content-type"],
-        deps: { env, verifier: deps.verifier, now: deps.now },
+        deps: {
+          env,
+          verifier: deps.verifier,
+          now: deps.now,
+          // THIS surface's capability, not the event webhook's. Without it,
+          // verification asked RETELL_WEBHOOK_ENABLED for permission and every
+          // inbound request returned 503 `verification_disabled` — which made
+          // the dedicated RETELL_INBOUND_WEBHOOK_ENABLED flag meaningless.
+          capability: deps.capability || canVerifyInboundWebhook,
+        },
       });
     } catch {
       logger.error("retell.inbound.verify_threw");

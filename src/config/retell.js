@@ -382,6 +382,33 @@ function canReadDiagnostics(env = process.env) {
   return { allowed: reasons.length === 0, reasons };
 }
 
+/**
+ * May we verify a signature on the INBOUND-call webhook? (M7F-B2)
+ *
+ * Separate from canVerifyWebhook, which requires RETELL_WEBHOOK_ENABLED — the
+ * flag for the POST-CALL EVENT webhook.
+ *
+ * M7F-A gave the inbound webhook its own switch on the grounds that "being
+ * willing to record events is not the same as being willing to decide, in real
+ * time, how a stranger's phone call is handled". But verification still asked
+ * the event flag for permission, so enabling inbound ALONE produced 503
+ * `verification_disabled` on every request — which made the separate switch a
+ * fiction, and would have made the first deployed security proof fail.
+ *
+ * Requiring the event flag as a workaround would be worse: it also mounts the
+ * event route, whose idempotency needs database tables that are deliberately
+ * not applied yet, so it could only answer 503 anyway.
+ */
+function canVerifyInboundWebhook(env = process.env) {
+  const config = getRetellConfig(env);
+  const reasons = [];
+  if (!config.enabled) reasons.push("RETELL_ENABLED is not \"true\"");
+  if (!config.inboundWebhookEnabled) reasons.push("RETELL_INBOUND_WEBHOOK_ENABLED is not \"true\"");
+  // Retell signs with the API key, so no key means no verification is possible.
+  if (!config.hasApiKey) reasons.push("RETELL_API_KEY is not set");
+  return { allowed: reasons.length === 0, reasons };
+}
+
 function canVerifyWebhook(env = process.env) {
   const config = getRetellConfig(env);
   const reasons = [];
@@ -551,6 +578,7 @@ module.exports = {
   canWriteLive,
   canPlaceCall,
   canVerifyWebhook,
+  canVerifyInboundWebhook,
   canReadDiagnostics,
   assessRetellConfig,
   redactSecrets,
