@@ -211,6 +211,51 @@ a transcript — is written under the OS temp directory, outside the repository.
 Full procedure, browser path and cleanup:
 [docs/RETELL_SANDBOX_VALIDATION_PLAN.md](docs/RETELL_SANDBOX_VALIDATION_PLAN.md).
 
+### Retell READ-ONLY call diagnostics (M7E — dormant, never in production)
+
+`scripts/retell-call-diagnostics.js` reads **one finished call** back from Retell
+and produces a sanitised evidence report. It has not been run against Retell.
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `RETELL_DIAGNOSTICS_ENABLED` | diagnostics path | Strict `"true"`. Default off. |
+| `RETELL_DIAGNOSTICS_EXECUTE` | the live read | Strict `"true"`. Second switch; enabling diagnostics is not the same as running them. |
+| `RETELL_DIAGNOSTICS_INCLUDE_CONTENT` | transcript **text** | Strict `"true"`. **Also requires `--include-content` on the command line**, and is refused outright when `NODE_ENV=production`. |
+| `RETELL_DIAGNOSTICS_POLL_MS` | analysis polling | Default 5000, clamped 1000–60000. |
+| `RETELL_DIAGNOSTICS_MAX_WAIT_MS` | analysis polling | Default 60000, clamped 1000–600000. A hard ceiling — polling is bounded by construction. |
+
+A live read additionally requires `NODE_ENV` not `production`,
+`RETELL_ENABLED=true`, `RETELL_ALLOWED_TAG=dev`, `RETELL_API_KEY`, and an
+explicit `--fetch-call "<call-id>"`.
+
+**It deliberately does NOT require** `RETELL_LIVE_WRITES_ENABLED`,
+`RETELL_LIVE_CALLS_ENABLED`, `RETELL_DRY_RUN=false`, any `RETELL_SANDBOX_*`, any
+phone number, any webhook, `RETELL_DEFAULT_VOICE_ID`, a database, or
+`ANTHROPIC_API_KEY`. Asking "why did that call drop?" must never require
+permission to create agents; dry-run is a promise not to *change* anything, which
+a read already keeps.
+
+> **Tag caution.** `getRetellConfig` falls back to `dev` for an unrecognised tag,
+> so `RETELL_ALLOWED_TAG=production` would otherwise read as dev. The diagnostics
+> gate checks the **raw** value: unset means dev, but set-and-wrong is refused.
+
+The default invocation contacts nothing:
+
+    node scripts/retell-call-diagnostics.js
+
+Only `--fetch-call` contacts Retell, and only via the documented
+`GET /v2/get-call/{call_id}`. **No create, update, delete, call-placement,
+number-binding or list-calls path exists in the script at all** — the absence is
+structural, and a test greps the script to prove no mutation method is named in
+it. The API key and Authorization header are never logged.
+
+Any report written goes to the OS temp directory, outside the repository, and
+contains no transcript, no recording URL and no token even when
+`--include-content` printed transcript text to the terminal.
+
+Full contract, privacy rules and evidence semantics:
+[docs/RETELL_CALL_DIAGNOSTICS_SPEC.md](docs/RETELL_CALL_DIAGNOSTICS_SPEC.md).
+
 ### Browser web-call harness (M7C — dormant, never deployed)
 
 `node scripts/retell-web-sandbox.js --execute --browser` provisions a temporary

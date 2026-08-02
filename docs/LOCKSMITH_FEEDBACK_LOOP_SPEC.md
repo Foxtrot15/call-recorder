@@ -355,3 +355,45 @@ against the documented contract, but documentation conformance is still not
 runtime conformance. See
 [RETELL_SANDBOX_VALIDATION_PLAN.md](RETELL_SANDBOX_VALIDATION_PLAN.md) for the
 procedure that would close it.
+
+## 13. M7E update — one presentation service for both channels (2026-08-02)
+
+The permanent architecture rule says UI and voice must share the same canonical
+domain services. Phone-number *presentation* was the case where they did not.
+
+`validateChange()` produced a `readBackText` for change-request confirmations —
+`+61` → `0`, digits spaced. The **runtime receptionist path had no equivalent**,
+so a live M7D call read a transfer number as *"plus six one, four nine one…"*.
+One channel had the conversion and the other did not, which is precisely the
+drift the rule exists to prevent.
+
+`src/services/au-phone-speech.js` is now the single canonical presentation
+service, and both paths use it:
+
+| Layer | Form | Example |
+|---|---|---|
+| storage, provider operations, validation, audit | **E.164**, unchanged | `+61491234567` |
+| anything a human reads | display | `0491 234 567` |
+| anything a model may say | spoken | `oh four nine one, two three four, five six seven` |
+
+Three properties make this safe rather than merely tidier:
+
+* **Presentations are derived, never stored.** Change the canonical number and
+  every presentation regenerates. There is no second copy to go stale.
+* **The spoken form cannot be supplied, only derived.**
+  `buildInboundCallVariables()` takes canonical numbers and computes the spoken
+  twin itself; there is no parameter through which a disagreeing value could
+  enter. `validateDynamicVariables()` additionally refuses any `*_spoken` key
+  containing a number in international form — refused, not converted, because
+  silently fixing it would hide whichever caller built it.
+* **Saying a number and dialling one stayed separate.**
+  `attempt_urgent_transfer` still takes `enquiry_id` and `urgency`;
+  `get_on_call_recipient` still returns an opaque reference. The model never
+  handles a phone number it could dial.
+
+This also exposed a latent fault in the configuration path itself: the old
+`readBackText` produced `0 1 3 0 0 1 2 3 4 5 6` for a stored 1300 number,
+inventing a leading zero. Both channels now get `1300 123 456`.
+
+Full detail:
+[RETELL_CALL_DIAGNOSTICS_SPEC.md](RETELL_CALL_DIAGNOSTICS_SPEC.md).

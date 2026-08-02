@@ -61,6 +61,13 @@ const ALLOWED_KEYS = Object.freeze(allowedKeys().slice());
 const RUNTIME_ONLY_KEYS = Object.freeze([
   "current_transfer_number",
   "current_backup_number",
+  // The spoken twins are runtime-only for the same reason as their canonical
+  // originals AND one more: a spoken form baked in at provisioning time would
+  // survive a correction to the number it describes. Derived per call, there is
+  // nothing to go stale.
+  "current_transfer_number_spoken",
+  "current_backup_number_spoken",
+  "caller_number_spoken",
   "current_business_status",
   "on_call_state",
   "call_kind",
@@ -125,6 +132,14 @@ function validateDynamicVariables(vars, { scope = "per_call" } = {}) {
       errors.push(`"${key}" is too long (${value.length} characters, limit ${MAX_VALUE_LENGTH}).`);
       continue;
     }
+    // A key named "_spoken" is the one the agent is told it may read aloud, so
+    // an E.164 value in it is precisely the M7D defect wearing a safe name.
+    // Refused rather than converted: silently fixing it would hide whichever
+    // caller built the wrong value.
+    if (key.endsWith("_spoken") && /\+\d{6,15}/.test(value)) {
+      errors.push(`"${key}" carries a number in international form; spoken values must come from services/au-phone-speech.js.`);
+      continue;
+    }
     clean[key] = value;
   }
 
@@ -138,10 +153,43 @@ function validateDynamicVariables(vars, { scope = "per_call" } = {}) {
  * Takes the values resolved at that moment — who is on call, whether the
  * business is open — rather than anything compiled earlier.
  */
-function buildInboundCallVariables({ transferPrimary = null, transferBackup = null, businessStatus = null, onCallState = null, callKind = null }) {
+function buildInboundCallVariables({ transferPrimary = null, transferBackup = null, businessStatus = null, onCallState = null, callKind = null, callerNumber = null }) {
+  // Required lazily so this module still loads standalone, per the house rule.
+  const { describeAuNumber } = require("./au-phone-speech");
+
   const vars = {};
-  if (transferPrimary) vars.current_transfer_number = transferPrimary;
-  if (transferBackup) vars.current_backup_number = transferBackup;
+
+  // The spoken forms are DERIVED here and are not parameters. That is the whole
+  // guarantee: a caller cannot supply a spoken value that disagrees with the
+  // canonical number, because there is no way to supply one at all. M7D read a
+  // transfer number aloud as "plus six one, four nine one..." — this is where
+  // that is fixed for every call type at once.
+  //
+  // An unlocalisable number yields NO spoken variable rather than a fallback
+  // string. Omitting it is safe because the compiled default is "", and the
+  // prompt tells the agent to ask the caller to confirm a number it was not
+  // given. A partial or invented reading would not be.
+  if (transferPrimary) {
+    vars.current_transfer_number = transferPrimary;
+    const spoken = describeAuNumber(transferPrimary, { purpose: "transfer_primary" });
+    if (spoken.spoken) vars.current_transfer_number_spoken = spoken.spoken;
+  }
+  if (transferBackup) {
+    vars.current_backup_number = transferBackup;
+    const spoken = describeAuNumber(transferBackup, { purpose: "transfer_backup" });
+    if (spoken.spoken) vars.current_backup_number_spoken = spoken.spoken;
+  }
+  // The caller's own number, for reading a callback number back to them.
+  //
+  // ONLY the spoken form is sent. The agent has no use for the caller's E.164
+  // value — nothing it can do requires dialling — so sending it would be
+  // exposure without a purpose. Not deliverable for an inbound PHONE call until
+  // the inbound webhook is enabled (M7F); see the module header.
+  if (callerNumber) {
+    const spoken = describeAuNumber(callerNumber, { purpose: "caller" });
+    if (spoken.spoken) vars.caller_number_spoken = spoken.spoken;
+  }
+
   if (businessStatus) vars.current_business_status = businessStatus;
   if (onCallState) vars.on_call_state = onCallState;
   if (callKind) vars.call_kind = callKind;

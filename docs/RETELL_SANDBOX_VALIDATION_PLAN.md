@@ -761,3 +761,79 @@ claiming success. The resources were then deleted directly using those ids.
   but no analysis result was retrieved or inspected.
 - **Provider error and rate-limit shapes** beyond the 400/422/500 responses seen
   during diagnosis.
+
+---
+
+# M7E — the two open findings (2026-08-02, NO live execution)
+
+M7E addressed both findings above. **It made no external request**, created,
+updated or deleted no Retell resource, created no call, bought or bound no
+number, enabled no webhook, applied no SQL, connected to no database, deployed
+nothing and pushed nothing. Full detail:
+[RETELL_CALL_DIAGNOSTICS_SPEC.md](RETELL_CALL_DIAGNOSTICS_SPEC.md).
+
+## Finding 1 — transfer numbers read aloud in E.164: **FIXED**
+
+The runtime path had no spoken form to read, so it read the canonical one. The
+conversion existed only on the configuration path.
+
+`src/services/au-phone-speech.js` now derives both a display form
+(`0491 570 006`) and a spoken form (`oh four nine one, five seven oh, oh oh
+six`) from the canonical E.164 value, and **both the change-request read-back and
+the receptionist runtime use it**. Storage is unchanged: every number is still
+E.164, and the presentations are derived at the point of use and never stored, so
+a corrected digit cannot leave a stale spoken form behind.
+
+The sandbox prompt line that produced the live defect —
+`{{current_transfer_number}}`, "read it digit by digit" — now reads
+`{{current_transfer_number_spoken}}` verbatim. A regression test compiles a
+receptionist whose transfer number is `+61491234567` and asserts that string
+appears nowhere in the prompt, the begin message, the knowledge base or the
+compiled spec.
+
+**Not yet confirmed aloud.** The fix is proven in tests, not in a caller's ear.
+It should be heard on a live call before any receptionist takes real traffic.
+
+## Finding 2 — the mid-sentence dropout: **STILL UNDIAGNOSED**
+
+M7E built the instrument, not the answer, and does not claim otherwise.
+
+`src/services/retell-call-diagnostics.js` turns a Get Call response into evidence
+tagged `provider_classified`, `observed` or `unproven`. **A cause is assigned only
+from a documented provider classification**; there is no path that promotes an
+observation to a cause. An incomplete final sentence does not prove a network
+failure, and audio stopping does not prove a Retell fault.
+
+For the M7D shape specifically — ended, connected, final agent turn visibly
+unfinished, no `disconnection_reason` at all — the report concludes:
+
+> An incomplete final turn was observed. Retell did not provide a disconnection
+> reason or provider error establishing the cause. Browser connectivity,
+> interruption and transport termination remain possible but unproven.
+
+The operator's connection dropped earlier in that session, which is what made a
+cleanup pass fail. That remains **circumstantial and unproven**.
+
+The one thing that would settle it is a Get Call read of that specific call:
+
+```bash
+node scripts/retell-call-diagnostics.js --fetch-call "call_53578d921719ab68121360c9fdf"
+```
+
+That read **has not been performed**, because M7E made no external request. It
+needs `RETELL_DIAGNOSTICS_ENABLED=true` and `RETELL_DIAGNOSTICS_EXECUTE=true`, and
+it requires **neither live writes nor live calls** — reading a call back must
+never require permission to create agents.
+
+Note that Retell's retention of a call from 2026-08-02 is not something this
+milestone verified; the read may return nothing.
+
+## Post-call analysis — implemented, not run
+
+`src/services/retell-call-analysis.js` distinguishes `ready`, `pending`,
+`not_applicable` (the call never connected, so polling would never end),
+`unknown` and `provider_error`, and validates built-in and custom fields against
+the schema AIDA asked for. Polling is bounded by construction.
+
+It is tested against fixtures only. **No analysis has been retrieved from
+Retell.**

@@ -33,6 +33,7 @@
 const crypto = require("crypto");
 const S = require("./locksmith-profile-schema");
 const { normaliseAuNumber, validateProfile, assessProvisioning } = require("./locksmith-profile");
+const { describeAuNumber } = require("./au-phone-speech");
 
 const TABLE = "locksmith_change_requests";
 
@@ -160,8 +161,22 @@ function validateChange(change) {
       return { ok: false, code: REFUSAL_CODES.invalidValue, message: "That is not a number we could transfer a call to. Australian mobile or landline only." };
     }
     out.value = normalised;
-    // The exact string the client must hear/see repeated back.
-    out.readBackText = normalised.replace(/^\+61/, "0").split("").join(" ");
+    // The exact strings the client must see and hear repeated back.
+    //
+    // Both come from the shared Australian presentation service (M7E) rather
+    // than being spelled out here. The old line was
+    //   normalised.replace(/^\+61/, "0").split("").join(" ")
+    // which was right for a mobile and wrong for a service number: a stored
+    // "+611300123456" became "0 1 3 0 0 1 2 3 4 5 6", inventing a leading zero
+    // that is not part of the number. It was also the only presentation logic
+    // in the product, so the runtime receptionist path had nothing to reuse and
+    // read numbers to callers in E.164 — the defect M7D found live.
+    const spoken = describeAuNumber(normalised, { purpose: change.target });
+    out.readBackText = spoken.display || normalised;
+    // Null rather than a guess when the number cannot be localised: the prompt
+    // rules tell the agent to ask the caller to confirm rather than read
+    // anything it was not given.
+    out.readBackSpoken = spoken.spoken || null;
     return { ok: true, change: out };
   }
 
@@ -570,6 +585,9 @@ function toPublicChangeRequest(row) {
       // the client must be able to check the digits they are approving.
       value: c.value,
       readBackText: c.readBackText || null,
+      // The spoken form for a voice channel. Same source as readBackText, so a
+      // client cannot be shown one number and read a different one.
+      readBackSpoken: c.readBackSpoken || null,
     })),
     // A one-line description of what this request would change. Both the portal
     // and the founder view list requests by this line; without it every request

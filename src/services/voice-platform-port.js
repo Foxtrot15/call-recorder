@@ -61,6 +61,8 @@ const OPERATIONS = Object.freeze([
   "updateAgent",
   "createPhoneCall",
   "retrieveCall",
+  // The same provider endpoint under the read-only diagnostics gate (M7E).
+  "retrieveCallForDiagnostics",
   "createOrUpdateAnalysisSchema",
   "bindPhoneNumber",
   "archiveProviderResource",
@@ -369,12 +371,68 @@ function createMockAdapter({ failures = {}, store = new Map(), clock = () => 0 }
         },
       });
     },
+    /**
+     * Mirrors the live adapter's retrieveCall result, which it previously did
+     * not: this returned `{id, call_id, call_status}` while the live adapter
+     * returns `{id, version, status, agentId, callType}`. A consumer written
+     * against the mock would have read `call_status` and got undefined in
+     * production — the same class of defect M7D found four times over.
+     */
     retrieveCall: async ({ callId } = {}) => {
       const entry = store.get(callId);
       if (!entry) {
         return fail({ code: ERROR_CODES.notFound, message: "no such mock call", status: 404, mode: MODES.mock, operation: "retrieveCall" });
       }
-      return ok({ resource: Object.freeze({ id: callId, call_id: callId, call_status: entry.status || "ended" }), mode: MODES.mock, operation: "retrieveCall" });
+      return ok({
+        resource: Object.freeze({
+          id: callId,
+          version: entry.version ?? 0,
+          status: entry.status || "ended",
+          agentId: entry.agentId || null,
+          callType: entry.callType || "web_call",
+        }),
+        mode: MODES.mock,
+        operation: "retrieveCall",
+      });
+    },
+    /**
+     * The read-only diagnostics read (M7E).
+     *
+     * Carries `extra.takeCallBody()` because the live adapter does, and it is a
+     * ONE-SHOT reader here too. A mock whose body could be read twice would let
+     * a test pass against a consumer that reads it twice and gets null in
+     * production.
+     *
+     * `mockBody` lets a test supply a fixture; without one the mock returns the
+     * minimum a real response guarantees rather than inventing rich fields.
+     */
+    retrieveCallForDiagnostics: async ({ callId, mockBody = null } = {}) => {
+      const entry = store.get(callId);
+      if (!entry && !mockBody) {
+        return fail({ code: ERROR_CODES.notFound, message: "no such mock call", status: 404, mode: MODES.mock, operation: "retrieveCall" });
+      }
+      const body = mockBody || {
+        call_id: callId,
+        call_type: (entry && entry.callType) || "web_call",
+        agent_id: (entry && entry.agentId) || null,
+        agent_version: (entry && entry.version) ?? 0,
+        call_status: (entry && entry.status) || "ended",
+      };
+      let held = body;
+      return ok({
+        resource: Object.freeze({
+          id: body.call_id || callId,
+          version: typeof body.version === "number" ? body.version : null,
+          status: body.call_status || null,
+          agentId: body.agent_id || null,
+          callType: body.call_type || null,
+        }),
+        mode: MODES.mock,
+        operation: "retrieveCall",
+        extra: {
+          takeCallBody: () => { const v = held; held = null; return v; },
+        },
+      });
     },
     // The mock accepts a signature only when the test explicitly says it is
     // valid. It never implements real crypto, so a mock can never be mistaken

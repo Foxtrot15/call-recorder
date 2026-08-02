@@ -103,6 +103,24 @@ They are separate rather than one "production" switch because enabling a
 not grant permission to dial a customer. A misconfiguration should cost a 500,
 never a phone call.
 
+**M7E added a read-only gate**, weaker than all of the above and narrower than
+any of them:
+
+| Variable | Default | Enables |
+|---|---|---|
+| `RETELL_DIAGNOSTICS_ENABLED` | off | reading one finished call back is possible |
+| `RETELL_DIAGNOSTICS_EXECUTE` | off | and may actually contact Retell |
+| `RETELL_DIAGNOSTICS_INCLUDE_CONTENT` | off | transcript **text** may be shown (also needs a CLI flag) |
+
+`canReadDiagnostics()` authorises exactly one documented endpoint —
+`GET /v2/get-call/{call_id}` — and requires `NODE_ENV` to not be production and
+`RETELL_ALLOWED_TAG=dev`. It deliberately requires **neither**
+`RETELL_LIVE_WRITES_ENABLED` nor `RETELL_LIVE_CALLS_ENABLED` nor
+`RETELL_DRY_RUN=false`: asking "why did that call drop?" must never require
+permission to create agents, and dry-run is a promise not to *change* anything,
+which a read already keeps. See
+[RETELL_CALL_DIAGNOSTICS_SPEC.md](RETELL_CALL_DIAGNOSTICS_SPEC.md).
+
 Also modelled: API key, base URL (https origin only, no path/query/fragment),
 timeout, max retries, webhook payload limit, default voice id (**no default —
 missing blocks live writes**), language, response-engine type, both template
@@ -492,3 +510,88 @@ ready, not in advance.
 `canPlaceCall` demands `RETELL_LIVE_CALLS_ENABLED` and an outbound telephone
 number; a web call needs neither, and requiring them would mean enabling real
 telephone dialling to test browser audio.
+
+---
+
+# M7E — Get Call, diagnostics and post-call analysis (docs reviewed 2026-08-02)
+
+## Pages reviewed
+
+| Page | Reviewed | Used for |
+|---|---|---|
+| `docs.retellai.com/api-references/get-call` | 2026-08-02 | the whole call response object |
+| `docs.retellai.com/features/webhook` | 2026-08-02 | event names, analysis timing |
+| `docs.retellai.com/features/post-call-analysis` | 2026-08-02 | custom analysis categories |
+
+Official documentation only. No blog posts, community examples or copied
+payloads. **No API request was made during M7E.**
+
+## The Get Call contract
+
+`GET /v2/get-call/{call_id}` — already the path in `retell-adapter.js`, now
+confirmed.
+
+The response is a **discriminated union** of `V2WebCallResponse` and
+`V2PhoneCallResponse`, both extending `V2CallBase`.
+
+**Required** (base): `call_id`, `agent_id`, `agent_version`, `call_status`.
+**Required** (web call): `call_type: "web_call"`, **`access_token`**.
+**Required** (phone call): `call_type: "phone_call"`, `from_number`, `to_number`,
+`direction`.
+
+Everything else is **optional** — including `start_timestamp`, `end_timestamp`,
+`duration_ms`, `transcript`, `transcript_object`, `latency`,
+`disconnection_reason`, `call_analysis`, `call_cost` and `llm_token_usage`.
+Nothing in this codebase assumes any of them is present.
+
+`call_status`: `registered` / `not_connected` / `ongoing` / `ended` / `error`.
+`direction`: `inbound` / `outbound`.
+`user_sentiment`: `Negative` / `Positive` / `Neutral` / `Unknown` — capitalised
+exactly so.
+
+**33 documented `disconnection_reason` values**, recorded verbatim in
+`DISCONNECTION_REASONS`. A test asserts every one maps to an AIDA category, so an
+unmapped value is genuinely undocumented rather than an oversight. An
+undocumented value maps to `unknown` with the raw string preserved; a future
+`error_*` value is *not* guessed into `provider_error` because it looks like one.
+
+**Latency** components: `e2e`, `asr`, `llm`, `llm_websocket_network_rtt`, `tts`,
+`knowledge_base`, `s2s` — each with optional `p50`/`p90`/`p95`/`p99`/`max`/`min`/
+`num`/`values`. `values` is deliberately dropped from summaries: unbounded, and
+not needed to answer "was this slow".
+
+**Transcript timing.** `transcript_object` is `Utterance[]` with `role`,
+`content` and `words[]` carrying per-word `start`/`end` in seconds. Word timings
+give the moment a turn actually stopped — the difference between "the agent
+stopped talking" and "the call ended".
+
+## Analysis timing
+
+`call_ended` carries every field of the call object **except `call_analysis`**;
+`call_analyzed` fires separately with it. Webhooks are triggered in order but are
+**not blocking**, so `call_ended` can arrive first.
+
+The documentation does **not** state how long analysis takes, nor the conditions
+under which it is not produced. Both are recorded as unknown rather than guessed.
+
+## Contract corrections found
+
+None. Every M7E field name and enum was taken from the documentation and has not
+been exercised against the live API, so this section records **no verified
+behaviour** — unlike the M7B and M7D sections above, which do. The distinction
+matters: M7D found four mismatches that documentation alone had not revealed.
+
+## Adapter changes
+
+* `retrieveCallForDiagnostics` — the same endpoint under `canReadDiagnostics`.
+  A separate method rather than a flag on `retrieveCall`, so the capability is
+  visible at every call site.
+* `extra.takeCallBody()` — the parsed body through a **one-shot** closure, the
+  same pattern as the web-call access token. `JSON.stringify(result)` cannot
+  serialise it and a second read returns `null`. Necessary because a Get Call
+  response for a web call carries `access_token` as a **required** field.
+* The mock adapter's `retrieveCall` previously returned `{id, call_id,
+  call_status}` while the live adapter returns `{id, version, status, agentId,
+  callType}`. A consumer written against the mock would have read `call_status`
+  and got `undefined` in production. **Fixed to mirror the live shape** — the
+  same defect class M7D found four times over.

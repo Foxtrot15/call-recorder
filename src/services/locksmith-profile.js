@@ -53,9 +53,26 @@ function normaliseAuNumber(raw) {
   const cleaned = raw.replace(/[\s().-]/g, "");
   if (!/^\+?\d+$/.test(cleaned)) return null;
 
+  // Strip the country code first, THEN decide whether a trunk zero belongs.
+  //
+  // The earlier version always prepended "0" after "+61", which meant this
+  // function could not re-normalise its own output for a service number:
+  // normaliseAuNumber("1800 123 456") gave "+611800123456", and feeding that
+  // back produced "01800123456" and returned null. Stored 1300/1800 transfer
+  // numbers therefore evaporated every time anything re-validated them —
+  // toQueryableColumns wrote null, and complexity scoring decided no transfer
+  // number was configured. Found while building the spoken-number service in
+  // M7E, which has to format exactly those stored canonical values.
+  let rest = null;
+  if (cleaned.startsWith("+61")) rest = cleaned.slice(3);
+  else if (cleaned.startsWith("61") && (cleaned.length === 11 || cleaned.length === 12)) rest = cleaned.slice(2);
+
   let national = cleaned;
-  if (cleaned.startsWith("+61")) national = `0${cleaned.slice(3)}`;
-  else if (cleaned.startsWith("61") && cleaned.length === 11) national = `0${cleaned.slice(2)}`;
+  if (rest !== null) {
+    // For 1300/1800 the leading 1 IS part of the number; for everything else
+    // the trunk zero was dropped by the country code and must come back.
+    national = /^1(300|800)\d{6}$/.test(rest) ? rest : `0${rest}`;
+  }
 
   // Mobiles and landlines: the leading 0 is a trunk prefix and is dropped.
   if (/^0[2-478]\d{8}$/.test(national)) return `+61${national.slice(1)}`;

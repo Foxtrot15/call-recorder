@@ -135,6 +135,22 @@ is already multi-tenant.
 | `clients.js` | Resolve client by Twilio number |
 | `sms.js` | 🔴 Dead code (no imports) |
 
+### Locksmith-pilot services (built dormant; see [INDEX.md](INDEX.md))
+
+Two are worth naming here because they are cross-cutting rather than
+milestone-local:
+
+| Service | Responsibility |
+|---|---|
+| `au-phone-speech.js` | The **single** Australian phone-number presentation service. Storage and provider operations stay E.164; humans see `0491 234 567`; models are given `oh four nine one, …`. Presentations are **derived at the point of use and never stored**, so a corrected digit cannot leave a stale spoken form behind. Both the change-request read-back and the receptionist runtime use it — there is no second implementation to drift. |
+| `retell-call-diagnostics.js` | Turns a Retell Get Call response into a **sanitised** diagnostic summary and an evidence report. Contacts nothing. Emits no transcript, recording URL, access token or full phone number — turn *structure* and timings only. Every statement is tagged `provider_classified`, `observed` or `unproven`, and a cause is assigned **only** from a documented provider classification. |
+
+`retell-call-analysis.js` (post-call analysis readiness, validation and bounded
+polling) and `config/retell-diagnostics.js` (the read-only gate) sit alongside
+them. Provider analysis is untrusted by construction: it can never modify a
+profile, approve a change, alter routing or pricing, or trigger billing, and
+there is no code path from that module to a write.
+
 ## 6. Data model
 
 Postgres tables in Supabase (inferred from code — this table is the source of

@@ -105,7 +105,13 @@ function buildSandboxResponseEnginePayload({ knowledgeBaseId, defaults }) {
     // the dynamic-variable check meaningful rather than decorative.
     "- The business is currently {{current_business_status}} and the on-call state is {{on_call_state}}.",
     "- This call is about {{call_kind}}.",
-    "- If the caller asks who they would be put through to, say you would transfer them to {{current_transfer_number}} — read it digit by digit.",
+    // M7E: this line used {{current_transfer_number}}, the canonical E.164
+    // value, and asked for it "digit by digit" — which is how the live M7D call
+    // came to say "plus six one, four nine one...". The spoken variable is
+    // derived from the same canonical number by services/au-phone-speech.js and
+    // already carries its own grouping, so the instruction is now to read it
+    // verbatim rather than to reformat anything.
+    "- If the caller asks who they would be put through to, say you would transfer them to {{current_transfer_number_spoken}} — read that exactly as written, and never say a number that starts with a plus sign.",
     "- Take their name and what they need, then say a locksmith will ring back.",
     "- Keep it under six turns. This is a test call.",
   ].join("\n");

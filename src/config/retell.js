@@ -192,6 +192,20 @@ function getRetellConfig(env = process.env) {
 
     recordingEnabled: strictTrue(env.RETELL_RECORDING_ENABLED), // default off, legal review pending
     transcriptRetention: env.RETELL_TRANSCRIPT_RETENTION || DEFAULTS.transcriptRetention,
+
+    // ── Read-only diagnostics (M7E) ────────────────────────────────
+    // A separate, weaker gate for READING one call back from the provider.
+    // Deliberately not folded into RETELL_LIVE_WRITES_ENABLED: asking "why did
+    // that call drop?" should never require holding permission to create
+    // agents, and an investigator forced to enable writes to read a call would
+    // be granted mutation rights they did not need.
+    diagnosticsEnabled: strictTrue(env.RETELL_DIAGNOSTICS_ENABLED),
+    diagnosticsExecute: strictTrue(env.RETELL_DIAGNOSTICS_EXECUTE),
+    // Transcript CONTENT is a third, separate gate. Everything useful about a
+    // dropout — timings, turn structure, latency, disconnect reason — is
+    // available without it, so content stays off unless someone deliberately
+    // asks for a customer's words.
+    diagnosticsIncludeContent: strictTrue(env.RETELL_DIAGNOSTICS_INCLUDE_CONTENT),
   });
 }
 
@@ -224,6 +238,44 @@ function canPlaceCall(env = process.env) {
   const reasons = [...write.reasons];
   if (!config.liveCallsEnabled) reasons.push("RETELL_LIVE_CALLS_ENABLED is not \"true\"");
   if (!config.outboundOnboardingNumber) reasons.push("RETELL_OUTBOUND_ONBOARDING_NUMBER is not set");
+  return { allowed: reasons.length === 0, reasons };
+}
+
+/**
+ * May we READ one call back from Retell?
+ *
+ * Strictly weaker than canWriteLive and strictly narrower: it authorises the
+ * single documented GET /v2/get-call/{call_id} endpoint and nothing else.
+ *
+ * What it deliberately does NOT require, because a read needs none of them:
+ *   RETELL_LIVE_WRITES_ENABLED   no resource is created, updated or deleted
+ *   RETELL_LIVE_CALLS_ENABLED    no call is placed
+ *   RETELL_DRY_RUN=false         dry-run is a promise not to CHANGE anything,
+ *                                which a read already keeps
+ *   a phone number, a webhook, a recording, a database, an Anthropic key
+ *
+ * What it adds that the write gates do not have: production is refused
+ * outright, and the tag must be "dev". Reading a call means reading a real
+ * conversation between real people, so the environment is part of the gate.
+ */
+function canReadDiagnostics(env = process.env) {
+  const config = getRetellConfig(env);
+  const reasons = [];
+  if (env.NODE_ENV === "production") reasons.push("NODE_ENV is \"production\" — diagnostics are a development tool");
+  if (!config.enabled) reasons.push("RETELL_ENABLED is not \"true\"");
+  if (!config.diagnosticsEnabled) reasons.push("RETELL_DIAGNOSTICS_ENABLED is not \"true\"");
+  if (!config.diagnosticsExecute) reasons.push("RETELL_DIAGNOSTICS_EXECUTE is not \"true\"");
+  // Checked against the RAW value, not the parsed one. getRetellConfig falls
+  // back to "dev" for any unrecognised tag, so a typo like "production" would
+  // otherwise be read as dev and quietly satisfy this gate. Unset still means
+  // dev — that is the intended default — but SET-and-wrong is refused.
+  if (env.RETELL_ALLOWED_TAG !== undefined && env.RETELL_ALLOWED_TAG !== "dev") {
+    reasons.push(`RETELL_ALLOWED_TAG is "${String(env.RETELL_ALLOWED_TAG).slice(0, 30)}", not "dev"`);
+  } else if (config.allowedTag !== "dev") {
+    reasons.push("RETELL_ALLOWED_TAG is not \"dev\"");
+  }
+  if (!config.hasApiKey) reasons.push("RETELL_API_KEY is not set");
+  if (!config.apiBaseUrlValid) reasons.push("RETELL_API_BASE_URL is not a valid https origin");
   return { allowed: reasons.length === 0, reasons };
 }
 
@@ -363,6 +415,7 @@ function toSafeConfigSummary(env = process.env) {
       canWriteLive: canWriteLive(env),
       canPlaceCall: canPlaceCall(env),
       canVerifyWebhook: canVerifyWebhook(env),
+      canReadDiagnostics: canReadDiagnostics(env),
     },
   });
 }
@@ -389,6 +442,7 @@ module.exports = {
   canWriteLive,
   canPlaceCall,
   canVerifyWebhook,
+  canReadDiagnostics,
   assessRetellConfig,
   redactSecrets,
   maskPhone,

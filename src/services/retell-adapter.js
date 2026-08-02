@@ -33,7 +33,7 @@ const {
   fail,
   normaliseProviderError,
 } = require("./voice-platform-port");
-const { canWriteLive, canPlaceCall, redactSecrets } = require("../config/retell");
+const { canWriteLive, canPlaceCall, canReadDiagnostics, redactSecrets } = require("../config/retell");
 
 // Documented paths, verified against docs.retellai.com on 2026-08-01.
 //
@@ -213,7 +213,7 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
         mode: MODES.live,
         operation,
         // Only a web call carries a token, and only ever as a one-shot reader.
-        extra: operation === "createWebCall" ? { takeAccessToken: oneShotToken(parsed && parsed.access_token) } : {},
+        extra: buildExtra(operation, parsed),
       });
     } catch (err) {
       const normalised = normaliseProviderError({ status: null, cause: err && err.name === "AbortError" ? "timeout" : err && err.message });
@@ -298,6 +298,36 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
     };
   }
 
+  /**
+   * The full Get Call body, through the same one-shot closure (M7E).
+   *
+   * Diagnostics need fields the closed resource shape does not carry — latency
+   * percentiles, turn timings, disconnect reason, analysis — and the honest
+   * options were to widen the resource shape with twenty provider-specific
+   * fields or to hand the body over exactly once.
+   *
+   * One-shot wins for the same reason it won for the access token: a Get Call
+   * response for a WEB call carries `access_token` as a REQUIRED field, and a
+   * transcript besides. Held in a closure it cannot be JSON.stringify'd into a
+   * manifest, a log line or an error report, and the second reader gets null.
+   * The single legitimate consumer is services/retell-call-diagnostics.js,
+   * which sanitises before anything else sees it.
+   */
+  function oneShotBody(rawBody) {
+    let held = rawBody && typeof rawBody === "object" ? rawBody : null;
+    return function takeCallBody() {
+      const value = held;
+      held = null;
+      return value;
+    };
+  }
+
+  function buildExtra(operation, parsed) {
+    if (operation === "createWebCall") return { takeAccessToken: oneShotToken(parsed && parsed.access_token) };
+    if (operation === "retrieveCall") return { takeCallBody: oneShotBody(parsed) };
+    return {};
+  }
+
   return Object.freeze({
     mode: MODES.live,
     provider: "retell",
@@ -343,6 +373,12 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
     // canWriteLive.
     createPhoneCall: (r) => request("createPhoneCall", { body: r.payload, idempotencyKey: r.idempotencyKey, capability: canPlaceCall }),
     retrieveCall: (r) => request("retrieveCall", { pathParam: r.callId, capability: canWriteLive }),
+
+    // The same endpoint under the weaker READ-ONLY gate (M7E). Separate method
+    // rather than a flag on retrieveCall so the capability is visible at every
+    // call site, and so nothing that holds write permission accidentally
+    // acquires the body reader below.
+    retrieveCallForDiagnostics: (r) => request("retrieveCall", { pathParam: r.callId, capability: canReadDiagnostics }),
 
     archiveProviderResource: async () =>
       fail({

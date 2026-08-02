@@ -150,8 +150,20 @@ const DYNAMIC_VARIABLE_ALLOWLIST = Object.freeze([
   "timezone",
   "current_business_status",
   "on_call_state",
+  // CANONICAL E.164. Machine-facing. Never read aloud — see the transfer
+  // section's prompt rules and the spoken twins below.
   "current_transfer_number",
   "current_backup_number",
+  // SPOKEN presentation forms (M7E). These are the ONLY number values an agent
+  // may say. They are derived from the canonical value at call time by
+  // services/au-phone-speech.js and are never stored, so a corrected digit
+  // cannot leave a stale spoken form behind.
+  "current_transfer_number_spoken",
+  "current_backup_number_spoken",
+  // The inbound caller's own number, spoken. Reserved and allow-listed now; it
+  // is only deliverable once the inbound webhook is live (M7F), because an
+  // inbound phone call receives per-call variables through no other channel.
+  "caller_number_spoken",
   "call_kind",
   "profile_version",
 ]);
@@ -181,6 +193,15 @@ function buildDynamicVariables({ profile, profileVersion, clientId }) {
     on_call_state: "{{runtime}}",
     current_transfer_number: transfer.primaryNumber ? "{{runtime}}" : "",
     current_backup_number: transfer.backupNumber ? "{{runtime}}" : "",
+    // Declared alongside their canonical twins so the shape is fixed, but the
+    // VALUE is derived per call from the canonical number — never compiled,
+    // never stored. See services/au-phone-speech.js.
+    current_transfer_number_spoken: transfer.primaryNumber ? "{{runtime}}" : "",
+    current_backup_number_spoken: transfer.backupNumber ? "{{runtime}}" : "",
+    // Only an inbound webhook can supply this, and no webhook is enabled yet.
+    // Declared as empty rather than "{{runtime}}": an unsupplied variable
+    // renders literally, so a placeholder here would be read to a caller.
+    caller_number_spoken: "",
     call_kind: "{{runtime}}",
   };
 
@@ -486,6 +507,10 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     title: "Putting a caller through",
     lines: [
       transfer.primaryNumber ? "There is a number to transfer urgent calls to. You will be given it at the time; do not read it out to the caller." : "No transfer number is configured. Take a message instead.",
+      // The transfer TOOL is the only thing that needs the actual number, and it
+      // resolves it server-side from the enquiry — the model never handles it.
+      // Saying it and dialling it are separate operations on purpose.
+      transfer.primaryNumber ? "You never dial or quote the transfer number yourself. The transfer function reaches the right person; if the caller asks who they would be put through to, describe the business, not a number." : null,
       transfer.collectDetailsFirst === true
         ? "Take the caller's name, number, suburb and problem BEFORE transferring, so the job is not lost if the call drops."
         : "You may transfer without taking full details first if the situation is urgent.",
@@ -531,6 +556,24 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       "Ask naturally, one thing at a time. Read the callback number back digit by digit and confirm it.",
       "If the caller will not give a callback number, say plainly that the locksmith cannot ring them back without it.",
     ].filter(Boolean),
+  });
+
+  // ── Saying a phone number ─────────────────────────────────────────
+  // M7E. A live M7D call read a transfer number as "plus six one, four nine
+  // one..." because the only number the agent had was the canonical E.164 one.
+  // These rules pair with the *_spoken dynamic variables: the agent is GIVEN a
+  // natural Australian reading, and told never to construct one itself.
+  sections.push({
+    id: "saying_numbers",
+    title: "Saying a phone number",
+    lines: [
+      "Australian callers expect an Australian reading. Say \"oh four nine one\", never \"plus six one, four nine one\".",
+      "When you are given a spoken version of a number, read that version exactly as written and nothing else.",
+      "Never read out a number that begins with a plus sign, and never convert one yourself.",
+      "Never say the name of a variable or anything in double curly braces. If you were about to, you were not given that value.",
+      "If you do not have a spoken version of a number you need to say, do not guess and do not read the raw value: ask the caller to tell you the number, or read back what they said to you.",
+      "A number the caller told you is read back to them the way they said it, digit by digit, in groups.",
+    ],
   });
 
   sections.push({
