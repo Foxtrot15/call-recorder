@@ -297,6 +297,18 @@ function getRetellConfig(env = process.env) {
     // available without it, so content stays off unless someone deliberately
     // asks for a customer's words.
     diagnosticsIncludeContent: strictTrue(env.RETELL_DIAGNOSTICS_INCLUDE_CONTENT),
+
+    // ── Inbound webhook (M7F-A / M7F-B1) ───────────────────────────
+    inboundWebhookEnabled: isInboundWebhookEnabled(env),
+    // The tag this DEPLOYMENT may serve, derived from the runtime environment
+    // rather than configured separately — a tag an operator can set to anything
+    // is not an environment check, it is a second thing to get wrong.
+    expectedTag: (env.NODE_ENV || "development") === "production" ? "prod" : "dev",
+    // Computed, never written to the provider by simply existing. Both the
+    // value and the reason it is absent are carried, so a dry-run preview can
+    // show what a live run would register and why it would not.
+    inboundWebhookUrl: buildInboundWebhookUrl(env).url,
+    inboundWebhookUrlReason: buildInboundWebhookUrl(env).reason,
   });
 }
 

@@ -770,6 +770,33 @@ function compileReceptionist({ profile, profileVersion, profileStatus, clientId,
 // ── Stage two: Retell translation ───────────────────────────────────
 
 /**
+ * Should this plan register an inbound webhook URL on the number, and if not,
+ * why not? (M7F-B1)
+ *
+ * Every condition must hold. They are checked in a fixed order and the FIRST
+ * failure is reported, so an operator gets one actionable reason rather than a
+ * list to work through.
+ *
+ * Returns { url, included, reason } — never throws, and never invents a base.
+ */
+function resolveInboundWebhookUrl(config = {}) {
+  const withheld = (reason) => Object.freeze({ url: null, included: false, reason });
+
+  if (!config.enabled) return withheld("RETELL_ENABLED is not \"true\"");
+  if (!config.inboundWebhookEnabled) return withheld("RETELL_INBOUND_WEBHOOK_ENABLED is not \"true\"");
+  if (!config.liveWritesEnabled) return withheld("RETELL_LIVE_WRITES_ENABLED is not \"true\"");
+  // Dry-run is a promise that nothing is registered anywhere. A URL in a
+  // dry-run payload would be a promise broken quietly.
+  if (config.dryRun) return withheld("RETELL_DRY_RUN is on");
+  if (config.allowedTag !== config.expectedTag) {
+    return withheld(`resource tag "${config.allowedTag}" does not match the deployment tag "${config.expectedTag}"`);
+  }
+  if (!config.inboundWebhookUrl) return withheld(config.inboundWebhookUrlReason || "no valid public https webhook base URL is configured");
+
+  return Object.freeze({ url: config.inboundWebhookUrl, included: true, reason: null });
+}
+
+/**
  * Pure translation of the neutral spec into Retell's documented shapes. No
  * decisions here — if this function needs a judgement, the judgement belongs in
  * stage one.
@@ -876,9 +903,30 @@ function toRetellPayload({ compiled, config }) {
       }
     : null;
 
+  // ── inbound_webhook_url (M7F-B1) ──────────────────────────────────
+  //
+  // This belongs on the NUMBER and nowhere else. It is deliberately not in the
+  // prompt, the knowledge base or default_dynamic_variables: the webhook URL is
+  // provider plumbing, and a model that can read it is a model that can be
+  // induced to say it.
+  //
+  // Included only when EVERY gate is open. The default and dry-run states omit
+  // it entirely, so a plan produced by an ordinary preview cannot register a
+  // callback URL by accident. `resolveInboundWebhookUrl` returns both the value
+  // and the reason it was withheld, so a dry-run preview can SHOW that the URL
+  // was considered and why it did not qualify — silence would look identical to
+  // "this feature does not exist".
+  const inboundWebhook = resolveInboundWebhookUrl(config);
+  if (inboundBinding && inboundWebhook.url) {
+    inboundBinding.inbound_webhook_url = inboundWebhook.url;
+  }
+
   return Object.freeze({
     responseEngine: Object.freeze(responseEngine),
     agent: Object.freeze(agent),
+    // Visible either way: the URL when it qualifies, the reason when it does
+    // not. A dry-run preview shows an operator what a live run WOULD register.
+    inboundWebhook: Object.freeze(inboundWebhook),
     knowledge: Object.freeze({ knowledge_base_name: `aida-${spec.clientId}-v${spec.profileVersion}`.slice(0, 39), knowledge_base_texts: [{ title: "Business information", text: spec.knowledge.text }] }),
     inboundBinding: inboundBinding ? Object.freeze(inboundBinding) : null,
   });

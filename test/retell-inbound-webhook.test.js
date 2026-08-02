@@ -484,10 +484,27 @@ describe("inbound webhook URL configuration", () => {
   });
 
   test("NO provider write happens by default — the URL is computed, not sent", () => {
-    // M7F-A configures nothing at Retell. The binding payload still carries no
-    // inbound_webhook_url; enabling that is a later, explicit decision.
-    const compiler = fs.readFileSync(require.resolve("../src/services/locksmith-receptionist-compiler"), "utf8");
-    assert.equal(/inbound_webhook_url/.test(compiler), false, "M7F-A must not start writing a webhook URL to the provider");
+    // M7F-A asserted the compiler emitted NO inbound_webhook_url at all. M7F-B1
+    // adds it deliberately, so that assertion is superseded by a stronger one:
+    // the URL appears only when every gate is open, and the default
+    // configuration still emits nothing. Full gate coverage is in the
+    // "inbound_webhook_url in the provisioning plan" suite below.
+    const rc = require("../src/services/locksmith-receptionist-compiler");
+    require("../src/services/locksmith-extraction-fixture");
+    const { extractLocksmithProfile } = require("../src/services/locksmith-extraction");
+    const { DEMO_TRANSCRIPT } = require("../src/services/locksmith-interview-spec");
+
+    const config = cfg.getRetellConfig({});
+    const profile = JSON.parse(JSON.stringify(extractLocksmithProfile({ transcript: DEMO_TRANSCRIPT, clientId: "demo" }).profile));
+    const compiled = rc.compileReceptionist({
+      profile, profileVersion: 1, profileStatus: "approved", clientId: "demo",
+      templateVersion: config.receptionistTemplateVersion, config, generatedAt: "2026-08-02T00:00:00.000Z",
+    });
+    const payload = rc.toRetellPayload({ compiled, config });
+
+    assert.equal(payload.inboundWebhook.included, false);
+    assert.equal(payload.inboundBinding, null, "no number configured, so no binding at all");
+    assert.equal(JSON.stringify(payload).includes("inbound_webhook_url"), false);
   });
 });
 
@@ -612,6 +629,246 @@ describe("signature verification through the official seam", () => {
   });
 });
 
+// ── Resolver integration (M7F-B1) ───────────────────────────────────
+
+describe("the real resolver, through the handler", () => {
+  const { RESOLUTION } = require("../src/services/retell-inbound-resolver");
+
+  /** A resolveInbound seam returning the resolver's classified outcome. */
+  const outcome = (resolution, context = null) => async () => ({
+    ok: resolution === RESOLUTION.resolved,
+    resolution,
+    context,
+    clientId: context ? context.clientId : null,
+  });
+
+  const RESOLVED = {
+    clientId: "demo-locksmith",
+    profileVersion: 3,
+    transferPrimary: TRANSFER,
+    transferBackup: null,
+    environment: "dev",
+    callId: null,
+  };
+
+  test("a resolved agent yields the documented variables", async () => {
+    const x = fakeExchange(inboundBody());
+    const handler = createInboundWebhookHandler({
+      verify: PASS, env: ENV, logger: SILENT, resolveInbound: outcome(RESOLUTION.resolved, RESOLVED),
+    });
+    await handler(x.req, x.res);
+    assert.equal(x.out.statusCode, 200);
+    assert.equal(x.out.payload.call_inbound.dynamic_variables.current_transfer_number, TRANSFER);
+    assert.equal(x.out.payload.call_inbound.metadata.aida_client_id, "demo-locksmith");
+  });
+
+  for (const resolution of [
+    RESOLUTION.unknownAgent,
+    RESOLUTION.ambiguousAgent,
+    RESOLUTION.supersededAgent,
+    RESOLUTION.wrongEnvironment,
+    RESOLUTION.inactiveClient,
+    RESOLUTION.unapprovedProfile,
+    RESOLUTION.registryUnavailable,
+  ]) {
+    test(`${resolution} yields an empty call_inbound and NO variables`, async () => {
+      const x = fakeExchange(inboundBody());
+      const handler = createInboundWebhookHandler({
+        verify: PASS, env: ENV, logger: SILENT, resolveInbound: outcome(resolution),
+      });
+      await handler(x.req, x.res);
+      assert.equal(x.out.statusCode, 200, "a 4xx would cost three retries and then disconnect the caller");
+      assert.deepEqual(x.out.payload, { call_inbound: {} });
+      assert.equal(JSON.stringify(x.out.payload).includes(TRANSFER), false);
+    });
+  }
+
+  test("the audit records the CLASSIFICATION, not just failure", async () => {
+    const events = [];
+    for (const resolution of [RESOLUTION.resolved, RESOLUTION.ambiguousAgent, RESOLUTION.wrongEnvironment]) {
+      const x = fakeExchange(inboundBody());
+      const handler = createInboundWebhookHandler({
+        verify: PASS, env: ENV, logger: SILENT,
+        resolveInbound: outcome(resolution, resolution === RESOLUTION.resolved ? RESOLVED : null),
+        audit: async (e) => events.push(e),
+      });
+      await handler(x.req, x.res);
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.deepEqual(events.map((e) => e.resolution), [RESOLUTION.resolved, RESOLUTION.ambiguousAgent, RESOLUTION.wrongEnvironment]);
+    // "ambiguous agent" and "unknown agent" need completely different operator
+    // responses and must not look alike in the audit trail.
+    assert.equal(events[0].event, "inbound_resolved");
+    assert.equal(events[1].event, "inbound_unresolved");
+    assert.equal(events[0].clientId, "demo-locksmith");
+    assert.equal(events[1].clientId, null);
+  });
+
+  test("the audit carries no caller number, transfer number or variable value", async () => {
+    const events = [];
+    const x = fakeExchange(inboundBody());
+    const handler = createInboundWebhookHandler({
+      verify: PASS, env: ENV, logger: SILENT, includeCallerNumber: true,
+      resolveInbound: outcome(RESOLUTION.resolved, RESOLVED),
+      audit: async (e) => events.push(e),
+    });
+    await handler(x.req, x.res);
+    await new Promise((r) => setImmediate(r));
+    const json = JSON.stringify(events[0]);
+    assert.equal(json.includes(CALLER), false);
+    assert.equal(json.includes(TRANSFER), false);
+    assert.equal(json.includes("oh four nine one"), false);
+    // transfer number, its spoken twin, and the caller's spoken number.
+    assert.equal(events[0].variableCount, 3);
+  });
+
+  test("the audit still runs after the response", async () => {
+    let responded = null;
+    let audited = null;
+    const x = fakeExchange(inboundBody());
+    x.res.json = function (p) { responded = process.hrtime.bigint(); x.out.payload = p; return this; };
+    const handler = createInboundWebhookHandler({
+      verify: PASS, env: ENV, logger: SILENT, resolveInbound: outcome(RESOLUTION.resolved, RESOLVED),
+      audit: async () => { audited = process.hrtime.bigint(); },
+    });
+    await handler(x.req, x.res);
+    await new Promise((r) => setImmediate(r));
+    assert.ok(audited > responded);
+  });
+
+  test("an invalid signature never reaches the resolver", async () => {
+    let called = false;
+    const x = fakeExchange(inboundBody());
+    const handler = createInboundWebhookHandler({
+      verify: FAIL, env: ENV, logger: SILENT,
+      resolveInbound: async () => { called = true; return { ok: true, resolution: "resolved", context: RESOLVED }; },
+    });
+    await handler(x.req, x.res);
+    assert.equal(x.out.statusCode, 401);
+    assert.equal(called, false);
+  });
+
+  test("the route composes the real resolver without importing Express into it", () => {
+    const routeSource = fs.readFileSync(require.resolve("../src/routes/retell-inbound-webhook"), "utf8");
+    assert.match(routeSource, /createInboundResolver/);
+    assert.match(routeSource, /createRegistryAccess/);
+    assert.match(routeSource, /resolveInbound/);
+    // Composition lives at the boundary; the handler and core stay injectable.
+    const handlerSource = fs.readFileSync(require.resolve("../src/routes/retell-inbound-webhook-handler"), "utf8");
+    assert.equal(/createRegistryAccess/.test(handlerSource), false);
+    const coreSource = fs.readFileSync(require.resolve("../src/services/retell-inbound-call"), "utf8");
+    assert.equal(/retell-inbound-resolver/.test(coreSource), false);
+  });
+});
+
+// ── The inbound webhook URL in the binding plan (M7F-B1) ────────────
+
+describe("inbound_webhook_url in the provisioning plan", () => {
+  const rc = require("../src/services/locksmith-receptionist-compiler");
+  require("../src/services/locksmith-extraction-fixture");
+  const { extractLocksmithProfile } = require("../src/services/locksmith-extraction");
+  const { DEMO_TRANSCRIPT } = require("../src/services/locksmith-interview-spec");
+
+  const OPEN = Object.freeze({
+    NODE_ENV: "development",
+    RETELL_ENABLED: "true",
+    RETELL_INBOUND_WEBHOOK_ENABLED: "true",
+    RETELL_LIVE_WRITES_ENABLED: "true",
+    RETELL_DRY_RUN: "false",
+    RETELL_ALLOWED_TAG: "dev",
+    RETELL_API_KEY: "key_fixture_not_real",
+    RETELL_DEFAULT_VOICE_ID: "voice_fixture",
+    RETELL_WEBHOOK_BASE_URL: "https://aida-sandbox.example.com",
+    RETELL_INBOUND_DEMO_NUMBER: "+61491570006",
+  });
+
+  function payloadFor(envOverrides = {}) {
+    const config = cfg.getRetellConfig({ ...OPEN, ...envOverrides });
+    const profile = JSON.parse(JSON.stringify(extractLocksmithProfile({ transcript: DEMO_TRANSCRIPT, clientId: "demo" }).profile));
+    const compiled = rc.compileReceptionist({
+      profile, profileVersion: 1, profileStatus: "approved", clientId: "demo",
+      templateVersion: config.receptionistTemplateVersion, config, generatedAt: "2026-08-02T00:00:00.000Z",
+    });
+    return rc.toRetellPayload({ compiled, config });
+  }
+
+  test("included when every gate is open", () => {
+    const p = payloadFor();
+    assert.equal(p.inboundBinding.inbound_webhook_url, "https://aida-sandbox.example.com/webhooks/retell/inbound");
+    assert.equal(p.inboundWebhook.included, true);
+  });
+
+  test("omitted by default, with the reason visible", () => {
+    const p = payloadFor({ RETELL_ENABLED: undefined, RETELL_INBOUND_WEBHOOK_ENABLED: undefined, RETELL_LIVE_WRITES_ENABLED: undefined, RETELL_DRY_RUN: undefined, RETELL_WEBHOOK_BASE_URL: undefined });
+    assert.equal(p.inboundBinding && p.inboundBinding.inbound_webhook_url, undefined);
+    assert.equal(p.inboundWebhook.included, false);
+    assert.ok(p.inboundWebhook.reason, "a dry-run preview must say WHY, or silence looks like the feature not existing");
+  });
+
+  const closers = [
+    ["RETELL_ENABLED not true", { RETELL_ENABLED: "false" }, /RETELL_ENABLED/],
+    ["inbound webhook flag off", { RETELL_INBOUND_WEBHOOK_ENABLED: "false" }, /RETELL_INBOUND_WEBHOOK_ENABLED/],
+    ["live writes off", { RETELL_LIVE_WRITES_ENABLED: "false" }, /RETELL_LIVE_WRITES_ENABLED/],
+    ["dry-run on", { RETELL_DRY_RUN: "true" }, /DRY_RUN/],
+    ["tag mismatch", { RETELL_ALLOWED_TAG: "prod" }, /tag/],
+    ["no base URL", { RETELL_WEBHOOK_BASE_URL: undefined }, /https|BASE_URL/],
+    ["http base URL", { RETELL_WEBHOOK_BASE_URL: "http://aida-sandbox.example.com" }, /https/],
+    ["localhost base URL", { RETELL_WEBHOOK_BASE_URL: "https://localhost" }, /reachable|https/],
+    ["private host", { RETELL_WEBHOOK_BASE_URL: "https://10.0.0.4" }, /reachable|https/],
+  ];
+
+  for (const [name, override, reasonPattern] of closers) {
+    test(`omitted when ${name}`, () => {
+      const p = payloadFor(override);
+      assert.equal(p.inboundBinding && p.inboundBinding.inbound_webhook_url, undefined, `${name} must not register a URL`);
+      assert.equal(p.inboundWebhook.included, false);
+      assert.match(p.inboundWebhook.reason, reasonPattern);
+    });
+  }
+
+  test("changing ONLY the webhook URL produces a different binding payload", () => {
+    const a = payloadFor();
+    const b = payloadFor({ RETELL_WEBHOOK_BASE_URL: "https://aida-sandbox-2.example.com" });
+    assert.notEqual(JSON.stringify(a.inboundBinding), JSON.stringify(b.inboundBinding));
+    // Everything else about the binding is identical — the diff is the URL.
+    assert.equal(a.inboundBinding.phone_number, b.inboundBinding.phone_number);
+    assert.deepEqual(a.inboundBinding.inbound_agents, b.inboundBinding.inbound_agents);
+  });
+
+  test("hashing stays deterministic", () => {
+    const { payloadHash } = require("../src/services/voice-platform-port");
+    assert.equal(payloadHash(payloadFor().inboundBinding), payloadHash(payloadFor().inboundBinding));
+    assert.notEqual(payloadHash(payloadFor().inboundBinding), payloadHash(payloadFor({ RETELL_WEBHOOK_BASE_URL: "https://other.example.com" }).inboundBinding));
+  });
+
+  test("unbinding can null the URL, per the documented contract", () => {
+    // PATCH /update-phone-number accepts null for inbound_agents and
+    // inbound_webhook_url to return a number to an unassigned state.
+    const unbind = { phone_number: "+61491570006", inbound_agents: null, inbound_webhook_url: null };
+    const { validateAgentWeights } = require("../src/services/provisioning-plan");
+    assert.equal(validateAgentWeights(unbind.inbound_agents).ok, false, "an unbind is not a binding and must not validate as one");
+    assert.equal(unbind.inbound_webhook_url, null);
+  });
+
+  test("the URL never reaches the prompt, the knowledge base or the defaults", () => {
+    const p = payloadFor();
+    assert.equal(p.responseEngine.general_prompt.includes("aida-sandbox"), false);
+    assert.equal(JSON.stringify(p.responseEngine.default_dynamic_variables).includes("aida-sandbox"), false);
+    assert.equal(JSON.stringify(p.knowledge).includes("aida-sandbox"), false);
+    assert.equal(String(p.responseEngine.begin_message || "").includes("aida-sandbox"), false);
+  });
+
+  test("no provider request occurs from building a plan", async () => {
+    const { createRetellAdapter } = require("../src/services/retell-adapter");
+    const adapter = createRetellAdapter({ config: cfg.getRetellConfig(OPEN), env: OPEN, logger: SILENT });
+    payloadFor();
+    // The adapter still has no transport, so nothing could have been sent.
+    const r = await adapter.bindPhoneNumber({ payload: {}, providerId: "+61491570006", idempotencyKey: "x" });
+    assert.equal(r.ok, false);
+    assert.match(r.error.message, /no HTTP transport/);
+  });
+});
+
 // ── The SDK stays out of the domain ─────────────────────────────────
 
 describe("the SDK is confined to signature verification", () => {
@@ -651,5 +908,78 @@ describe("the SDK is confined to signature verification", () => {
     const adapter = fs.readFileSync(require.resolve("../src/services/retell-adapter"), "utf8");
     assert.match(adapter, /fetchImpl/);
     assert.equal(/require\(["']retell-sdk["']\)/.test(adapter), false);
+  });
+});
+
+// ── Deployment and runtime (M7F-B1) ─────────────────────────────────
+
+describe("deployment and runtime", () => {
+  const path = require("node:path");
+  const ROOT = path.join(__dirname, "..");
+
+  test("the declared engine and the deploy pin agree, and both are non-EOL", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    const nvmrc = fs.readFileSync(path.join(ROOT, ".nvmrc"), "utf8").trim();
+
+    // Node 20 reached end of life on 30 April 2026, and the Retell SDK requires
+    // a NON-EOL Node 20 or later. Pinning 20 would pin an unpatched runtime, so
+    // 22 is the supported floor rather than the technical one.
+    const pinned = Number(nvmrc);
+    assert.ok(Number.isInteger(pinned), `.nvmrc must be a bare major version, got "${nvmrc}"`);
+    assert.ok(pinned >= 22, `.nvmrc pins Node ${pinned}, which is end-of-life`);
+
+    const floor = Number(String(pkg.engines.node).replace(/[^\d]/g, ""));
+    assert.ok(floor >= 22, `engines.node is "${pkg.engines.node}", which permits an EOL runtime`);
+    assert.ok(pinned >= floor, "the pinned version must satisfy the declared engine");
+  });
+
+  test("the running Node satisfies the declared engine", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    const floor = Number(String(pkg.engines.node).replace(/[^\d]/g, ""));
+    const running = Number(process.versions.node.split(".")[0]);
+    assert.ok(running >= floor, `running Node ${running} is below the declared floor ${floor}`);
+  });
+
+  test("the Web Crypto API the verifier depends on is present", () => {
+    // The SDK's verifier calls globalThis.crypto.subtle and throws without it.
+    // That is the concrete reason the Node floor moved, so it is asserted
+    // rather than assumed.
+    assert.equal(typeof globalThis.crypto, "object");
+    assert.equal(typeof globalThis.crypto.subtle.importKey, "function");
+  });
+
+  test("the deploy pin is the only Node selection signal in the repo", () => {
+    // Nixpacks reads .nvmrc / .node-version before engines. A range like ">=22"
+    // is a constraint, not a selection, so without a pin the platform picks.
+    for (const competing of [".node-version", "Dockerfile", "nixpacks.toml"]) {
+      assert.equal(fs.existsSync(path.join(ROOT, competing)), false, `${competing} would compete with .nvmrc`);
+    }
+    assert.equal(fs.existsSync(path.join(ROOT, ".nvmrc")), true);
+  });
+
+  test("starting the app creates no call and no provider write", () => {
+    // server.js mounts routers; nothing at module scope may reach a provider.
+    const server = fs.readFileSync(path.join(ROOT, "src", "server.js"), "utf8");
+    for (const forbidden of ["createPhoneCall", "createWebCall", "bindPhoneNumber", "createAgent", "importPhoneNumber", "createPhoneNumber"]) {
+      assert.equal(server.includes(forbidden), false, `server.js must not reference ${forbidden}`);
+    }
+    // And the inbound route composes a resolver, not a provider client.
+    const route = fs.readFileSync(require.resolve("../src/routes/retell-inbound-webhook"), "utf8");
+    assert.equal(/createRetellAdapter|fetchImpl/.test(route), false);
+  });
+
+  test("the smoke harness contacts nothing by default and embeds no key", () => {
+    const source = fs.readFileSync(path.join(ROOT, "scripts", "retell-inbound-smoke.js"), "utf8");
+    // The key is read from the environment and never accepted on the command
+    // line, because a command line ends up in shell history.
+    assert.match(source, /process\.env\.RETELL_API_KEY/);
+    assert.equal(/valueOf\("--key"\)|--api-key/.test(source), false);
+    // No hard-coded secret, and only the fictitious range appears.
+    assert.equal(/\bkey_[A-Za-z0-9]{16,}/.test(source), false);
+    for (const m of source.match(/\+61\d{9}/g) || []) {
+      assert.match(m, /^\+6149157(00\d|0?1[0-5]\d)$/, `${m} is outside the ACMA fictitious range`);
+    }
+    // fetch is only reachable once a --target is supplied.
+    assert.match(source, /if \(!TARGET\)/);
   });
 });

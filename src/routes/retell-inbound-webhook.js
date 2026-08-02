@@ -43,6 +43,7 @@ const router = express.Router();
 
 const { isRetellEnabled, isInboundWebhookEnabled, getRetellConfig, INBOUND_WEBHOOK_PATH } = require("../config/retell");
 const { createInboundWebhookHandler } = require("./retell-inbound-webhook-handler");
+const { createInboundResolver, createRegistryAccess } = require("../services/retell-inbound-resolver");
 
 /**
  * Router-level gate. Requires its OWN flag in addition to RETELL_ENABLED:
@@ -59,12 +60,38 @@ function retellInboundGate(env = process.env) {
 router.use(retellInboundGate());
 
 const config = getRetellConfig();
+
+// ── Composition (M7F-B1) ────────────────────────────────────────────
+// The real resolver is assembled HERE, at the application boundary, and nowhere
+// deeper. The handler and the decision core keep taking an injected
+// `resolveContext`, so both stay driveable from fixtures with no database.
+//
+// The environment tag is bound at composition time: a deployment may only serve
+// resources belonging to its own tag, and passing it in here means the resolver
+// cannot be constructed without that decision having been made.
+const resolveInboundContext = createInboundResolver({
+  access: createRegistryAccess(),
+  expectedTag: config.allowedTag,
+});
+
 router.post(
   INBOUND_WEBHOOK_PATH,
   // Raw bytes: the signature was computed over exactly these, and
   // JSON.stringify(req.body) would produce different ones.
   express.raw({ type: "application/json", limit: config.webhookMaxBytes }),
-  createInboundWebhookHandler()
+  createInboundWebhookHandler({
+    // The FULL classified outcome, so the audit can record why a call was not
+    // resolved. Only `resolved` ever yields variables; every other
+    // classification withholds them, and that decision lives in the handler
+    // rather than being hidden inside this adapter.
+    resolveInbound: (request) =>
+      resolveInboundContext({
+        agentId: request.agentId,
+        agentVersion: request.agentVersion,
+        // Provenance only — the resolver never uses it to decide ownership.
+        callId: null,
+      }),
+  })
 );
 
 module.exports = router;

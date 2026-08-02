@@ -207,6 +207,42 @@ async function recordProvisionedResource(fields, { supersedeExisting = true } = 
   return data;
 }
 
+/**
+ * Every registry row for one provider resource id, ACROSS ALL CLIENTS (M7F-B1).
+ *
+ * This is the reverse of every other query here, and the direction matters.
+ *
+ * `pr_one_active_per_purpose` is unique on (client_id, provider, purpose,
+ * resource_type) — it guarantees ONE ACTIVE AGENT PER CLIENT. It does NOT
+ * guarantee one client per agent: there is no unique constraint, and no index
+ * at all, on provider_resource_id. So a data error, a botched restore or a
+ * hand-written row could put the same Retell agent under two tenants, and the
+ * database would accept it.
+ *
+ * That is why this returns EVERY match rather than `.single()`. The inbound
+ * resolver must be able to SEE an ambiguous mapping and refuse it. A query that
+ * silently returned the first row would resolve a call to whichever tenant
+ * happened to sort first, and the symptom would be one locksmith's caller being
+ * offered another locksmith's transfer number — with the call sounding entirely
+ * normal.
+ *
+ * Inactive rows are returned too, so the caller can tell "never provisioned"
+ * (no rows) apart from "replaced by a newer agent" (rows, none active).
+ */
+async function findResourcesByProviderId(providerResourceId, { provider = "retell", resourceType = null, purpose = null } = {}) {
+  if (!providerResourceId || typeof providerResourceId !== "string") return [];
+  const supabase = require("./supabase");
+  let query = supabase.from(TABLE).select("*").eq("provider", provider).eq("provider_resource_id", providerResourceId);
+  if (resourceType) query = query.eq("resource_type", resourceType);
+  if (purpose) query = query.eq("purpose", purpose);
+  const { data, error } = await query.order("created_at", { ascending: false });
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`provider resource reverse lookup failed: ${error.message}`);
+  }
+  return data || [];
+}
+
 /** Which idempotency keys have already succeeded — the resume set. */
 async function completedIdempotencyKeys(clientId, { provider = "retell" } = {}) {
   const rows = await listResources(clientId, { provider });
@@ -244,6 +280,7 @@ module.exports = {
   tableMissing,
   provisioningError,
   listResources,
+  findResourcesByProviderId,
   recordProvisionedResource,
   completedIdempotencyKeys,
   recordFailure,

@@ -148,7 +148,105 @@ Apply only when you want post-call event processing and provisioning execution.
 14. You are connected to production; any table already exists with unexpected
     columns; RLS reports false after step 9; or any policy appears at step 10.
 
-## 7. What this milestone did not do
+## 7. Inbound client resolution (added M7F-B1)
+
+The resolver reads **two** tables, so `lpm3` alone is not enough.
+
+### Ordered application plan
+
+| # | File | Purpose | Prerequisite | Needed for |
+|---|---|---|---|---|
+| 1 | `lpm2_create_locksmith_onboarding.sql` | `locksmith_business_profiles` — the approved-profile lookup | none | **inbound answering** |
+| 2 | `lpm3_create_retell_provisioning.sql` | `provider_resources` (agent → client), plans, actions, events | 1 | **inbound answering** |
+| 3 | `lpm7_inbound_agent_resolution.sql` | reverse-lookup index + cross-tenant collision guard | 2 | **inbound answering** (see below) |
+
+`lpm4`, `lpm5` and `lpm6` are unrelated to inbound resolution and are not
+required for it.
+
+### What each stage buys
+
+| Capability | Needs |
+|---|---|
+| Signature verification, 401/503 behaviour | **nothing** |
+| Verified call with an unknown agent → empty `call_inbound` | **nothing** — a registry read failure classifies as `registry_unavailable`, which withholds variables identically |
+| Verified call **resolved** to a client with variables | 1 + 2 |
+| Resolution that is fast and collision-proof | 1 + 2 + 3 |
+| Post-call event recording and idempotency | 2 |
+| Provisioning execution | 2 |
+
+So the split is:
+
+* **Required before the public webhook resolver proof:** nothing, for the
+  security checks; 1 + 2 if you want the *resolved* case proved.
+* **Required before the first inbound phone call:** 1 + 2, and 3 is strongly
+  recommended — see the warning below.
+* **Optional for answering, required for audit completeness:** the
+  `provider_webhook_events` half of 2.
+
+### `lpm7` — why it matters, and the check that must come first
+
+`pr_one_active_per_purpose` is unique on `(client_id, provider, purpose,
+resource_type)`. It guarantees **one active agent per client**. It does **not**
+guarantee one client per agent: there is no unique constraint, and no index at
+all, on `provider_resource_id`.
+
+Two consequences:
+
+1. The reverse lookup the inbound webhook performs is a **sequential scan**,
+   in front of a ringing phone, inside a 10-second budget.
+2. Nothing at the database level stops the same Retell agent appearing under two
+   tenants. The application refuses that case — the resolver returns
+   `ambiguous_agent` and emits no variables — but the invariant belongs in the
+   database too.
+
+**Before applying `lpm7`, run this. The unique index will fail if it finds
+duplicates, and that failure is a report worth reading, not an obstacle:**
+
+```sql
+select provider, provider_resource_id,
+       count(*)                         as active_rows,
+       count(distinct client_id)        as distinct_clients,
+       array_agg(distinct client_id)    as clients
+from public.provider_resources
+where active = true
+group by provider, provider_resource_id
+having count(*) > 1
+order by distinct_clients desc;
+```
+
+Expect **zero rows**. Any row with `distinct_clients > 1` is a live
+cross-tenant collision and must be resolved by superseding the wrong row
+(`active = false`, `superseded_at = now()`) — **never by deleting history**.
+
+**Verify after applying:**
+
+```sql
+select indexname from pg_indexes
+where schemaname = 'public'
+  and indexname in ('pr_provider_resource_lookup', 'pr_one_client_per_active_resource');
+```
+
+Expect two rows. Then re-run the migration once; it must succeed and change
+nothing.
+
+**Rollback:**
+
+```sql
+drop index if exists public.pr_one_client_per_active_resource;
+drop index if exists public.pr_provider_resource_lookup;
+```
+
+Dropping these removes a safety guarantee and restores a sequential scan. It is
+safe for the data, not for the invariant.
+
+### RLS
+
+`lpm7` creates **indexes only** — no table, so no new RLS surface. The RLS
+posture of `provider_resources` (enabled, no policies, service_role only) is
+established by `lpm3` and is unchanged.
+
+## 8. What this milestone did not do
 
 No database connection was opened. No statement was executed. No credentials
-were read. The file was reviewed as text only.
+were read. Every file was reviewed as text only, and `lpm7` was **written** for
+review rather than applied.

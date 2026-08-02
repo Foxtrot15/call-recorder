@@ -52,6 +52,16 @@ function createInboundWebhookHandler(deps = {}) {
   const verify = deps.verify || verifyRetellWebhook;
   const logger = deps.logger || console;
   const env = deps.env || process.env;
+  // Two seams, deliberately.
+  //
+  //   resolveInbound   returns the resolver's full classified outcome
+  //                    ({ ok, resolution, context }). Used in production, so
+  //                    the audit can record WHY a call was not resolved —
+  //                    "ambiguous agent" and "unknown agent" need completely
+  //                    different operator responses and must not look alike.
+  //   resolveContext   returns a bare context or null. Kept because most tests
+  //                    care only about the answer, not the classification.
+  const resolveInbound = deps.resolveInbound || null;
   const resolveContext = deps.resolveContext || (async () => null);
   const failureMode = deps.failureMode || resolveFailureMode(env);
   const includeCallerNumber = deps.includeCallerNumber === true;
@@ -105,9 +115,21 @@ function createInboundWebhookHandler(deps = {}) {
     }
 
     // ── 7: decide and answer ──
+    // `resolution` is captured alongside the context so the audit can name the
+    // classification. Assigned inside the resolver wrapper rather than returned,
+    // because decideInboundCall's contract is deliberately "a context or null".
+    let resolution = null;
+    const resolve = resolveInbound
+      ? async (request) => {
+        const result = await resolveInbound(request);
+        resolution = result && result.resolution ? result.resolution : null;
+        return result && result.ok ? result.context : null;
+      }
+      : resolveContext;
+
     let decision;
     try {
-      decision = await inbound.decideInboundCall({ parsed, resolveContext, failureMode, includeCallerNumber, logger });
+      decision = await inbound.decideInboundCall({ parsed, resolveContext: resolve, failureMode, includeCallerNumber, logger });
     } catch {
       // Structurally unreachable — decideInboundCall catches its own resolver
       // failures — but a throw here would disconnect a caller, so it is caught
@@ -121,15 +143,31 @@ function createInboundWebhookHandler(deps = {}) {
     // Names and counts only. Never a caller number, never a variable VALUE.
     logger.log(
       `retell.inbound.answered ok=${decision.ok} vars=${decision.variableKeys.length}` +
-      `${decision.code ? ` code=${decision.code}` : ""} ms=${elapsedMs}`
+      `${resolution ? ` resolution=${resolution}` : ""}${decision.code ? ` code=${decision.code}` : ""} ms=${elapsedMs}`
     );
 
     res.status(decision.status).json(decision.body);
 
-    // ── after the response: optional audit, never awaited ──
+    // ── after the response: audit, never awaited ──
+    //
+    // Every outcome is audited, not just failures: "resolved" is the event that
+    // makes an unexplained transfer traceable later, and a log that records only
+    // problems cannot answer "which client did that call go to?".
+    //
+    // The event carries a classification and a client id, never a caller
+    // number, a transfer number or a variable value.
     if (audit) {
       Promise.resolve()
-        .then(() => audit({ ok: decision.ok, code: decision.code || null, clientId: decision.clientId, elapsedMs }))
+        .then(() => audit({
+          event: decision.ok ? "inbound_resolved" : "inbound_unresolved",
+          resolution: resolution || (decision.ok ? "resolved" : decision.code || "unknown"),
+          ok: decision.ok,
+          code: decision.code || null,
+          clientId: decision.clientId,
+          agentId: shape.ok ? shape.request.agentId : null,
+          variableCount: decision.variableKeys.length,
+          elapsedMs,
+        }))
         .catch(() => logger.error("retell.inbound.audit_failed"));
     }
 
