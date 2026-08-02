@@ -65,11 +65,10 @@ function fakeAdapter(overrides = {}) {
     async createResponseEngine(r) { calls.push({ op: "createResponseEngine", payload: r.payload }); return okResult("llm_1", {}); },
     async createAgent(r) { calls.push({ op: "createAgent", payload: r.payload }); return okResult("agent_1", {}); },
     async getAgent(r) {
-      // getAgent is the one place a body IS needed — the sandbox verifies
-      // fields the port does not model. The live adapter surfaces it via
-      // `raw` for this operation only.
+      // Mirrors the live adapter: agent verification fields live on the CLOSED
+      // resource shape, not a raw provider body.
       calls.push({ op: "getAgent", providerId: r.providerId });
-      return { ok: true, resource: { id: "agent_1", version: 0 }, raw: { agent_id: "agent_1", version: 0, response_engine: { type: "retell-llm", llm_id: "llm_1" }, voice_id: "custom_voice_test", language: "en-AU" }, mode: "live" };
+      return { ok: true, resource: { id: "agent_1", version: 0, responseEngineId: "llm_1", responseEngineType: "retell-llm", voiceId: "custom_voice_test", language: "en-AU", webhookUrl: null }, mode: "live" };
     },
     async createWebCall(r) {
       calls.push({ op: "createWebCall", payload: r.payload });

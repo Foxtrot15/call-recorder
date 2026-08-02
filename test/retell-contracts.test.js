@@ -190,19 +190,94 @@ describe("knowledge base contract", () => {
     assert.equal(r.request.path, "/create-knowledge-base");
   });
 
-  test("each text item sends its own title and text fields", () => {
+  test("knowledge_base_texts is ONE field holding a JSON array", () => {
+    // VERIFIED AGAINST THE LIVE PROVIDER, 2026-08-02.
+    //
+    // M7B sent indexed sub-fields (knowledge_base_texts[0][title]) — the
+    // conventional multipart encoding for an array of objects. The live API
+    // rejects that. Sending one item per repeated field returns the decisive
+    // error {"status":"error","message":"not an array"}, proving the server
+    // JSON-parses this field. A single JSON-encoded array returns 201.
     const r = multipart.buildCreateKnowledgeBaseRequest({
       knowledgeBaseName: "aida-demo-v2",
       texts: [{ title: "A", text: "one" }, { title: "B", text: "two" }],
     });
-    assert.deepEqual(r.request.fieldNames, [
-      "knowledge_base_name",
-      "knowledge_base_texts[0][title]", "knowledge_base_texts[0][text]",
-      "knowledge_base_texts[1][title]", "knowledge_base_texts[1][text]",
-    ]);
+
+    assert.deepEqual(r.request.fieldNames, ["knowledge_base_name", "knowledge_base_texts"]);
+
     const body = r.request.body.toString("utf8");
-    assert.match(body, /name="knowledge_base_texts\[0\]\[title\]"/);
-    assert.ok(body.includes("one") && body.includes("two"));
+    assert.match(body, /name="knowledge_base_texts"/);
+    assert.ok(!/knowledge_base_texts\[\d\]/.test(body), "indexed sub-fields are rejected by the provider");
+
+    // The field value must parse as an array of {title, text}.
+    const value = body.split('name="knowledge_base_texts"')[1].split("\r\n\r\n")[1].split("\r\n--")[0];
+    const parsed = JSON.parse(value);
+    assert.ok(Array.isArray(parsed), "the provider requires an array");
+    assert.deepEqual(parsed, [{ title: "A", text: "one" }, { title: "B", text: "two" }]);
+  });
+
+  test("the adapter puts the multipart bytes on the wire, not JSON", async () => {
+    // VERIFIED AGAINST THE LIVE PROVIDER, 2026-08-02.
+    //
+    // buildRequest hard-coded `Content-Type: application/json` and
+    // JSON.stringify(body), so a multipart request was stringified into a JSON
+    // string and sent as JSON. The provider answered 400. The `contentType`
+    // declared on each ENDPOINTS entry was decorative because nothing read it —
+    // the multipart builder's work never reached the wire.
+    const { createRetellAdapter } = require("../src/services/retell-adapter");
+    const env = { RETELL_ENABLED: "true", RETELL_LIVE_WRITES_ENABLED: "true", RETELL_DRY_RUN: "false", RETELL_API_KEY: "k", RETELL_DEFAULT_VOICE_ID: "v", RETELL_ALLOWED_TAG: "dev" };
+
+    let captured = null;
+    const fetchImpl = async (url, init) => {
+      captured = { url, headers: init.headers, body: init.body };
+      return { ok: true, status: 201, headers: { get: () => null }, json: async () => ({ knowledge_base_id: "kb_1", status: "in_progress" }) };
+    };
+    const adapter = createRetellAdapter({ config: getRetellConfig(env), env, fetchImpl });
+    const built = multipart.buildCreateKnowledgeBaseRequest({ knowledgeBaseName: "t", texts: [{ title: "A", text: "one" }] });
+
+    await adapter.createKnowledgeBase({ payload: built.request, idempotencyKey: "i" });
+
+    assert.match(captured.headers["Content-Type"], /^multipart\/form-data; boundary=/, "the multipart content type must survive");
+    assert.ok(captured.headers["Content-Type"].includes(built.request.boundary), "the generated boundary must be sent");
+    assert.ok(Buffer.isBuffer(captured.body), "the body must remain the encoded Buffer");
+    assert.ok(!captured.headers["Content-Type"].startsWith("application/json"));
+  });
+
+  test("JSON endpoints are unaffected by the multipart branch", async () => {
+    const { createRetellAdapter } = require("../src/services/retell-adapter");
+    const env = { RETELL_ENABLED: "true", RETELL_LIVE_WRITES_ENABLED: "true", RETELL_DRY_RUN: "false", RETELL_API_KEY: "k", RETELL_DEFAULT_VOICE_ID: "v", RETELL_ALLOWED_TAG: "dev" };
+    let captured = null;
+    const fetchImpl = async (url, init) => {
+      captured = init;
+      return { ok: true, status: 201, headers: { get: () => null }, json: async () => ({ llm_id: "llm_1" }) };
+    };
+    const adapter = createRetellAdapter({ config: getRetellConfig(env), env, fetchImpl });
+    await adapter.createResponseEngine({ payload: { general_prompt: "x" }, idempotencyKey: "i" });
+
+    assert.equal(captured.headers["Content-Type"], "application/json");
+    assert.equal(typeof captured.body, "string");
+    assert.deepEqual(JSON.parse(captured.body), { general_prompt: "x" });
+  });
+
+  test("a multipart endpoint refuses a payload that was not built by the multipart builder", async () => {
+    const { createRetellAdapter } = require("../src/services/retell-adapter");
+    const env = { RETELL_ENABLED: "true", RETELL_LIVE_WRITES_ENABLED: "true", RETELL_DRY_RUN: "false", RETELL_API_KEY: "k", RETELL_DEFAULT_VOICE_ID: "v", RETELL_ALLOWED_TAG: "dev" };
+    const adapter = createRetellAdapter({ config: getRetellConfig(env), env, fetchImpl: async () => ({ ok: true, status: 201, headers: { get: () => null }, json: async () => ({}) }) });
+    // A plain object would previously have been silently JSON-encoded.
+    await assert.rejects(
+      async () => adapter.createKnowledgeBase({ payload: { knowledge_base_name: "t" }, idempotencyKey: "i" }),
+      /requires a multipart request/
+    );
+  });
+
+  test("urls are also sent as a JSON array, not indexed fields", () => {
+    const r = multipart.buildCreateKnowledgeBaseRequest({
+      knowledgeBaseName: "aida-demo-v2",
+      texts: [{ title: "A", text: "one" }],
+      urls: ["https://example.com/a", "https://example.com/b"],
+    });
+    assert.ok(r.request.fieldNames.includes("knowledge_base_urls"));
+    assert.ok(!r.request.fieldNames.some((f) => /knowledge_base_urls\[\d\]/.test(f)));
   });
 
   test("the encoding is deterministic", () => {

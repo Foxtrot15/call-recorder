@@ -94,7 +94,18 @@ function buildSandboxResponseEnginePayload({ knowledgeBaseId, defaults }) {
     "- Never claim to be a person.",
     "",
     "# This call",
-    "- The caller is in {{caller_suburb}}.",
+    // Every variable named here MUST be one the allow-list can carry AND that
+    // is actually supplied. An unsupplied variable is not an error at the
+    // provider — it renders LITERALLY, so the agent would read "{{...}}" aloud.
+    //
+    // This prompt originally said "The caller is in {{caller_suburb}}".
+    // caller_suburb is not in DYNAMIC_VARIABLE_ALLOWLIST and was never sent, so
+    // the live agent was given that placeholder as text. Replaced with
+    // variables that are genuinely delivered per call, which is also what makes
+    // the dynamic-variable check meaningful rather than decorative.
+    "- The business is currently {{current_business_status}} and the on-call state is {{on_call_state}}.",
+    "- This call is about {{call_kind}}.",
+    "- If the caller asks who they would be put through to, say you would transfer them to {{current_transfer_number}} — read it digit by digit.",
     "- Take their name and what they need, then say a locksmith will ring back.",
     "- Keep it under six turns. This is a test call.",
   ].join("\n");
@@ -312,7 +323,18 @@ async function runWebCallSandbox({
       record("verify_agent", false, fetched.error.code);
       return finish({ ok: false, failedAt: "verify_agent", error: fetched.error });
     }
-    const agentChecks = verifyAgent({ fetched: fetched.raw || fetched.resource, expected: { llmId: created.responseEngineId, voiceId: config.voiceId, language: config.language } });
+    // Read from the adapter's CLOSED resource shape, not a raw provider body.
+    // The live adapter returns no `raw` — only the test fakes did — so reading
+    // it made every check report "(none)" against a correctly-created agent.
+    const agentChecks = verifyAgent({
+      fetched: {
+        response_engine: { llm_id: fetched.resource.responseEngineId, type: fetched.resource.responseEngineType },
+        voice_id: fetched.resource.voiceId,
+        language: fetched.resource.language,
+        webhook_url: fetched.resource.webhookUrl,
+      },
+      expected: { llmId: created.responseEngineId, voiceId: config.voiceId, language: config.language },
+    });
     validations.push(...agentChecks.checks);
     if (!agentChecks.ok) {
       record("verify_agent", false, agentChecks.checks.filter((c) => !c.ok).map((c) => c.check).join(","));

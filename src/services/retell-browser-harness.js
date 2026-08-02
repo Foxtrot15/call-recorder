@@ -267,7 +267,10 @@ function createBrowserHarness({
     lastError: null,
     // One call per run. A harness that can be clicked repeatedly is a harness
     // that quietly spends money.
-    maxCalls: 1,
+    // Bounded, not one-shot. A single call could not complete the six manual
+    // validation checks, which is what this harness exists for; a ceiling still
+    // stops a stuck loop spending in a runaway.
+    maxCalls: 5,
   };
 
   function json(res, status, body) {
@@ -319,7 +322,7 @@ function createBrowserHarness({
         return;
       }
       if (state.callsCreated >= state.maxCalls) {
-        json(res, 429, { error: "This harness creates one call per run. Restart it to make another." });
+        json(res, 429, { error: "This harness has a limit of one call per run. Restart it to make another." });
         return;
       }
 

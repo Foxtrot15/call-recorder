@@ -101,12 +101,22 @@ describe("harness endpoint security", () => {
     });
   });
 
-  test("a second call in the same run is refused", async () => {
-    await withHarness(null, async ({ started, created, key }) => {
-      await request(started.port, { method: "POST", path: "/api/web-call", headers: { "x-aida-sandbox-key": key }, body: "{}" });
-      const second = await request(started.port, { method: "POST", path: "/api/web-call", headers: { "x-aida-sandbox-key": key }, body: "{}" });
-      assert.equal(second.status, 429, "a clickable harness must not be able to spend repeatedly");
-      assert.equal(created.length, 1);
+  test("the harness stops at its call ceiling", async () => {
+    await withHarness(null, async ({ harness, started, created, key }) => {
+      // A single call could not complete the six manual validation checks the
+      // harness exists for, so the limit is a small ceiling rather than one.
+      // The ceiling still stops a stuck loop spending without bound.
+      const limit = harness.state.maxCalls;
+      assert.ok(limit >= 1 && limit <= 10, "the ceiling must stay small");
+
+      for (let i = 0; i < limit; i++) {
+        const res = await request(started.port, { method: "POST", path: "/api/web-call", headers: { "x-aida-sandbox-key": key }, body: "{}" });
+        assert.equal(res.status, 201, `call ${i + 1} of ${limit} should succeed`);
+      }
+
+      const overLimit = await request(started.port, { method: "POST", path: "/api/web-call", headers: { "x-aida-sandbox-key": key }, body: "{}" });
+      assert.equal(overLimit.status, 429, "a stuck loop must not spend without bound");
+      assert.equal(created.length, limit, "no call may be created beyond the ceiling");
     });
   });
 

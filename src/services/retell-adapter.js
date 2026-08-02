@@ -98,7 +98,6 @@ function pickRequestId(headers) {
 function buildRequest({ config, endpoint, body, idempotencyKey }) {
   const headers = {
     Authorization: `Bearer ${config.apiKey}`,
-    "Content-Type": "application/json",
     Accept: "application/json",
   };
   // Retell does not document an idempotency header. We still send our key as a
@@ -107,9 +106,35 @@ function buildRequest({ config, endpoint, body, idempotencyKey }) {
   // assuming provider support that is not documented.
   if (idempotencyKey) headers["X-Aida-Idempotency-Key"] = idempotencyKey;
 
+  // ── TRANSPORT IS NOT UNIFORM ──────────────────────────────────────
+  //
+  // The knowledge-base endpoints are multipart/form-data; everything else is
+  // JSON. This builder previously hard-coded `Content-Type: application/json`
+  // and `JSON.stringify(body)`, so a multipart request built by
+  // services/retell-multipart.js was stringified into a JSON string and sent
+  // as JSON — the encoding never reached the wire, and the provider answered
+  // 400. The `contentType` declared on each ENDPOINTS entry was decorative
+  // because nothing read it.
+  //
+  // Verified against the live provider on 2026-08-02: the same bytes sent with
+  // the multipart content type and its boundary are accepted (201).
+  if (endpoint.contentType === "multipart/form-data") {
+    // The multipart builder produces { contentType, body } — the content type
+    // carries the generated boundary, so it MUST come from the built request
+    // and can never be a constant.
+    if (!body || typeof body.contentType !== "string" || !body.body) {
+      throw new Error(`${endpoint.path} requires a multipart request built by services/retell-multipart.js`);
+    }
+    return {
+      method: endpoint.method,
+      headers: { ...headers, "Content-Type": body.contentType },
+      body: body.body,
+    };
+  }
+
   return {
     method: endpoint.method,
-    headers,
+    headers: { ...headers, "Content-Type": "application/json" },
     body: endpoint.method === "GET" ? undefined : JSON.stringify(body || {}),
   };
 }
@@ -216,6 +241,19 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
       ? body.call_id || null
       : body.agent_id || body.llm_id || body.knowledge_base_id || body.conversation_flow_id || body.call_id || body.phone_number || null;
 
+    // Agent operations surface the few fields a caller must be able to VERIFY.
+    //
+    // Verified against the live provider 2026-08-02: agent verification read
+    // `response.raw`, which the live adapter never returns — only test fakes
+    // did — so every check reported "(none)" and a correctly-created agent
+    // failed verification.
+    //
+    // Named fields rather than the whole body: the port's contract is that
+    // provider payloads do not leak upward, and "return everything" would undo
+    // that to fix a narrow need.
+    const isAgent = operation === "createAgent" || operation === "updateAgent" || operation === "getAgent";
+    const engine = (isAgent && body.response_engine) || null;
+
     return Object.freeze({
       id,
       version: typeof body.version === "number" ? body.version : null,
@@ -224,6 +262,12 @@ function createRetellAdapter({ config, fetchImpl = null, env = process.env, logg
       // without needing the raw body.
       agentId: isCall ? body.agent_id || null : null,
       callType: isCall ? body.call_type || null : null,
+      // Agent verification fields.
+      responseEngineType: engine ? engine.type || null : null,
+      responseEngineId: engine ? engine.llm_id || engine.conversation_flow_id || null : null,
+      voiceId: isAgent ? body.voice_id || null : null,
+      language: isAgent ? (Array.isArray(body.language) ? body.language[0] : body.language) || null : null,
+      webhookUrl: isAgent ? body.webhook_url || null : null,
       assignedTags: Array.isArray(body.assigned_tags) ? body.assigned_tags.slice(0, 10) : null,
       lastModified: body.last_modification_timestamp || null,
     });

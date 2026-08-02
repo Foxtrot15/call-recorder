@@ -170,23 +170,44 @@ describe("sandbox runner .env loading", () => {
     }
   });
 
-  test("missing variables still fail closed", () => {
-    const out = runScript({ env: {} });
-    assert.match(out, /blocker/i);
-    assert.match(out, /No action taken/);
-    assert.ok(!/every sandbox gate is satisfied/.test(out), "an unconfigured run must never report the gates open");
+  // ── WHY GATE LOGIC IS NOT TESTED THROUGH THE SCRIPT ───────────────
+  //
+  // These assertions used to spawn the script with a restricted environment and
+  // check the printed blockers. That worked only while the repository's .env
+  // held no Retell values. Once the sandbox was genuinely configured — which is
+  // exactly when these tests matter — the script loaded the real .env and
+  // filled in every "missing" variable, so a fail-closed test reported the
+  // gates OPEN.
+  //
+  // A test whose result depends on the developer's own .env is not a test. Gate
+  // logic is a pure function over an env object, so it is asserted directly;
+  // the subprocess tests below cover only what genuinely needs the script —
+  // that dotenv loads at all, that no secret is printed, and that no transport
+  // is constructed.
+  test("missing variables fail closed (asserted on the pure gate, not the script)", () => {
+    const g = require("../src/config/retell-sandbox").evaluateSandboxGate({});
+    assert.equal(g.allowed, false);
+    assert.ok(g.blockers.length > 0);
   });
 
-  test("a partial configuration still fails closed", () => {
-    // Everything except the execute switch.
-    const out = runScript({
-      env: {
-        RETELL_ENABLED: "true", RETELL_LIVE_WRITES_ENABLED: "true", RETELL_DRY_RUN: "false",
-        RETELL_SANDBOX_WEB_CALL_ENABLED: "true", RETELL_ALLOWED_TAG: "dev",
-        RETELL_API_KEY: FAKE_KEY, RETELL_DEFAULT_VOICE_ID: FAKE_VOICE, RETELL_DEFAULT_LANGUAGE: "en-AU",
-      },
-    });
-    assert.match(out, /RETELL_SANDBOX_EXECUTE is not "true"/);
+  test("a partial configuration fails closed", () => {
+    const cfg = require("../src/config/retell-sandbox");
+    const partial = {
+      RETELL_ENABLED: "true", RETELL_LIVE_WRITES_ENABLED: "true", RETELL_DRY_RUN: "false",
+      RETELL_SANDBOX_WEB_CALL_ENABLED: "true", RETELL_ALLOWED_TAG: "dev",
+      RETELL_API_KEY: FAKE_KEY, RETELL_DEFAULT_VOICE_ID: FAKE_VOICE, RETELL_DEFAULT_LANGUAGE: "en-AU",
+    };
+    const g = cfg.evaluateSandboxGate(partial);
+    assert.equal(g.allowed, false);
+    assert.match(g.blockers.join(" "), /RETELL_SANDBOX_EXECUTE is not "true"/);
+  });
+
+  test("these tests do not depend on the repository's .env contents", () => {
+    // The guard for the defect above: the pure gate must reach the same verdict
+    // whether or not real credentials exist on this machine.
+    const cfg = require("../src/config/retell-sandbox");
+    assert.equal(cfg.evaluateSandboxGate({}).allowed, false, "an empty env is always closed");
+    assert.equal(cfg.getSandboxConfig({}).hasApiKey, false, "an empty env never reports a key");
   });
 
   test("no secret value is ever printed", () => {
@@ -227,35 +248,37 @@ describe("dotenv must not weaken any gate", () => {
     RETELL_DEFAULT_LANGUAGE: "en-AU",
   };
 
+  // Asserted on the pure gate for the isolation reason documented above: a
+  // subprocess would inherit the repository's real .env and never see a
+  // variable as absent.
+  const gateOf = (env) => require("../src/config/retell-sandbox").evaluateSandboxGate(env);
+
   test("every gate satisfied is required before the gates report open", () => {
-    const out = runScript({ env: ALL_GATES });
-    assert.match(out, /every sandbox gate is satisfied/);
+    assert.equal(gateOf(ALL_GATES).allowed, true);
   });
 
-  for (const key of ["RETELL_ENABLED", "RETELL_LIVE_WRITES_ENABLED", "RETELL_SANDBOX_WEB_CALL_ENABLED", "RETELL_SANDBOX_EXECUTE"]) {
+  for (const key of ["RETELL_ENABLED", "RETELL_LIVE_WRITES_ENABLED", "RETELL_SANDBOX_WEB_CALL_ENABLED", "RETELL_SANDBOX_EXECUTE", "RETELL_API_KEY", "RETELL_DEFAULT_VOICE_ID"]) {
     test(`removing ${key} closes the gate`, () => {
       const env = { ...ALL_GATES };
       delete env[key];
-      const out = runScript({ env });
-      assert.ok(!/every sandbox gate is satisfied/.test(out), `${key} must remain required`);
+      assert.equal(gateOf(env).allowed, false, `${key} must remain required`);
     });
   }
 
   test("RETELL_DRY_RUN left on closes the gate", () => {
-    const out = runScript({ env: { ...ALL_GATES, RETELL_DRY_RUN: "true" } });
-    assert.ok(!/every sandbox gate is satisfied/.test(out));
-    assert.match(out, /RETELL_DRY_RUN is on/);
+    const g = gateOf({ ...ALL_GATES, RETELL_DRY_RUN: "true" });
+    assert.equal(g.allowed, false);
+    assert.match(g.blockers.join(" "), /RETELL_DRY_RUN is on/);
   });
 
   test("a tag other than dev closes the gate", () => {
-    const out = runScript({ env: { ...ALL_GATES, RETELL_ALLOWED_TAG: "prod" } });
-    assert.ok(!/every sandbox gate is satisfied/.test(out));
+    assert.equal(gateOf({ ...ALL_GATES, RETELL_ALLOWED_TAG: "prod" }).allowed, false);
   });
 
   test("live TELEPHONE calls being enabled still refuses the sandbox", () => {
-    const out = runScript({ env: { ...ALL_GATES, RETELL_LIVE_CALLS_ENABLED: "true" } });
-    assert.ok(!/every sandbox gate is satisfied/.test(out));
-    assert.match(out, /RETELL_LIVE_CALLS_ENABLED/);
+    const g = gateOf({ ...ALL_GATES, RETELL_LIVE_CALLS_ENABLED: "true" });
+    assert.equal(g.allowed, false);
+    assert.match(g.blockers.join(" "), /RETELL_LIVE_CALLS_ENABLED/);
   });
 
   test("production refuses before anything else is evaluated", () => {

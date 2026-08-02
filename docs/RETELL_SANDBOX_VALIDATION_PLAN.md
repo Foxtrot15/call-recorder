@@ -638,3 +638,126 @@ Resources are cleaned up automatically.
 Record those observations yourself: **the script can confirm the backend issued
 a call to the browser, but only the person at the browser can confirm that audio
 worked.**
+
+---
+
+# M7D — Live Retell validation (EXECUTED 2026-08-02)
+
+**Proof A and Proof C both established against the real provider.** Proof B was
+not performed. Four provider or integration mismatches were found and fixed;
+every one of them had been invisible to a fully green test suite.
+
+## What was executed
+
+| Proof | Result |
+|---|---|
+| **A — backend API issuance** | **PASSED, live.** Knowledge base, response engine and agent created; agent retrieved and verified; web call created with a valid call id and access token, bound to the intended agent |
+| **B — Retell dashboard behaviour** | **NOT PERFORMED.** The dashboard Test control was never used; it was unnecessary once Proof C succeeded through AIDA's own path |
+| **C — AIDA browser flow** | **PASSED, live.** AIDA's backend issued the token, AIDA's own harness page consumed it, the browser joined the intended agent and held a real two-way voice conversation |
+
+Proof C is the one that matters, and it did not depend on Proof B.
+
+## The four mismatches
+
+### 1. `knowledge_base_texts` must be a JSON array in ONE field
+
+M7B sent indexed sub-fields (`knowledge_base_texts[0][title]`) — the
+conventional multipart encoding for an array of objects. The live API rejects
+it. Sending one item per repeated field returns the decisive error:
+
+    {"status":"error","message":"not an array"}
+
+so the server JSON-parses that field. A single JSON-encoded array returns 201.
+
+### 2. The adapter never put the multipart bytes on the wire
+
+`buildRequest` hard-coded `Content-Type: application/json` and
+`JSON.stringify(body)`, so the multipart request was stringified into a JSON
+string. The `contentType` declared on each endpoint was decorative because
+nothing read it. Fixed; JSON endpoints are unaffected.
+
+### 3. Agent verification read a `raw` body that does not exist
+
+Verification read `response.raw`, which only the hand-written test fakes
+returned. Every check reported `(none)` against a correctly-created agent. The
+adapter now surfaces named verification fields on its closed resource shape —
+`responseEngineId`, `voiceId`, `language`, `webhookUrl` — rather than leaking a
+provider body.
+
+### 4. The sandbox prompt referenced an undeliverable variable
+
+The prompt said *"The caller is in {{caller_suburb}}"*. `caller_suburb` is not in
+`DYNAMIC_VARIABLE_ALLOWLIST` and was never sent, and an unsupplied variable
+**renders literally** — so the live agent was reading that placeholder as text.
+Replaced with variables that are genuinely delivered per call.
+
+### The common cause
+
+All four came from the same place: **the test fakes were richer than the real
+provider boundary.** A fake accepts whatever shape it is handed, so it cannot
+catch a wire-format error — it conceals one. The port's mock adapter now mirrors
+the live result shape exactly.
+
+## Manual browser checks — confirmed by the operator
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Two-way audio | **Pass** |
+| 2 | Expected custom voice and `en-AU` | **Pass** |
+| 3 | Knowledge-base influence — "do you do automotive key replacement?" answered **no**, a fact present only in the KB | **Pass** |
+| 4 | Dynamic-variable influence — the per-call transfer number was used | **Pass** (see the open finding below) |
+| 5 | Safety rules — refused to quote a price and refused to explain lock-picking | **Pass** |
+| 6 | Clean disconnect | **Pass** |
+
+The provider also accepted `en-AU` and the configured custom voice id, both of
+which M7B had listed as unvalidated assumptions.
+
+## Open findings (not fixed here — not provider mismatches)
+
+**Transfer numbers are read aloud in E.164.** The runtime dynamic variable
+carries `+61491570006`, so the agent says *"plus six one, four nine one…"* — the
+operator reported the number "sounded a bit weird". An Australian caller expects
+*"oh four nine one…"*.
+
+The product already knows how to do this: `validateChange` produces a
+`readBackText` that converts `+61` → `0` and spaces the digits for
+change-request read-backs. That conversion exists on the configuration path but
+not on the runtime path. **A caller hearing their locksmith's callback number
+misread is a real defect**, and it should be fixed before any receptionist goes
+live — but it is a product issue, not a provider incompatibility, so it was
+recorded rather than folded into this milestone.
+
+**One unexplained mid-sentence audio dropout.** The operator reported the agent
+cutting out once mid-sentence. Not diagnosed. The most likely cause is the local
+connection — it dropped earlier in the same session, which is also what made a
+cleanup pass fail — but this is **not** established, and it should not be
+written off until it has been watched for on a later run.
+
+## Resources created and deleted
+
+| Resource | Purpose | State |
+|---|---|---|
+| 2 × probe knowledge bases | diagnosing the multipart encoding | **deleted** |
+| 3 × sandbox sets (KB + LLM + agent) | the three validation runs | **all deleted** |
+| 2 × web calls | Proof C conversations | cannot be deleted — Retell documents no delete-call endpoint; the records remain in the dashboard |
+
+The account was verified clean afterwards: zero knowledge bases, and the only
+remaining agent is the pre-existing **Niche Drops Lead Intake Agent**, which was
+never touched.
+
+**One cleanup pass failed** with `provider_unreachable` on all three deletes
+when the operator's connection dropped. The script behaved correctly: it
+reported the failure, printed the resource ids and exited non-zero rather than
+claiming success. The resources were then deleted directly using those ids.
+
+## What remains unvalidated
+
+- **Proof B** — the dashboard path was never exercised.
+- **Inbound telephone calls** — no number was bought, imported or bound.
+- **The inbound webhook** — no webhook was configured, so per-call variable
+  delivery *for a phone call* is still unproven. Proof C delivered variables
+  through `create-web-call`, which is a different mechanism.
+- **Post-call analysis** — `post_call_analysis_data` was configured on the agent
+  but no analysis result was retrieved or inspected.
+- **Provider error and rate-limit shapes** beyond the 400/422/500 responses seen
+  during diagnosis.

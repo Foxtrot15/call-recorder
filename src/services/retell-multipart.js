@@ -122,12 +122,31 @@ function buildCreateKnowledgeBaseRequest({ knowledgeBaseName, texts = [], urls =
     return { ok: false, code: "kb_empty", message: "A knowledge base needs at least one text or URL." };
   }
 
+  // ── VERIFIED AGAINST THE LIVE PROVIDER, 2026-08-02 ────────────────
+  //
+  // `knowledge_base_texts` is ONE field containing a JSON-encoded array — not
+  // indexed sub-fields.
+  //
+  // M7B derived `knowledge_base_texts[0][title]` from the documented shape,
+  // which is the conventional way to express an array of objects in multipart.
+  // The live API rejects it (400/500). Sending one item per repeated field
+  // returns the decisive error:
+  //
+  //     {"status":"error","message":"not an array"}
+  //
+  // — so the server JSON-parses this field and requires an array. Encoding the
+  // whole array as a single JSON value returns 201.
+  //
+  // This is exactly the mismatch that fixture tests could never have found: a
+  // fake accepts whatever shape it is handed, and only the real endpoint knows
+  // it wants JSON here.
   const parts = [{ name: "knowledge_base_name", value: name }];
-  cleanTexts.forEach((t, i) => {
-    parts.push({ name: `knowledge_base_texts[${i}][title]`, value: t.title });
-    parts.push({ name: `knowledge_base_texts[${i}][text]`, value: t.text });
-  });
-  urls.forEach((u, i) => parts.push({ name: `knowledge_base_urls[${i}]`, value: String(u) }));
+  if (cleanTexts.length) {
+    parts.push({ name: "knowledge_base_texts", value: JSON.stringify(cleanTexts), contentType: "application/json" });
+  }
+  if (urls.length) {
+    parts.push({ name: "knowledge_base_urls", value: JSON.stringify(urls.map(String)), contentType: "application/json" });
+  }
   if (enableAutoRefresh) parts.push({ name: "enable_auto_refresh", value: "true" });
 
   const encoded = encodeMultipart(parts);
