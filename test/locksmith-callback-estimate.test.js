@@ -3,7 +3,7 @@
 // TWO FOUNDER FINDINGS FROM THE LIVE M7I CALL (call ended user_hangup, 185s):
 //
 //   1. Zeros did not sound natural. The agent read a callback number back as
-//      the DIGIT STRING "0467 745 066". That satisfied the old instruction
+//      the DIGIT STRING "0491 570 066". That satisfied the old instruction
 //      ("digit by digit, in groups") while handing pronunciation to the voice
 //      engine, which says zeros inconsistently. au-phone-speech.js was never in
 //      that path — no transfer number was spoken on that call at all.
@@ -60,7 +60,7 @@ describe("spoken numbers — consecutive zeros stay one word per digit", () => {
   });
 
   test("no repeated digit of any kind is compressed", () => {
-    for (const n of ["+61455123456", "+61400044400", "+61399991000", "+61467745066"]) {
+    for (const n of ["+61455123456", "+61400044400", "+61399991000", "+61491570066"]) {
       assert.equal(/\b(double|triple|quadruple)\b/i.test(speech.describeAuNumber(n).spoken), false, `${n} must not compress`);
     }
   });
@@ -69,7 +69,7 @@ describe("spoken numbers — consecutive zeros stay one word per digit", () => {
     // The invariant that one-word-per-digit exists to protect: a dropped digit
     // in a callback number means nobody gets called back.
     const WORD_TO_DIGIT = Object.fromEntries(Object.entries(speech.DIGIT_WORDS).map(([d, w]) => [w, d]));
-    for (const n of ["+61491570006", "+61400044400", "+61467745066", "+611300123456", "+611800111222"]) {
+    for (const n of ["+61491570006", "+61400044400", "+61491570066", "+611300123456", "+611800111222"]) {
       const d = speech.describeAuNumber(n);
       const recovered = d.spoken.split(/[\s,]+/).filter(Boolean).map((w) => WORD_TO_DIGIT[w]).join("");
       assert.equal(recovered, d.display.replace(/\s/g, ""), `${n} lost, gained or reordered a digit`);
@@ -113,7 +113,7 @@ describe("the prompt forbids the digit-string read-back that actually failed", (
   test("it demands WORDS and names the failing form", () => {
     const p = prompt();
     assert.match(p, /WRITE IT AS WORDS, never as digits/);
-    assert.match(p, /never "0467 745 066"/);
+    assert.match(p, /never "0491 570 066"/);
   });
 
   test("it teaches the SAME convention au-phone-speech produces", () => {
@@ -130,8 +130,8 @@ describe("the prompt forbids the digit-string read-back that actually failed", (
       assert.match(line, /\b(never|not)\b/, `"oh" appears without a prohibition: ${line}`);
     }
     // And the example in the prompt is exactly what the module would emit.
-    assert.equal(speech.describeAuNumber("+61467745066").spoken, "zero four six seven, seven four five, zero six six");
-    assert.match(p, /"zero four six seven, seven four five, zero six six"/);
+    assert.equal(speech.describeAuNumber("+61491570066").spoken, "zero four nine one, five seven zero, zero six six");
+    assert.match(p, /"zero four nine one, five seven zero, zero six six"/);
   });
 
   test("the capture rule points at it instead of contradicting it", () => {

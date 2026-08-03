@@ -153,7 +153,7 @@ function pick(raw, allowed) {
 //
 // The first live enquiry loop was caused by this, and the cause is ours:
 //
-//   callback_number: "zero four one two, eight one six, six seven nine"
+//   callback_number: "zero four nine one, five seven zero, one one one"
 //
 // The model passed the number as WORDS. `normaliseAuNumber` correctly refused
 // it — there is not a digit in it — so the tool reported the field unusable,

@@ -112,7 +112,7 @@ const GEOGRAPHIC_PREFIXES = Object.freeze(["02", "03", "07", "08"]);
 //   1. IT WAS NOT THE DEFECT. On the live M7I call the agent never spoke a
 //      transfer number at all — this function's output was never voiced. What
 //      the founder heard was the agent's own read-back of a CALLER-supplied
-//      number, emitted as the digit string "0467 745 066" and pronounced by the
+//      number, emitted as the digit string "0491 570 066" and pronounced by the
 //      voice engine. That is fixed in the prompt, not here. Changing production
 //      pronunciation on a path nobody heard is a guess wearing a fix's clothes.
 //

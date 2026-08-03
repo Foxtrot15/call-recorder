@@ -27,8 +27,11 @@
 // state transition and the agent's wording, without a message reaching a
 // handset.
 //
-// Even in live mode the recipient comes from the approved profile, which for
-// the sandbox is a reserved ACMA fictitious number that can never ring anyone.
+// ─── AND LIVE MODE STILL CANNOT TEXT WHOEVER IT LIKES (M7L) ─────────
+// In any non-production environment, live sending IGNORES the approved profile
+// and delivers only to an explicitly configured sandbox recipient. See
+// resolveLiveRecipient — that gate is why enabling live mode in the sandbox
+// cannot message a real locksmith even if a real profile is loaded.
 
 const DELIVERY_VERSION = "locksmith-sms-delivery-2026-08-03";
 
@@ -45,6 +48,64 @@ function resolveMode(env = process.env) {
 /** Australian E.164 only — the same shape the enquiry table stores. */
 function isSendableNumber(value) {
   return typeof value === "string" && /^\+[1-9][0-9]{7,14}$/.test(value);
+}
+
+// ── THE SANDBOX RECIPIENT GATE (M7L) ────────────────────────────────
+//
+// Until now the recipient came from the client's approved profile, and in a dry
+// run that was harmless because nothing was sent. Live mode changes what that
+// means entirely:
+//
+//   * the sandbox profile holds an ACMA FICTITIOUS number. Twilio cannot
+//     deliver to it, so a "live" send there proves nothing and still costs.
+//   * worse, nothing stopped a DEV deployment texting whatever a profile
+//     happened to contain. Load a real client's profile into this sandbox and
+//     the first live enquiry messages a real locksmith about a fictional job.
+//
+// So in any non-production environment, live sending ignores the profile
+// entirely and delivers ONLY to an explicitly configured sandbox recipient —
+// a number the founder controls and enters themselves. Unset, live sending
+// fails closed and nothing leaves.
+//
+// The ACMA range is refused OUTRIGHT in live mode. It exists to be unreachable;
+// asking a carrier to deliver to it is not a test, it is a billed no-op.
+const ACMA_FICTITIOUS = /^\+61491570(0(0[6-9]|[1-9]\d)|1[0-5]\d)$/;
+
+/**
+ * Who this deployment is allowed to text, and why not.
+ *
+ * Returns { ok, to, reason }. `to` is null whenever ok is false — there is no
+ * partial success and no fallback recipient.
+ */
+function resolveLiveRecipient({ env = process.env, requested = null } = {}) {
+  const environment = env.RETELL_ALLOWED_TAG || "dev";
+
+  // Production behaves as designed: the business's own configured recipients.
+  if (environment === "prod") {
+    if (!isSendableNumber(requested)) return { ok: false, to: null, reason: "no usable recipient on the approved profile" };
+    return { ok: true, to: requested, reason: null };
+  }
+
+  // Everything else is a sandbox, and a sandbox may only ever text one number.
+  const raw = env.LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT;
+  if (!raw) {
+    return {
+      ok: false,
+      to: null,
+      reason: "LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT is not set — a non-production deployment may only send to an explicitly configured sandbox recipient",
+    };
+  }
+
+  // Normalised through the ONE canonical gate, not a second idea of dialable.
+  const { normaliseAuNumber } = require("./locksmith-profile");
+  const canonical = normaliseAuNumber(String(raw).trim());
+  if (!canonical) return { ok: false, to: null, reason: "LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT is not a dialable Australian number" };
+
+  if (ACMA_FICTITIOUS.test(canonical)) {
+    return { ok: false, to: null, reason: "the configured sandbox recipient is in the ACMA fictitious range and can never receive a message" };
+  }
+
+  return { ok: true, to: canonical, reason: null };
 }
 
 /**
@@ -96,6 +157,18 @@ function createSmsDelivery(deps = {}) {
     }
 
     // ── LIVE ──────────────────────────────────────────────────────────
+    //
+    // The recipient gate runs FIRST, before credentials or the client, so a
+    // misconfigured destination can never reach the point of being sent.
+    const recipient = resolveLiveRecipient({ env, requested: to });
+    if (!recipient.ok) {
+      logger.error(`locksmith.sms.recipient_refused reason=${recipient.reason}`);
+      return { ok: false, provider: "twilio_sms", reference: null, code: "recipient_not_permitted" };
+    }
+    // In a sandbox this is the configured founder number, NOT what the profile
+    // asked for. Logged as a shape only; the value never appears.
+    const destination = recipient.to;
+
     const from = env.TWILIO_NUMBER || env.TWILIO_PHONE_NUMBER || null;
     if (!from) {
       logger.error("locksmith.sms.no_sender");
@@ -110,8 +183,8 @@ function createSmsDelivery(deps = {}) {
     }
 
     try {
-      const message = await twilio.client.messages.create({ from, to, body });
-      logger.log(`locksmith.sms.sent enquiry=${enquiryId || "-"} to=•••${String(to).slice(-3)} sid=${message && message.sid ? "present" : "missing"}`);
+      const message = await twilio.client.messages.create({ from, to: destination, body });
+      logger.log(`locksmith.sms.sent enquiry=${enquiryId || "-"} to=•••${String(destination).slice(-3)} sid=${message && message.sid ? "present" : "missing"}`);
       // simulated:false stated explicitly rather than omitted. This is the ONLY
       // place in the codebase that may assert a real message exists, and it
       // should be greppable as such.
@@ -126,4 +199,4 @@ function createSmsDelivery(deps = {}) {
   };
 }
 
-module.exports = { DELIVERY_VERSION, MODES, resolveMode, isSendableNumber, createSmsDelivery };
+module.exports = { DELIVERY_VERSION, MODES, ACMA_FICTITIOUS, resolveMode, isSendableNumber, resolveLiveRecipient, createSmsDelivery };

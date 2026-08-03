@@ -19,6 +19,14 @@ const { buildSandboxProfile, SANDBOX_CLIENT_ID } = require("../src/services/lock
 
 const SILENT = { log() {}, error() {} };
 
+// A PERMITTED sandbox recipient. Deliberately NOT in the ACMA fictitious range,
+// because the M7L gate refuses that range outright — so a fixture that used one
+// would test the refusal rather than the success. 0400 111 222 is an obvious
+// patterned placeholder and is never dialled: every test here injects a fake
+// Twilio client.
+const SANDBOX_RECIPIENT = "0400 111 222";
+const PERMITTED_E164 = "+61400111222";
+
 const ENQUIRY = Object.freeze({
   id: "enq_1",
   caller_name: "Fixture Caller",
@@ -391,7 +399,7 @@ describe("delivery is a dry run unless \"live\" is asked for exactly", () => {
 
   test("live mode without Twilio credentials refuses rather than throwing", async () => {
     const deliver = sms.createSmsDelivery({
-      env: { LOCKSMITH_NOTIFY_MODE: "live", TWILIO_NUMBER: "+61400000000" },
+      env: { LOCKSMITH_NOTIFY_MODE: "live", TWILIO_NUMBER: "+61400000000", LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT },
       logger: SILENT,
       getTwilioClient: () => ({ ok: false, client: null, reason: "not configured" }),
     });
@@ -401,7 +409,7 @@ describe("delivery is a dry run unless \"live\" is asked for exactly", () => {
   });
 
   test("live mode with no sender number refuses", async () => {
-    const deliver = sms.createSmsDelivery({ env: { LOCKSMITH_NOTIFY_MODE: "live" }, logger: SILENT, getTwilioClient: () => ({ ok: true, client: {} }) });
+    const deliver = sms.createSmsDelivery({ env: { LOCKSMITH_NOTIFY_MODE: "live", LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT }, logger: SILENT, getTwilioClient: () => ({ ok: true, client: {} }) });
     assert.equal((await deliver({ to: "+61491570006", body: "t" })).code, "no_sender_configured");
   });
 
@@ -414,7 +422,7 @@ describe("delivery is a dry run unless \"live\" is asked for exactly", () => {
 
   test("a Twilio throw becomes a coded failure, and the error text is not propagated", async () => {
     const deliver = sms.createSmsDelivery({
-      env: { LOCKSMITH_NOTIFY_MODE: "live", TWILIO_NUMBER: "+61400000000" },
+      env: { LOCKSMITH_NOTIFY_MODE: "live", TWILIO_NUMBER: "+61400000000", LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT },
       logger: SILENT,
       getTwilioClient: () => ({ ok: true, client: { messages: { create: async () => { const e = new Error("to=+61491570006 is unreachable"); e.code = 21211; throw e; } } } }),
     });
@@ -426,6 +434,115 @@ describe("delivery is a dry run unless \"live\" is asked for exactly", () => {
 });
 
 // ── Configuration ───────────────────────────────────────────────────
+
+// ── M7L: a sandbox may only ever text one number ────────────────────
+//
+// Before this gate, live mode in the sandbox would have texted whatever the
+// approved profile held — the ACMA fictitious number (undeliverable), or a REAL
+// LOCKSMITH if a real profile were ever loaded here. Live sending in any
+// non-production environment now ignores the profile entirely.
+describe("live sending in a sandbox is restricted to one configured recipient", () => {
+  const LIVE = { LOCKSMITH_NOTIFY_MODE: "live", TWILIO_NUMBER: "+61400000000", RETELL_ALLOWED_TAG: "dev" };
+
+  test("with no configured recipient, nothing may be sent", () => {
+    const r = sms.resolveLiveRecipient({ env: LIVE, requested: PERMITTED_E164 });
+    assert.equal(r.ok, false);
+    assert.equal(r.to, null, "there is no fallback recipient");
+    assert.match(r.reason, /LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT is not set/);
+  });
+
+  test("the profile's recipient is IGNORED in a sandbox", () => {
+    // The profile asks for one number; the deployment is allowed another. The
+    // deployment wins, because it is the thing that knows it is a sandbox.
+    const r = sms.resolveLiveRecipient({
+      env: { ...LIVE, LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT },
+      requested: "+61491570006",
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.to, PERMITTED_E164);
+    assert.notEqual(r.to, "+61491570006", "a profile recipient must never be texted from a sandbox");
+  });
+
+  test("an ACMA fictitious sandbox recipient is refused outright", () => {
+    for (const n of ["+61491570006", "0491 570 006", "+61491570156"]) {
+      const r = sms.resolveLiveRecipient({ env: { ...LIVE, LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: n } });
+      assert.equal(r.ok, false, `${n} can never receive a message`);
+      assert.match(r.reason, /ACMA fictitious range/);
+    }
+  });
+
+  test("an undialable configured recipient is refused", () => {
+    for (const n of ["12345", "not a number", "+1 415 555 0100"]) {
+      assert.equal(sms.resolveLiveRecipient({ env: { ...LIVE, LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: n } }).ok, false, `${n} must be refused`);
+    }
+  });
+
+  test("production is unaffected — it still uses the profile's recipient", () => {
+    const r = sms.resolveLiveRecipient({ env: { ...LIVE, RETELL_ALLOWED_TAG: "prod" }, requested: PERMITTED_E164 });
+    assert.equal(r.ok, true);
+    assert.equal(r.to, PERMITTED_E164);
+  });
+
+  test("the adapter refuses to send when the gate refuses", async () => {
+    let twilioRequests = 0;
+    const deliver = sms.createSmsDelivery({
+      env: LIVE, // live, but no sandbox recipient configured
+      logger: SILENT,
+      getTwilioClient: () => ({ ok: true, client: { messages: { create: async () => { twilioRequests += 1; return { sid: "X" }; } } } }),
+    });
+    const r = await deliver({ to: "+61491570006", body: "x", enquiryId: "e" });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "recipient_not_permitted");
+    assert.equal(twilioRequests, 0, "no provider request may be made");
+  });
+
+  test("the adapter sends to the CONFIGURED number, not the requested one", async () => {
+    let sentTo = null;
+    const deliver = sms.createSmsDelivery({
+      env: { ...LIVE, LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT },
+      logger: SILENT,
+      getTwilioClient: () => ({ ok: true, client: { messages: { create: async (m) => { sentTo = m.to; return { sid: "SM1" }; } } } }),
+    });
+    const r = await deliver({ to: "+61491570006", body: "x", enquiryId: "e" });
+    assert.equal(r.ok, true);
+    assert.equal(r.simulated, false, "a real send is not a simulation");
+    assert.equal(sentTo, PERMITTED_E164);
+    assert.notEqual(sentTo, "+61491570006");
+  });
+
+  test("dry-run semantics are completely unchanged by this gate", async () => {
+    let twilioAsked = false;
+    const deliver = sms.createSmsDelivery({
+      env: { LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT }, // no live mode
+      logger: SILENT,
+      getTwilioClient: () => { twilioAsked = true; return { ok: false }; },
+    });
+    const r = await deliver({ to: "+61491570006", body: "x", enquiryId: "e" });
+    assert.equal(r.simulated, true);
+    assert.equal(r.provider, "dry_run");
+    assert.equal(twilioAsked, false, "a dry run still contacts nothing");
+  });
+
+  test("preflight reports the missing recipient BEFORE live mode is armed", () => {
+    const a = cfgN.assessNotificationConfig({
+      LOCKSMITH_NOTIFICATIONS_ENABLED: "true", LOCKSMITH_NOTIFY_MODE: "live",
+      TWILIO_ACCOUNT_SID: "AC", TWILIO_AUTH_TOKEN: "t", TWILIO_NUMBER: "+61400000000",
+      RETELL_ALLOWED_TAG: "dev",
+    });
+    assert.equal(a.ok, false);
+    assert.match(a.blockers.join(" "), /LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT is not set/);
+  });
+
+  test("preflight passes once everything is configured", () => {
+    const a = cfgN.assessNotificationConfig({
+      LOCKSMITH_NOTIFICATIONS_ENABLED: "true", LOCKSMITH_NOTIFY_MODE: "live",
+      TWILIO_ACCOUNT_SID: "AC", TWILIO_AUTH_TOKEN: "t", TWILIO_NUMBER: "+61400000000",
+      LOCKSMITH_NOTIFY_SANDBOX_RECIPIENT: SANDBOX_RECIPIENT, RETELL_ALLOWED_TAG: "dev",
+    });
+    assert.deepEqual(a.blockers, []);
+    assert.equal(a.ok, true);
+  });
+});
 
 describe("notifications are gated and dormant by default", () => {
   test("off unless LOCKSMITH_NOTIFICATIONS_ENABLED is exactly \"true\"", () => {

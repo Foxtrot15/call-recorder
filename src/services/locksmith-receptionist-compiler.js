@@ -238,8 +238,8 @@ function buildToolContracts() {
         type: "object",
         properties: {
           caller_name: { type: "string" },
-          // M7K-LV2: the live loop passed "zero four one two, eight one six,
-          // six seven nine" — the number as WORDS, because M7I-C2 teaches the
+          // M7K-LV2: the live loop passed the caller's number as WORDS rather
+          // than digits, because M7I-C2 teaches the
           // agent to SPEAK numbers that way and nothing said a tool argument is
           // different. The schema now says it explicitly.
           callback_number: {
@@ -249,7 +249,7 @@ function buildToolContracts() {
             // because the agent may read it out. The local form carries the
             // point ("digits, not words") without that risk.
             description:
-              "The caller's phone number in DIGITS, exactly as they would write it — e.g. \"0412 816 679\". Never spell it out in words here: you SAY it aloud as words, but you SEND it as digits.",
+              "The caller's phone number in DIGITS, exactly as they would write it — e.g. \"0491 570 111\". Never spell it out in words here: you SAY it aloud as words, but you SEND it as digits.",
           },
           suburb: { type: "string" },
           street_address: { type: "string" },
@@ -824,7 +824,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         // the retry. Each of those gets its own rule.
         "IT IS NOT A STATUS CHECK. Never call it to find out whether something was recorded or whether the locksmith was told. You already have that answer in the last result you received — use it. Saying \"let me check\" and calling this again is wrong.",
         "Once you have a result, answer any question about what was recorded, saved or notified FROM THAT RESULT. Do not re-run anything to find out.",
-        "When the number in the arguments is a phone number, write it as DIGITS — \"0412 816 679\". Say it aloud as words, but send digits. These are different things and only the spoken one uses words.",
+        "When the number in the arguments is a phone number, write it as DIGITS — \"0491 570 111\". Say it aloud as words, but send digits. These are different things and only the spoken one uses words.",
         "If it comes back not recorded, look at \"missing\" and \"invalid\". Ask ONLY for what is listed. \"missing\" means they never gave it. \"invalid\" means they DID give it and you could not use it — so say you did not catch it properly and ask them to repeat that one field, nothing else.",
         "NEVER start the whole enquiry again because one field failed. Do not re-ask for the name, suburb or address you already have.",
         "TWO ATTEMPTS AT MOST for the same job. If the second fails, stop calling the function, tell the caller plainly that you cannot record it, and suggest they ring the locksmith directly. Do not try a third time.",
@@ -887,7 +887,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       "If you do not have a spoken version of a number you need to say, do not guess and do not read the raw value: ask the caller to tell you the number, or read back what they said to you.",
       // ── WORDS, NEVER DIGITS (M7I-C) ────────────────────────────────
       // The live M7I call read a callback number back as the digit string
-      // "0467 745 066". That satisfied the old instruction ("digit by digit, in
+      // "0491 570 066". That satisfied the old instruction ("digit by digit, in
       // groups") to the letter while defeating its purpose: a digit string hands
       // pronunciation to the voice engine, which decides for itself whether 0 is
       // "oh" or "zero" and how much space to leave. The zeros came out unclear.
@@ -895,7 +895,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
       // Spelling the digits as WORDS is the only way this prompt can determine
       // what a caller actually hears, so it is now stated as a prohibition on
       // the failing form rather than a description of the desired one.
-      "When you say a phone number back, WRITE IT AS WORDS, never as digits. Write \"zero four six seven, seven four five, zero six six\" — never \"0467 745 066\". Digits let the voice decide how to say them, and it says zeros inconsistently.",
+      "When you say a phone number back, WRITE IT AS WORDS, never as digits. Write \"zero four nine one, five seven zero, zero six six\" — never \"0491 570 066\". Digits let the voice decide how to say them, and it says zeros inconsistently.",
       // ── "zero", not "oh" (founder decision, M7I-C2) ────────────────
       // Deliberately against casual Australian idiom. "Oh" is one unstressed
       // vowel: easiest syllable to lose to line noise, collides with the filler

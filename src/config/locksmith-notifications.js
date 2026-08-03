@@ -66,6 +66,16 @@ function assessNotificationConfig(env = process.env) {
     if (!env.TWILIO_ACCOUNT_SID) blockers.push("TWILIO_ACCOUNT_SID is not set (required for live sending)");
     if (!env.TWILIO_AUTH_TOKEN) blockers.push("TWILIO_AUTH_TOKEN is not set (required for live sending)");
     if (!env.TWILIO_NUMBER && !env.TWILIO_PHONE_NUMBER) blockers.push("no Twilio sender number is set (TWILIO_NUMBER)");
+
+    // ── The sandbox recipient gate (M7L) ────────────────────────────
+    // Reported HERE, as a preflight blocker, so an operator learns about a
+    // missing or unusable recipient before arming live mode — rather than at
+    // the moment a caller is on the line and a message silently does not go.
+    if (config.environment !== "prod") {
+      const { resolveLiveRecipient } = require("../services/locksmith-sms-delivery");
+      const recipient = resolveLiveRecipient({ env, requested: null });
+      if (!recipient.ok) blockers.push(recipient.reason);
+    }
   }
   return { ok: blockers.length === 0, config, blockers };
 }
