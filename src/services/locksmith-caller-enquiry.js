@@ -108,13 +108,13 @@ const OUTCOMES = Object.freeze({
     code: "unavailable",
     saved: false,
     status: 200,
-    agentMessage: "I could not save that just now. Tell the caller honestly that you could not record it and that they should ring the locksmith directly.",
+    agentMessage: "I could not save that just now. Tell the caller honestly that you could not record it. Offer the business's public number ONLY if you have one — see the rules on giving out a contact number.",
   },
   failed: {
     code: "failed",
     saved: false,
     status: 200,
-    agentMessage: "I could not save that just now. Tell the caller honestly that you could not record it and that they should ring the locksmith directly.",
+    agentMessage: "I could not save that just now. Tell the caller honestly that you could not record it. Offer the business's public number ONLY if you have one — see the rules on giving out a contact number.",
   },
 });
 

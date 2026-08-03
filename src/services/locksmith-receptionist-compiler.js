@@ -507,6 +507,29 @@ function buildCallbackEstimateLines({ hours, collect }) {
 }
 
 /**
+ * The business's PUBLIC contact number, in speech-ready form (M7L-A).
+ *
+ * Reads `identity.businessPhone` and NOTHING else. It deliberately cannot fall
+ * back to a transfer number: that value is an internal routing destination —
+ * frequently a personal mobile — and inferring a public number from it is how a
+ * locksmith's private phone ends up being read to strangers.
+ *
+ * Returns { hasNumber, spoken }. `spoken` is derived from the canonical E.164 at
+ * compile time by the same module transfer numbers use, so the model receives a
+ * reading and never the raw international form.
+ */
+function describePublicContact(businessPhone) {
+  if (!businessPhone) return { hasNumber: false, spoken: null };
+  // Lazily required: the compiler must stay loadable on a bare checkout.
+  const { describeAuNumber } = require("./au-phone-speech");
+  const described = describeAuNumber(businessPhone, { purpose: "public_contact" });
+  // A number we cannot read aloud is one we must not offer. Refusing is safer
+  // than handing the model an unreadable value and hoping.
+  if (!described.ok || !described.spoken) return { hasNumber: false, spoken: null };
+  return { hasNumber: true, spoken: described.spoken };
+}
+
+/**
  * Stage one: profile → provider-neutral spec. This is where every judgement is
  * made; nothing below stage one decides anything.
  */
@@ -661,6 +684,41 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     ].filter(Boolean),
   });
 
+  // ── PUBLIC NUMBER vs INTERNAL DESTINATION (M7L-A) ───────────────────
+  // A live call hit a notification failure, told the caller to "contact the
+  // locksmith directly", and then had no number to give when asked. Two
+  // different numbers exist on a profile and they are not interchangeable:
+  //
+  //   identity.businessPhone   the business's PUBLIC number. Already in the
+  //                            schema, already validated, already shown in the
+  //                            review UI — and never compiled until now.
+  //   transfer.primaryNumber   an INTERNAL routing destination. It may be a
+  //                            personal mobile, an after-hours phone, whoever
+  //                            is on call tonight. It is never spoken, and it
+  //                            is never a substitute for a public number.
+  //
+  // Only the SPOKEN form reaches the model, derived here from the canonical
+  // E.164 exactly as transfer numbers are, so no raw E.164 enters context.
+  const publicContact = describePublicContact(identity.businessPhone);
+  sections.push({
+    id: "public_contact",
+    title: "Giving out a contact number",
+    lines: publicContact.hasNumber
+      ? [
+          `The business's public number is: ${publicContact.spoken}.`,
+          "You may give that number to a caller who asks how to reach the business, and you may give it if you could not record or send something.",
+          "Read it exactly as written above, word for word. Do not reformat it and do not convert it.",
+          "That is the ONLY number you may ever say out loud.",
+          "Never give out a number you were given for transferring a call. Those reach whoever is on call, not the business, and they are not public.",
+        ]
+      : [
+          "This business has NO public contact number configured, so you do not have one to give.",
+          "If a caller asks for a number, say plainly that you do not have a contact number you are authorised to give out. Do not apologise at length, and do not guess.",
+          "NEVER offer the number you would transfer a call to. That is an internal routing destination — often somebody's personal mobile — and it is not a public number.",
+          "Do not tell a caller to \"ring the locksmith directly\" when you cannot tell them how. Saying it without a number leaves them worse off than saying nothing.",
+        ],
+  });
+
   sections.push({
     id: "hours",
     title: "Hours",
@@ -813,7 +871,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "Its result tells you what happened. When \"saved\" is true, the job is recorded and you may say so. When \"saved\" is false, it is NOT recorded and you must not say it is.",
         "The result also carries a \"message\". Say that, in your own voice. Do not invent your own wording for a failure, and do not soften it.",
         "Never say you have recorded, logged, sent or passed on a job before you have called the function and seen its result. Not \"I'll get that down\" as though it is done, not \"leave it with me\".",
-        "If it comes back not saved, tell the caller plainly that you could not record it and that they should ring the locksmith directly. Do not promise to try later — you cannot.",
+        "If it comes back not saved, tell the caller plainly that you could not record it. Do not promise to try later — you cannot. Offer the public number only if you actually have one.",
         "If the result says the job is already recorded, say so briefly and move on. Do not read the whole thing back again.",
         "Call it ONCE for one job. If the caller corrects a detail afterwards, that is the same job, not a second one.",
         // ── THE LIVE LOOP (M7K-LV2) ────────────────────────────────
@@ -827,7 +885,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "When the number in the arguments is a phone number, write it as DIGITS — \"0491 570 111\". Say it aloud as words, but send digits. These are different things and only the spoken one uses words.",
         "If it comes back not recorded, look at \"missing\" and \"invalid\". Ask ONLY for what is listed. \"missing\" means they never gave it. \"invalid\" means they DID give it and you could not use it — so say you did not catch it properly and ask them to repeat that one field, nothing else.",
         "NEVER start the whole enquiry again because one field failed. Do not re-ask for the name, suburb or address you already have.",
-        "TWO ATTEMPTS AT MOST for the same job. If the second fails, stop calling the function, tell the caller plainly that you cannot record it, and suggest they ring the locksmith directly. Do not try a third time.",
+        "TWO ATTEMPTS AT MOST for the same job. If the second fails, stop calling the function and tell the caller plainly that you cannot record it. Do not try a third time.",
         "Do not invent reasons for a failure, and do not coach the caller on pronunciation. You do not know why it failed, and telling somebody to say \"zero\" instead of \"oh\" when they already said it correctly wastes their time and is not true.",
         // ── RECORDED IS NOT NOTIFIED (M7J-LV) ──────────────────────
         // The first live call answered "has the locksmith been notified?" with
@@ -846,7 +904,7 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "5. ACKNOWLEDGED — the locksmith has read it and is coming. Nothing tells you this, ever. Never say or imply it, whatever the others say.",
         "So: never say the locksmith has been notified, told, alerted, messaged, sent the details, or that they \"will get them\", \"will be notified\" or \"will see it\" — unless \"notified\" is true in the result you just received.",
         "If \"notified\" is false but \"saved\" is true, the honest answer is that their details are recorded and you cannot confirm the locksmith has been contacted.",
-        "If the result says the message could not get through, say so plainly and suggest they ring the locksmith directly. Never dress that up.",
+        "If the result says the message could not get through, say so plainly. Never dress that up. You may then give the public number if there is one; if there is not, say you do not have one to give.",
         "Even when \"notified\" is true, that means a message was sent — NOT that the locksmith has read it, is available, or is on the way. Never promise any of those.",
       ],
     });
@@ -973,6 +1031,10 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     // it has to survive compilation. Only the decision travels — no wording, no
     // retention text, nothing that would put policy prose into a payload.
     privacy: { callsMayBeRecorded: (profile.privacy || {}).callsMayBeRecorded === true },
+    // M7L-A. Visible on the spec so a reviewer can see at a glance whether this
+    // client has a number the agent may say out loud. The E.164 is NOT carried —
+    // only whether one exists and how it is read.
+    publicContact: Object.freeze({ hasNumber: publicContact.hasNumber, spoken: publicContact.spoken }),
     forbiddenPromises,
     dynamicVariables: buildDynamicVariables({ profile, profileVersion, clientId }),
     // ── TOOL-FREE MODE (M7I-B) ──────────────────────────────────────

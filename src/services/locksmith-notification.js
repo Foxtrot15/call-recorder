@@ -19,8 +19,8 @@
 // after the tool's own success message promised something nothing performed.
 //
 // ─── NO RETRIES, ON PURPOSE ─────────────────────────────────────────
-// One attempt. A failure is recorded and reported honestly, and the caller is
-// told to ring the locksmith directly. Retrying inside a live phone call spends
+// One attempt. A failure is recorded and reported honestly. Retrying inside a
+// live phone call spends
 // the caller's patience on our plumbing, and a retry loop behind a 10-second
 // tool timeout is a retry storm with an audience. The row keeps its attempt
 // count and failure code so a later milestone can sweep unsent enquiries
@@ -92,7 +92,7 @@ const OUTCOMES = Object.freeze({
     attempted: true,
     delivered: false,
     agentMessage:
-      "Their details are recorded, but I could not get a message through to the locksmith. Tell the caller that plainly, and that ringing the locksmith directly is the surer option.",
+      "Their details are recorded, but I could not get a message through to the locksmith. Tell the caller that plainly. Offer the business's public number ONLY if you have one — see the rules on giving out a contact number.",
   },
   noRecipient: {
     code: "no_recipient",
