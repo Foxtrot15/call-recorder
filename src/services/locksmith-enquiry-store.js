@@ -50,7 +50,13 @@ function pickWritable(row) {
  * truthful "could not save" for the agent.
  */
 function createEnquiryStore(deps = {}) {
-  const getClient = deps.getClient || (() => require("./supabase").serviceClient());
+  // services/supabase.js exports the service-role client ITSELF, not a factory.
+  // An earlier version invoked a non-existent factory method on that export —
+  // a function defined nowhere in this codebase. It failed safe (captureEnquiry
+  // catches, the agent says it could not save) but it would have failed EVERY
+  // time, silently, on a live call. Caught by the M7J-LV pre-call route proof
+  // before any caller met it; a test now pins the export shape.
+  const getClient = deps.getClient || (() => require("./supabase"));
 
   return async function storeEnquiry({ row }) {
     const supabase = getClient();
