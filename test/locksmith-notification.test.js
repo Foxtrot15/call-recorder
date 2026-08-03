@@ -89,6 +89,24 @@ describe("recipients come from the approved profile, never the request", () => {
     assert.deepEqual(notify.resolveRecipients(p), ["+61491570006"]);
   });
 
+  test("a profile that could not be LOADED stays pending, not not_required", async () => {
+    // M7K-LV. The first live simulation marked a row `not_required` — terminal,
+    // "this never needed delivering" — because the profile load returned null.
+    // A load failure is an unknown; only a profile we actually read, which
+    // configures nobody, may close an enquiry.
+    for (const missing of [null, undefined, "not a profile"]) {
+      const store = fakeStore();
+      const r = await notify.notifyLocksmith({
+        enquiry: ENQUIRY, profile: missing, config: CONFIG,
+        deps: { logger: SILENT, deliver: deliverOk, ...store },
+      });
+      assert.equal(r.outcome, "unavailable", `${String(missing)} must not be treated as "nobody to tell"`);
+      assert.equal(r.state, "pending", "it must remain deliverable later");
+      assert.equal(store.rows.enq_1.state, "pending", "nothing may be written");
+      assert.equal(r.delivered, false);
+    }
+  });
+
   test("no configured recipient means no attempt and no claim of one", async () => {
     const p = buildSandboxProfile();
     p.notifications.sms = [];

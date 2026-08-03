@@ -233,6 +233,21 @@ async function notifyLocksmith({ enquiry, profile, config = {}, deps = {} } = {}
   if (!config.enabled) return result(OUTCOMES.disabled);
   if (!enquiry || !enquiry.id) return result(OUTCOMES.unavailable);
 
+  // ── "NO PROFILE" IS NOT "NOBODY TO TELL" (M7K-LV) ─────────────────
+  // resolveRecipients(null) returns [], which read identically to a profile
+  // that genuinely configures no recipients. The first live simulation ran
+  // straight into that: the row was marked `not_required` — a TERMINAL state
+  // that tells every future sweep this enquiry never needed delivering —
+  // because a profile load had returned nothing.
+  //
+  // A load failure is an unknown, and an unknown must stay `pending` so it can
+  // be delivered once the problem is fixed. Only a profile we actually READ,
+  // which configures nobody, may close the enquiry.
+  if (!profile || typeof profile !== "object") {
+    logger.error(`locksmith.notify.no_profile enquiry=${enquiry.id} — leaving pending, NOT not_required`);
+    return result(OUTCOMES.unavailable);
+  }
+
   const recipients = resolveRecipients(profile, { urgency: enquiry.urgency });
   if (!recipients.length) {
     // Nobody to tell. Recorded as not_required so a sweep does not chase it
