@@ -489,12 +489,34 @@ describe("the prompt permits the claim only on notified:true", () => {
     return rc.toRetellPayload({ compiled, config }).responseEngine.general_prompt;
   };
 
-  test("all FOUR states are named", () => {
+  test("all FIVE states are named, and the stated count matches the list", () => {
     const p = prompt();
     assert.match(p, /1\. RECORDED/);
     assert.match(p, /2\. NOT YET PASSED ON/);
-    assert.match(p, /3\. NOTIFIED/);
-    assert.match(p, /4\. ACKNOWLEDGED/);
+    assert.match(p, /3\. SIMULATED/);
+    assert.match(p, /4\. NOTIFIED/);
+    assert.match(p, /5\. ACKNOWLEDGED/);
+
+    // The count was wrong twice (M7J-LV said THREE, M7K added a fourth without
+    // updating it). Checked rather than counted by hand ever again.
+    // Scoped to THIS section: the service-area block has its own numbered
+    // list, and counting the whole prompt caught those too.
+    const lines = p.split("\n");
+    const start = lines.findIndex((l) => l.includes("## Recording the job"));
+    const end = lines.findIndex((l, i) => i > start && l.startsWith("## "));
+    const section = lines.slice(start, end).join("\n");
+
+    const WORDS = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6 };
+    const stated = section.match(/\b(THREE|FOUR|FIVE|SIX) DIFFERENT THINGS\b/);
+    assert.ok(stated, "the section must state how many states there are");
+    const listed = [...section.matchAll(/^- (\d)\. [A-Z ]+ —/gm)].length;
+    assert.equal(WORDS[stated[1]], listed, `prompt says ${stated[1]} but lists ${listed}`);
+  });
+
+  test("SIMULATED is explained as producing no message", () => {
+    const p = prompt();
+    assert.match(p, /the sending step runs but no message is created/);
+    assert.match(p, /Treat it exactly like NOT YET PASSED ON/);
   });
 
   test("the claim is gated on the result field", () => {

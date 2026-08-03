@@ -805,11 +805,15 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         // the tool's own success message and this prompt had told it so. Three
         // states were being spoken as one, so they are now named separately and
         // the third is gated on a result that does not yet exist.
-        "THREE DIFFERENT THINGS, and you must never merge them:",
-        "1. RECORDED — the enquiry function returned \"saved\": true. This is the only one you can currently confirm.",
-        "2. NOT YET PASSED ON — the result also carries \"notified\". While it is false, NOBODY has been told. No message, no alert, no call to the locksmith has happened.",
-        "3. NOTIFIED — a message actually reached the locksmith. The result says \"notified\": true ONLY when that happened. Say it only then.",
-        "4. ACKNOWLEDGED — the locksmith has read it and is coming. Nothing tells you this, ever. Never say or imply it, whatever the other three say.",
+        // The count was wrong: M7J-LV wrote "THREE" and M7K added a fourth
+        // without updating it. M7K-A adds SIMULATED, so it is stated once and
+        // checked by a test rather than counted by hand again.
+        "FIVE DIFFERENT THINGS, and you must never merge them:",
+        "1. RECORDED — the enquiry function returned \"saved\": true. The job is written down.",
+        "2. NOT YET PASSED ON — the result carries \"notified\". While it is false, NOBODY has been told. No message, no alert, no call to the locksmith has happened.",
+        "3. SIMULATED — on a test line the sending step runs but no message is created. The result still says \"notified\": false, and it is false because nothing was sent. Treat it exactly like NOT YET PASSED ON: say the details are recorded and that no message went to a locksmith.",
+        "4. NOTIFIED — a message actually reached the locksmith. The result says \"notified\": true ONLY when that happened. Say it only then.",
+        "5. ACKNOWLEDGED — the locksmith has read it and is coming. Nothing tells you this, ever. Never say or imply it, whatever the others say.",
         "So: never say the locksmith has been notified, told, alerted, messaged, sent the details, or that they \"will get them\", \"will be notified\" or \"will see it\" — unless \"notified\" is true in the result you just received.",
         "If \"notified\" is false but \"saved\" is true, the honest answer is that their details are recorded and you cannot confirm the locksmith has been contacted.",
         "If the result says the message could not get through, say so plainly and suggest they ring the locksmith directly. Never dress that up.",
