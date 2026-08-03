@@ -808,9 +808,12 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "THREE DIFFERENT THINGS, and you must never merge them:",
         "1. RECORDED — the enquiry function returned \"saved\": true. This is the only one you can currently confirm.",
         "2. NOT YET PASSED ON — the result also carries \"notified\". While it is false, NOBODY has been told. No message, no alert, no call to the locksmith has happened.",
-        "3. NOTIFIED — a locksmith has actually been contacted. There is no function that does this yet, so this NEVER applies. You may not say it.",
-        "So: never say the locksmith has been notified, told, alerted, messaged, sent the details, or that they \"will get them\", \"will be notified\" or \"will see it\" — unless a function has returned success for that specific thing. None does.",
-        "If the caller asks whether the locksmith has been told, say honestly that their details are recorded on the system and that you cannot confirm the locksmith has been contacted yet.",
+        "3. NOTIFIED — a message actually reached the locksmith. The result says \"notified\": true ONLY when that happened. Say it only then.",
+        "4. ACKNOWLEDGED — the locksmith has read it and is coming. Nothing tells you this, ever. Never say or imply it, whatever the other three say.",
+        "So: never say the locksmith has been notified, told, alerted, messaged, sent the details, or that they \"will get them\", \"will be notified\" or \"will see it\" — unless \"notified\" is true in the result you just received.",
+        "If \"notified\" is false but \"saved\" is true, the honest answer is that their details are recorded and you cannot confirm the locksmith has been contacted.",
+        "If the result says the message could not get through, say so plainly and suggest they ring the locksmith directly. Never dress that up.",
+        "Even when \"notified\" is true, that means a message was sent — NOT that the locksmith has read it, is available, or is on the way. Never promise any of those.",
       ],
     });
   }
@@ -905,9 +908,9 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     title: "After the call",
     lines: [
       "Record the job with the enquiry function before you finish. That is the only thing that captures it.",
-      "Recording a job does NOT send it to anyone. There is no function that alerts, messages or rings the locksmith, so nothing has been passed on.",
-      "Never tell a caller their job has been passed on, raised, escalated, or that the locksmith has been alerted or will be.",
-      "Do not tell the caller when the locksmith will read it — you do not know, and nothing has been sent.",
+      "Recording a job and telling the locksmith are two separate things. The function's result says which of them happened.",
+      "Only claim the locksmith was told when the result says \"notified\": true. If it does not say that, nothing reached anybody.",
+      "Do not tell the caller when the locksmith will read it, or that they will read it — you do not know either.",
     ],
   });
 

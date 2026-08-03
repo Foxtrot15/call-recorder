@@ -125,4 +125,97 @@ function createToolAudit(deps = {}) {
   };
 }
 
-module.exports = { STORE_VERSION, WRITABLE, pickWritable, createEnquiryStore, createToolAudit };
+// ── Notification state transitions (M7K) ────────────────────────────
+//
+// THE CLAIM IS THE GUARD. `claimForNotification` moves pending -> sending in
+// ONE conditional statement and reports how many rows it changed. Exactly one
+// caller can win, so exactly one caller sends.
+//
+// A select-then-update would leave a window in which two concurrent tool calls
+// both read 'pending' and both send — and the symptom is the locksmith getting
+// the same 3am job twice, which nobody notices until they are annoyed.
+function createNotificationStore(deps = {}) {
+  const getClient = deps.getClient || (() => require("./supabase"));
+  const now = deps.now || (() => new Date().toISOString());
+
+  async function claimForNotification({ enquiryId }) {
+    const supabase = getClient();
+    // .eq("notification_state","pending") is the whole guard: the row must
+    // still be pending at the moment of the write, not when we read it.
+    const { data, error } = await supabase
+      .from("locksmith_enquiries")
+      // attempts is set to 1 rather than incremented. M7K claims a row exactly
+      // once and never retries, so a pending row has always had 0 attempts and
+      // a literal is both correct and free of a read-modify-write race. The
+      // retry milestone will need an atomic increment (an RPC); it can change
+      // this line and nothing else.
+      .update({ notification_state: "sending", notification_attempts: 1, updated_at: now() })
+      .eq("id", enquiryId)
+      .eq("notification_state", "pending")
+      .select("id, notification_state");
+
+    if (error) return { ok: false, claimed: false, state: null, error: error.message };
+    const claimed = Array.isArray(data) && data.length === 1;
+    if (claimed) return { ok: true, claimed: true, state: "sending" };
+
+    // Lost the race, or it was never pending. Report what it actually holds so
+    // the caller can tell "already sent" from "nobody configured".
+    const { data: current } = await supabase
+      .from("locksmith_enquiries").select("notification_state").eq("id", enquiryId).limit(1);
+    return { ok: true, claimed: false, state: (current && current[0] && current[0].notification_state) || null };
+  }
+
+  async function markSent({ enquiryId, provider, reference }) {
+    const supabase = getClient();
+    const stamp = now();
+    const { error } = await supabase
+      .from("locksmith_enquiries")
+      .update({
+        notification_state: "sent",
+        notified_at: stamp,
+        notification_failed_at: null,
+        notification_provider: provider || null,
+        notification_reference: reference || null,
+        last_notification_code: null,
+        updated_at: stamp,
+      })
+      .eq("id", enquiryId);
+    if (error) throw new Error(`markSent failed: ${error.message}`);
+    return { ok: true };
+  }
+
+  async function markFailed({ enquiryId, provider, code }) {
+    const supabase = getClient();
+    const stamp = now();
+    const { error } = await supabase
+      .from("locksmith_enquiries")
+      .update({
+        notification_state: "failed",
+        notification_failed_at: stamp,
+        notified_at: null,
+        notification_provider: provider || null,
+        last_notification_code: code ? String(code).slice(0, 100) : "unknown",
+        updated_at: stamp,
+      })
+      .eq("id", enquiryId);
+    if (error) throw new Error(`markFailed failed: ${error.message}`);
+    return { ok: true };
+  }
+
+  /** Nobody is configured to be told. Recorded so a sweep never chases it. */
+  async function markNotRequired({ enquiryId }) {
+    const supabase = getClient();
+    const stamp = now();
+    const { error } = await supabase
+      .from("locksmith_enquiries")
+      .update({ notification_state: "not_required", notified_at: null, notification_failed_at: null, updated_at: stamp })
+      .eq("id", enquiryId)
+      .eq("notification_state", "pending");
+    if (error) throw new Error(`markNotRequired failed: ${error.message}`);
+    return { ok: true };
+  }
+
+  return { claimForNotification, markSent, markFailed, markNotRequired };
+}
+
+module.exports = { STORE_VERSION, WRITABLE, pickWritable, createEnquiryStore, createToolAudit, createNotificationStore };

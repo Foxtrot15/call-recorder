@@ -299,19 +299,30 @@ async function captureEnquiry({ args, context = {}, deps = {} } = {}) {
  * the response goes into the model's context, and echoing the caller's details
  * back there buys nothing the agent does not already have from the conversation.
  */
-function toToolResponse(captureResult) {
+function toToolResponse(captureResult, notification = null) {
+  // ── FOUR FACTS, NEVER MERGED (M7K) ──────────────────────────────
+  //   saved         the row exists
+  //   attempted     a delivery was tried (says nothing about arrival)
+  //   notified      the provider accepted it — the ONLY thing that permits
+  //                 "the locksmith has been notified"
+  //   acknowledged  a human read it. No mechanism exists, so it is hard-coded
+  //                 false and there is no code path that can raise it.
+  const delivered = Boolean(notification && notification.delivered === true);
   return {
     saved: captureResult.saved === true,
-    // ── THE THREE STATES, MADE MACHINE-READABLE (M7J-LV) ────────────
-    // "recorded" and "the locksmith knows" are different facts, and the first
-    // live call collapsed them. `notified` is therefore stated explicitly and
-    // is HARD-CODED false: no notification backend exists, so there is no code
-    // path that could set it true. When notifications are built, this becomes a
-    // real value and the prompt rule that keys on it starts meaning something
-    // without the prompt having to change.
-    notified: false,
+    notificationAttempted: Boolean(notification && notification.attempted === true),
+    notificationState: (notification && notification.state) || null,
+    acknowledged: false,
+    // Introduced by M7J-LV as a hard-coded false when nothing could send.
+    // M7K makes it a REAL value: true only when a delivery adapter reported the
+    // provider accepted the message. The prompt rule written in M7J-LV keyed on
+    // this field and needed no change to start meaning something.
+    notified: delivered,
     outcome: captureResult.outcome,
-    message: captureResult.agentMessage,
+    // The notification's own wording wins when there is one: it is the more
+    // specific truth ("notified", "could not get a message through") and it was
+    // written for that exact outcome. The capture message stays the fallback.
+    message: (notification && notification.agentMessage) || captureResult.agentMessage,
     ...(captureResult.enquiryId ? { reference: captureResult.enquiryId } : {}),
     ...(captureResult.errors && captureResult.errors.length
       ? { missing: captureResult.errors.map((e) => e.field) }

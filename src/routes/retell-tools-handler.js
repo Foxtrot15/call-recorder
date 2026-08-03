@@ -172,7 +172,31 @@ function createEnquiryToolHandler(deps = {}) {
       deps: { store, logger },
     });
 
-    const responseBody = toToolResponse(result);
+    // ── 4b. Notify, INLINE and only after persistence (M7K) ──────────
+    // Inline because the agent must be able to say "the locksmith has been
+    // notified" in the same breath, and that sentence is only permitted by a
+    // real delivery result. The whole attempt lives inside the 10s tool timeout
+    // and makes at most ONE delivery attempt — see locksmith-notification.js.
+    //
+    // Only a genuinely NEW save is notified. A duplicate must never produce a
+    // second message, and an unsaved enquiry has nothing to tell anyone about.
+    let notification = null;
+    if (result.saved === true && result.outcome === "saved" && typeof deps.notify === "function") {
+      try {
+        notification = await deps.notify({
+          enquiryId: result.enquiryId,
+          clientId: context.clientId,
+          profileVersion: context.profileVersion,
+          profile: context.profile || null,
+        });
+      } catch {
+        // A notification failure must never retract a successful capture.
+        logger.error("retell.tool.notify_threw");
+        notification = null;
+      }
+    }
+
+    const responseBody = toToolResponse(result, notification);
     res.status(200).json(responseBody);
 
     // ── 5. Audit AFTER the response. Never delays a live conversation. ──

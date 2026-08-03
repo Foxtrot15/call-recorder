@@ -38,7 +38,10 @@ const router = express.Router();
 const { isRetellEnabled, areToolsEnabled, getRetellConfig, ENQUIRY_TOOL_PATH } = require("../config/retell");
 const { createEnquiryToolHandler } = require("./retell-tools-handler");
 const { createInboundResolver, createRegistryAccess } = require("../services/retell-inbound-resolver");
-const { createEnquiryStore, createToolAudit } = require("../services/locksmith-enquiry-store");
+const { createEnquiryStore, createToolAudit, createNotificationStore } = require("../services/locksmith-enquiry-store");
+const { notifyLocksmith } = require("../services/locksmith-notification");
+const { createSmsDelivery } = require("../services/locksmith-sms-delivery");
+const { getNotificationConfig } = require("../config/locksmith-notifications");
 
 /**
  * Router-level gate. Dormant by default: without RETELL_TOOLS_ENABLED the path
@@ -77,8 +80,69 @@ router.post(
       }),
     store: createEnquiryStore(),
     audit: createToolAudit(),
+    // ── Notification (M7K) ────────────────────────────────────────
+    // Composed here, at the boundary, like everything else. Dormant unless
+    // LOCKSMITH_NOTIFICATIONS_ENABLED is exactly "true", and a dry run unless
+    // LOCKSMITH_NOTIFY_MODE is exactly "live" — so the default deployment
+    // attempts nothing and the founder proof sends nothing.
+    //
+    // Recipients come from the client's APPROVED PROFILE, fetched here rather
+    // than trusted from the request: who may be told a caller's details is a
+    // configuration fact, never a model-influenced one.
+    notify: async ({ enquiryId, clientId, profile }) => {
+      const notifyConfig = getNotificationConfig();
+      if (!notifyConfig.enabled) return null;
+
+      const resolvedProfile = profile || (await loadApprovedProfile(clientId));
+      const notificationStore = createNotificationStore();
+
+      return notifyLocksmith({
+        enquiry: { id: enquiryId, ...(await loadEnquiryForNotification(enquiryId)) },
+        profile: resolvedProfile,
+        config: notifyConfig,
+        deps: {
+          claim: notificationStore.claimForNotification,
+          markSent: notificationStore.markSent,
+          markFailed: notificationStore.markFailed,
+          markNotRequired: notificationStore.markNotRequired,
+          deliver: createSmsDelivery({ mode: notifyConfig.mode }),
+        },
+      });
+    },
   })
 );
+
+/** The approved profile, for its notification recipients. Lazily required. */
+async function loadApprovedProfile(clientId) {
+  try {
+    const row = await require("../services/locksmith-profile-store").getApprovedVersion(clientId);
+    return (row && row.profile) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Re-read the row we just wrote, for the message body.
+ *
+ * From the DATABASE rather than the tool arguments: the row is what was
+ * actually stored, after validation and normalisation. Notifying from the raw
+ * arguments would let a message differ from the record it claims to describe.
+ */
+async function loadEnquiryForNotification(enquiryId) {
+  try {
+    const supabase = require("../services/supabase");
+    const { data, error } = await supabase
+      .from("locksmith_enquiries")
+      .select("caller_name, callback_number, suburb, street_address, problem_description, urgency, property_secure, desired_timing")
+      .eq("id", enquiryId)
+      .limit(1);
+    if (error || !data || !data.length) return {};
+    return data[0];
+  } catch {
+    return {};
+  }
+}
 
 module.exports = router;
 module.exports.retellToolsGate = retellToolsGate;
