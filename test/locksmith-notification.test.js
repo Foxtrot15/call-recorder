@@ -53,7 +53,10 @@ function fakeStore(initialState = "pending") {
 }
 
 const CONFIG = Object.freeze({ enabled: true, provider: "dry_run", mode: "dry_run", environment: "dev" });
-const deliverOk = async () => ({ ok: true, provider: "dry_run", reference: "dryrun_enq_1", code: null });
+// A REAL delivery. provider must not be dry_run and simulated must be false,
+// or M7K-A correctly forces the simulated branch — which is the point.
+const deliverOk = async () => ({ ok: true, simulated: false, provider: "twilio_sms", reference: "SM_test", code: null });
+const deliverSimulated = async () => ({ ok: true, simulated: true, provider: "dry_run", reference: "dryrun_enq_1", code: null });
 const deliverFail = async () => ({ ok: false, provider: "dry_run", reference: null, code: "unsendable_recipient" });
 
 const run = (over = {}) =>
@@ -142,7 +145,7 @@ describe("state transitions", () => {
     assert.equal(r.delivered, true);
     assert.equal(r.state, "sent");
     assert.equal(store.rows.enq_1.state, "sent");
-    assert.equal(store.rows.enq_1.reference, "dryrun_enq_1");
+    assert.equal(store.rows.enq_1.reference, "SM_test", "a real provider message id");
     assert.equal(r.agentMessage, "The locksmith has been notified.");
   });
 
@@ -195,13 +198,126 @@ describe("state transitions", () => {
   });
 });
 
+// ── M7K-A: a dry run is not a send ──────────────────────────────────
+//
+// The first M7K cut stored `sent` for a dry run, returned notified:true and let
+// the agent say the locksmith had been notified — with nothing sent to anybody.
+// These are the three prohibitions, each asserted directly.
+describe("a dry run must never look like a delivery", () => {
+  const dryRunStore = () => fakeStore();
+  const dryRunDeliver = sms.createSmsDelivery({ env: {}, logger: SILENT });
+
+  const runDry = async (store) =>
+    notify.notifyLocksmith({
+      enquiry: ENQUIRY,
+      profile: buildSandboxProfile(),
+      config: { enabled: true, provider: "dry_run", mode: "dry_run", environment: "dev" },
+      deps: { logger: SILENT, deliver: dryRunDeliver, ...store },
+    });
+
+  test("PROHIBITION 1 — it must never store notification_state = sent", async () => {
+    const store = dryRunStore();
+    let markSentCalled = false;
+    store.markSent = async () => { markSentCalled = true; };
+    store.markSimulated = async ({ enquiryId }) => { store.rows[enquiryId].state = "simulated"; };
+    const r = await runDry(store);
+    assert.equal(store.rows.enq_1.state, "simulated");
+    assert.notEqual(store.rows.enq_1.state, "sent");
+    assert.equal(markSentCalled, false, "markSent must not even be reached");
+    assert.equal(r.state, "simulated");
+  });
+
+  test("PROHIBITION 2 — it must never return notified = true", async () => {
+    const store = dryRunStore();
+    store.markSimulated = async () => {};
+    const r = await runDry(store);
+    assert.equal(r.delivered, false);
+    const body = enquiry.toToolResponse(
+      { saved: true, outcome: "saved", agentMessage: "Your details are recorded.", enquiryId: "enq_1", errors: [] },
+      r
+    );
+    assert.equal(body.notified, false, "the agent's permission field must be false");
+    assert.equal(body.notificationAttempted, true, "but the attempt DID happen — a different fact");
+    assert.equal(body.notificationState, "simulated");
+  });
+
+  test("PROHIBITION 3 — the wording must forbid claiming a notification", async () => {
+    const store = dryRunStore();
+    store.markSimulated = async () => {};
+    const r = await runDry(store);
+    // It MUST contain the phrase — in order to FORBID it. What it must never
+    // do is assert one, so the check is on the affirmation, not the words.
+    assert.equal(/^The locksmith has been notified/.test(r.agentMessage), false);
+    assert.match(r.agentMessage, /no message was actually sent/i);
+    assert.match(r.agentMessage, /do not say the locksmith has been notified/i);
+  });
+
+  test("the adapter marks its own result as simulated", async () => {
+    const r = await dryRunDeliver({ to: "+61491570006", body: "x", enquiryId: "enq_1" });
+    assert.equal(r.ok, true, "the pipeline ran");
+    assert.equal(r.simulated, true, "and said so on the result, not via config");
+    assert.equal(r.provider, "dry_run");
+  });
+
+  test("THE INVARIANT — no outcome can be delivered without a real provider", () => {
+    for (const outcome of Object.values(notify.OUTCOMES)) {
+      if (outcome.delivered === true) {
+        assert.equal(outcome.code, "sent", `${outcome.code} claims delivery`);
+        assert.match(outcome.agentMessage, /has been notified/);
+      } else {
+        assert.equal(/^The locksmith has been notified/.test(outcome.agentMessage), false,
+          `${outcome.code} is not delivered but its wording claims it`);
+      }
+    }
+  });
+
+  test("a simulated result fails CLOSED even if the adapter forgets its flag", async () => {
+    // Belt and braces: provider === dry_run alone is enough to force simulated.
+    const store = dryRunStore();
+    store.markSimulated = async ({ enquiryId }) => { store.rows[enquiryId].state = "simulated"; };
+    const forgetful = async () => ({ ok: true, provider: "dry_run", reference: "r", code: null }); // no `simulated`
+    const r = await notify.notifyLocksmith({
+      enquiry: ENQUIRY, profile: buildSandboxProfile(),
+      config: { enabled: true, provider: "dry_run", mode: "dry_run", environment: "dev" },
+      deps: { logger: SILENT, deliver: forgetful, ...store },
+    });
+    assert.equal(r.outcome, "simulated");
+    assert.equal(r.delivered, false);
+    assert.equal(store.rows.enq_1.state, "simulated");
+  });
+
+  test("a REAL delivery is still reported as sent and still permits the claim", async () => {
+    const store = dryRunStore();
+    const realDeliver = async () => ({ ok: true, simulated: false, provider: "twilio_sms", reference: "SM123", code: null });
+    const r = await notify.notifyLocksmith({
+      enquiry: ENQUIRY, profile: buildSandboxProfile(),
+      config: { enabled: true, provider: "twilio_sms", mode: "live", environment: "dev" },
+      deps: { logger: SILENT, deliver: realDeliver, ...store },
+    });
+    assert.equal(r.outcome, "sent");
+    assert.equal(r.delivered, true);
+    assert.equal(store.rows.enq_1.state, "sent");
+    assert.equal(r.agentMessage, "The locksmith has been notified.");
+  });
+
+  test("simulated is a state the SQL permits, and carries no notified_at", () => {
+    const fs = require("fs");
+    const sql = fs.readFileSync(require.resolve("../supabase/sql/m7k_add_enquiry_notification_state.sql"), "utf8");
+    assert.match(sql, /check \(notification_state in \('pending','sending','not_required','sent','simulated','failed'\)\)/);
+    // Only 'sent' may hold a notified_at — which is what stops a simulation
+    // reading as a delivery to any query that looks at the timestamp.
+    assert.match(sql, /notification_state = 'sent' and notified_at is not null/);
+    assert.equal(notify.STATES.simulated, "simulated");
+  });
+});
+
 // ── Idempotency ─────────────────────────────────────────────────────
 
 describe("the claim is the double-send guard", () => {
   test("a second notification for the same enquiry sends nothing", async () => {
     const store = fakeStore();
     let sends = 0;
-    const counting = async () => { sends += 1; return { ok: true, provider: "dry_run", reference: "r", code: null }; };
+    const counting = async () => { sends += 1; return { ok: true, simulated: false, provider: "twilio_sms", reference: "SM_r", code: null }; };
     const first = await run({ deps: { logger: SILENT, deliver: counting, ...store } });
     const second = await run({ deps: { logger: SILENT, deliver: counting, ...store } });
     assert.equal(first.outcome, "sent");

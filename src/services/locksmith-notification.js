@@ -36,6 +36,22 @@ const STATES = Object.freeze({
   sending: "sending",
   notRequired: "not_required",
   sent: "sent",
+  // ── A DRY RUN IS NOT A SEND (M7K-A) ───────────────────────────────
+  // The first M7K cut stored `sent` for a dry run, returned notified:true and
+  // let the agent say the locksmith had been notified — while nothing had left
+  // the building. That is the same class of untruth M7J-LV existed to remove,
+  // reintroduced one layer down.
+  //
+  // `simulated` is its own terminal state so the three things stay impossible
+  // rather than merely discouraged:
+  //   * the row can never read `sent` for a message that does not exist
+  //   * `delivered` is false, so `notified` is false
+  //   * the agent's permission keys on `notified`, so it cannot claim one
+  //
+  // It is a DISTINCT state rather than a flag on `sent` because every read path
+  // — an operator query, a future retry sweep, a billing count — asks "did this
+  // reach anyone?", and the answer must be wrong-proof at a glance.
+  simulated: "simulated",
   failed: "failed",
 });
 
@@ -56,6 +72,19 @@ const OUTCOMES = Object.freeze({
     attempted: true,
     delivered: true,
     agentMessage: "The locksmith has been notified.",
+  },
+  simulated: {
+    code: "simulated",
+    state: STATES.simulated,
+    // The pipeline DID run — claim, adapter, state write. That is worth knowing
+    // and is exactly what a dry run is for.
+    attempted: true,
+    // Nothing reached anyone, so this is false and stays false. `notified` on
+    // the tool response is derived from it, and the agent's permission from
+    // that, so one word here governs the whole chain.
+    delivered: false,
+    agentMessage:
+      "Their details are recorded. This is a test line and no message was actually sent to a locksmith — do not say the locksmith has been notified.",
   },
   failed: {
     code: "failed",
@@ -256,6 +285,30 @@ async function notifyLocksmith({ enquiry, profile, config = {}, deps = {} } = {}
   const provider = (delivery && delivery.provider) || config.provider || PROVIDERS.dryRun;
 
   if (delivery && delivery.ok === true) {
+    // ── SIMULATED OR REAL? (M7K-A) ──────────────────────────────────
+    // Two independent signals, either of which forces `simulated`:
+    //
+    //   delivery.simulated === true   what the adapter says it did
+    //   provider === PROVIDERS.dryRun what it says it is
+    //
+    // Belt and braces on purpose. A future adapter that forgets the flag, or a
+    // config that mislabels the provider, must still fail CLOSED — towards "no
+    // message exists" — because the failure mode in the other direction is
+    // telling somebody locked out that help has been called when it has not.
+    const isSimulated = delivery.simulated === true || provider === PROVIDERS.dryRun;
+
+    if (isSimulated) {
+      if (typeof deps.markSimulated === "function") {
+        try {
+          await deps.markSimulated({ enquiryId: enquiry.id, provider, reference: delivery.reference || null });
+        } catch (err) {
+          logger.error(`locksmith.notify.mark_simulated_failed enquiry=${enquiry.id} err=${err && err.message}`);
+        }
+      }
+      logger.log(`locksmith.notify.simulated enquiry=${enquiry.id} provider=${provider} env=${environment} — NO MESSAGE SENT`);
+      return result(OUTCOMES.simulated, { provider, reference: delivery.reference || null });
+    }
+
     try {
       await deps.markSent({ enquiryId: enquiry.id, provider, reference: delivery.reference || null });
     } catch (err) {

@@ -14,8 +14,24 @@
 -- twice at 3am. Checking-then-sending is not a substitute: the gap between the
 -- read and the write is the bug.
 --
--- This is the "strongly justified" case the brief allows for. No other state is
--- added. `not_required` already existed and is kept.
+-- This is the "strongly justified" case the brief allows for. `not_required`
+-- already existed and is kept.
+--
+-- ─── WHY `simulated` IS ADDED (M7K-A) ──────────────────────────────────────
+-- The first cut of this milestone stored `sent` for a DRY RUN. The row then
+-- claimed a message existed when nothing had left the building — and every
+-- downstream reader (an operator query, a retry sweep, a billing count, the
+-- agent's own permission to say "the locksmith has been notified") would have
+-- believed it.
+--
+-- A boolean beside `sent` was rejected: every one of those readers would have
+-- to remember to check it, and the one who forgets ships the untruth. A
+-- distinct terminal state is wrong-proof at a glance —
+-- `where notification_state = 'sent'` cannot accidentally include a simulation.
+--
+-- `simulated` carries NO notified_at, which the constraint below enforces: that
+-- column means "when a locksmith was actually told", and only `sent` may hold
+-- one.
 --
 -- ─── AUDIT COLUMNS ─────────────────────────────────────────────────────────
 -- Attempt count, provider, provider reference and the last failure code, so
@@ -34,7 +50,7 @@ alter table public.locksmith_enquiries
 
 alter table public.locksmith_enquiries
   add constraint locksmith_enquiries_notification_state_check
-  check (notification_state in ('pending','sending','not_required','sent','failed'));
+  check (notification_state in ('pending','sending','not_required','sent','simulated','failed'));
 
 -- ── 2. Delivery bookkeeping ────────────────────────────────────────────────
 alter table public.locksmith_enquiries
@@ -75,7 +91,7 @@ create index if not exists le_notification_pending_idx
   where notification_state in ('pending','sending','failed');
 
 comment on column public.locksmith_enquiries.notification_state is
-  'pending -> sending -> sent|failed. The pending->sending claim is the double-send guard: exactly one caller can win it. not_required is for enquiries that deliberately notify nobody.';
+  'pending -> sending -> sent|simulated|failed. The pending->sending claim is the double-send guard: exactly one caller can win it. simulated means a DRY RUN completed and NO message exists — never count it as a delivery. not_required is for enquiries that deliberately notify nobody.';
 comment on column public.locksmith_enquiries.notification_attempts is
   'Incremented on each claim. A retry milestone reads this; M7K never retries.';
 comment on column public.locksmith_enquiries.notification_reference is
@@ -114,7 +130,14 @@ comment on column public.locksmith_enquiries.notification_reference is
 --   -- ^ expect UPDATE 0
 -- rollback;
 --
--- -- 5. A 'sent' row without notified_at must be refused (must raise):
+-- -- 5. A simulated row must never carry a notified_at (must raise):
+-- -- update public.locksmith_enquiries set notification_state = 'simulated', notified_at = now() where id = (select id from public.locksmith_enquiries limit 1);
+--
+-- -- 6. No simulation may ever be counted as a delivery:
+-- select notification_state, count(*) from public.locksmith_enquiries
+--  where notification_state in ('sent','simulated') group by 1;
+--
+-- -- 7. A 'sent' row without notified_at must be refused (must raise):
 -- -- update public.locksmith_enquiries set notification_state = 'sent' where id = (select id from public.locksmith_enquiries limit 1);
 --
 -- ============================================================================

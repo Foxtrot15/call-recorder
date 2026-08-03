@@ -77,7 +77,16 @@ function createSmsDelivery(deps = {}) {
           `chars=${body.length} segments=${Math.ceil(body.length / 160)}`
       );
       return {
+        // `ok` means the pipeline ran, NOT that a message exists. The two were
+        // conflated in the first M7K cut: a dry run reported ok:true and the
+        // service read that as delivered, stored `sent`, and let the agent say
+        // the locksmith had been notified. Nothing had been sent to anybody.
         ok: true,
+        // THE DISCRIMINATOR. Carried on the RESULT rather than inferred from
+        // configuration, so a mis-set flag cannot turn a simulation into a
+        // claimed delivery — the thing that actually sent the message is the
+        // only thing that gets to say whether one exists.
+        simulated: true,
         provider: "dry_run",
         // Marked unmistakably. Nobody reading a row later can take this for a
         // Twilio message id.
@@ -103,7 +112,10 @@ function createSmsDelivery(deps = {}) {
     try {
       const message = await twilio.client.messages.create({ from, to, body });
       logger.log(`locksmith.sms.sent enquiry=${enquiryId || "-"} to=•••${String(to).slice(-3)} sid=${message && message.sid ? "present" : "missing"}`);
-      return { ok: true, provider: "twilio_sms", reference: (message && message.sid) || null, code: null };
+      // simulated:false stated explicitly rather than omitted. This is the ONLY
+      // place in the codebase that may assert a real message exists, and it
+      // should be greppable as such.
+      return { ok: true, simulated: false, provider: "twilio_sms", reference: (message && message.sid) || null, code: null };
     } catch (err) {
       // Twilio error messages can echo the destination number, so the CODE is
       // recorded and the message is not.

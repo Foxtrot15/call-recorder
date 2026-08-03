@@ -104,6 +104,7 @@ router.post(
           claim: notificationStore.claimForNotification,
           markSent: notificationStore.markSent,
           markFailed: notificationStore.markFailed,
+          markSimulated: notificationStore.markSimulated,
           markNotRequired: notificationStore.markNotRequired,
           deliver: createSmsDelivery({ mode: notifyConfig.mode }),
         },

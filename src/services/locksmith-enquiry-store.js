@@ -202,6 +202,33 @@ function createNotificationStore(deps = {}) {
     return { ok: true };
   }
 
+  /**
+   * A dry run completed. The pipeline ran; NO message exists (M7K-A).
+   *
+   * notified_at stays null — the column means "when a locksmith was actually
+   * told", and the database constraint only permits it on `sent`. A simulated
+   * row that carried a notified_at would read as a real delivery to every query
+   * that ever looks at this table.
+   */
+  async function markSimulated({ enquiryId, provider, reference }) {
+    const supabase = getClient();
+    const stamp = now();
+    const { error } = await supabase
+      .from("locksmith_enquiries")
+      .update({
+        notification_state: "simulated",
+        notified_at: null,
+        notification_failed_at: null,
+        notification_provider: provider || "dry_run",
+        notification_reference: reference || null,
+        last_notification_code: null,
+        updated_at: stamp,
+      })
+      .eq("id", enquiryId);
+    if (error) throw new Error(`markSimulated failed: ${error.message}`);
+    return { ok: true };
+  }
+
   /** Nobody is configured to be told. Recorded so a sweep never chases it. */
   async function markNotRequired({ enquiryId }) {
     const supabase = getClient();
@@ -215,7 +242,7 @@ function createNotificationStore(deps = {}) {
     return { ok: true };
   }
 
-  return { claimForNotification, markSent, markFailed, markNotRequired };
+  return { claimForNotification, markSent, markFailed, markSimulated, markNotRequired };
 }
 
 module.exports = { STORE_VERSION, WRITABLE, pickWritable, createEnquiryStore, createToolAudit, createNotificationStore };
