@@ -67,7 +67,24 @@ const OUTCOMES = Object.freeze({
     code: "saved",
     saved: true,
     status: 200,
-    agentMessage: "Your details are recorded and the locksmith will get them.",
+    // ── M7J-LV CORRECTION ──────────────────────────────────────────
+    // This said: "Your details are recorded and the locksmith will get them."
+    //
+    // On the first live enquiry call the agent was asked whether the locksmith
+    // had been notified and answered "the details are recorded and the
+    // locksmith will be notified" — because THIS MESSAGE told it so. The agent
+    // did not invent anything; it relayed AIDA's own promise, exactly as the
+    // prompt instructs it to.
+    //
+    // Nothing sends anything. notification_state is 'pending' and there is no
+    // notification backend. "the locksmith will get them" was a promise about a
+    // future action nothing performs, made to someone locked out of their home.
+    //
+    // The message is now ONLY what is true at the moment it is returned.
+    // Everything the agent must NOT say lives in the prompt, where constraints
+    // belong — a constraint inside a sentence the agent is told to speak aloud
+    // is a constraint it may read to the caller.
+    agentMessage: "Your details are recorded.",
   },
   duplicate: {
     code: "duplicate",
@@ -285,6 +302,14 @@ async function captureEnquiry({ args, context = {}, deps = {} } = {}) {
 function toToolResponse(captureResult) {
   return {
     saved: captureResult.saved === true,
+    // ── THE THREE STATES, MADE MACHINE-READABLE (M7J-LV) ────────────
+    // "recorded" and "the locksmith knows" are different facts, and the first
+    // live call collapsed them. `notified` is therefore stated explicitly and
+    // is HARD-CODED false: no notification backend exists, so there is no code
+    // path that could set it true. When notifications are built, this becomes a
+    // real value and the prompt rule that keys on it starts meaning something
+    // without the prompt having to change.
+    notified: false,
     outcome: captureResult.outcome,
     message: captureResult.agentMessage,
     ...(captureResult.enquiryId ? { reference: captureResult.enquiryId } : {}),

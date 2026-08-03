@@ -799,6 +799,18 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "If it comes back not saved, tell the caller plainly that you could not record it and that they should ring the locksmith directly. Do not promise to try later — you cannot.",
         "If the result says the job is already recorded, say so briefly and move on. Do not read the whole thing back again.",
         "Call it ONCE for one job. If the caller corrects a detail afterwards, that is the same job, not a second one.",
+        // ── RECORDED IS NOT NOTIFIED (M7J-LV) ──────────────────────
+        // The first live call answered "has the locksmith been notified?" with
+        // "the details are recorded and the locksmith will be notified". Both
+        // the tool's own success message and this prompt had told it so. Three
+        // states were being spoken as one, so they are now named separately and
+        // the third is gated on a result that does not yet exist.
+        "THREE DIFFERENT THINGS, and you must never merge them:",
+        "1. RECORDED — the enquiry function returned \"saved\": true. This is the only one you can currently confirm.",
+        "2. NOT YET PASSED ON — the result also carries \"notified\". While it is false, NOBODY has been told. No message, no alert, no call to the locksmith has happened.",
+        "3. NOTIFIED — a locksmith has actually been contacted. There is no function that does this yet, so this NEVER applies. You may not say it.",
+        "So: never say the locksmith has been notified, told, alerted, messaged, sent the details, or that they \"will get them\", \"will be notified\" or \"will see it\" — unless a function has returned success for that specific thing. None does.",
+        "If the caller asks whether the locksmith has been told, say honestly that their details are recorded on the system and that you cannot confirm the locksmith has been contacted yet.",
       ],
     });
   }
@@ -877,13 +889,25 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     ].filter(Boolean),
   });
 
+  // ── AFTER THE CALL (corrected M7J-LV) ───────────────────────────────
+  // This section used to assert "Every call you take produces a written summary
+  // for the locksmith" and "Urgent jobs are raised immediately". Neither is
+  // true: no notification backend exists, and enquiries persist with
+  // notification_state 'pending'. It was the second source — with the tool's own
+  // success message — of the live call telling a caller the locksmith would be
+  // notified.
+  //
+  // It now describes only what the receptionist DOES, and states the limit of
+  // what it may claim. When notifications are built this stays correct, because
+  // the claim is gated on a function result rather than on prose here.
   sections.push({
     id: "notifications",
     title: "After the call",
     lines: [
-      "Every call you take produces a written summary for the locksmith. Record the job with the enquiry function before you finish.",
-      "Urgent jobs are raised immediately; ordinary jobs go in the routine summary.",
-      "Do not tell the caller when the locksmith will read it.",
+      "Record the job with the enquiry function before you finish. That is the only thing that captures it.",
+      "Recording a job does NOT send it to anyone. There is no function that alerts, messages or rings the locksmith, so nothing has been passed on.",
+      "Never tell a caller their job has been passed on, raised, escalated, or that the locksmith has been alerted or will be.",
+      "Do not tell the caller when the locksmith will read it — you do not know, and nothing has been sent.",
     ],
   });
 
