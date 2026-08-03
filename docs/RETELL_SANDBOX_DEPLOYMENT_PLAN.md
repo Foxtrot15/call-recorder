@@ -81,6 +81,7 @@ can be inherited by accident.
 | `NODE_ENV` | `development` |
 | `RETELL_ENABLED` | `true` |
 | `RETELL_INBOUND_WEBHOOK_ENABLED` | `true` |
+| `RETELL_TOOLS_ENABLED` | `true` — **M7J, added 2026-08-03.** Mounts `/webhooks/retell/tools/*`, the first provider surface that WRITES to the database. Deliberately a third switch: `RETELL_INBOUND_WEBHOOK_ENABLED` grants call handling and must not silently grant persistence. Unset, the tool path 404s and the compiler emits no tool, so the agent falls back to tool-free honesty. This is the rollback. |
 | `RETELL_API_KEY` | the **dev** Retell key |
 | `RETELL_WEBHOOK_BASE_URL` | the assigned Railway HTTPS URL |
 | `RETELL_ALLOWED_TAG` | `dev` |

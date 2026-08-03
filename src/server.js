@@ -30,6 +30,7 @@ app.set("trust proxy", true);
 app.use(require("./routes/stripe-webhook"));      // M6, dormant behind BILLING_* flags
 app.use(require("./routes/retell-webhook"));      // M3 event webhook, dormant
 app.use(require("./routes/retell-inbound-webhook")); // M7F-A inbound, dormant
+app.use(require("./routes/retell-tools"));        // M7J custom tools, dormant
 
 // ── Global parsers, for every ordinary route ────────────────────────
 app.use(express.urlencoded({ extended: false }));

@@ -778,6 +778,31 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
     });
   }
 
+  // ── SAYING A JOB WAS RECORDED (M7J) ─────────────────────────────────
+  // Only in tool mode. The whole point of the tool backend is that "I've got
+  // that down" stops being a guess, so the prompt is told exactly what makes it
+  // true: a result with saved = true, and nothing else.
+  //
+  // The tool returns a `message` written by AIDA for each outcome, so the agent
+  // never has to compose wording for a failure it does not understand. That is
+  // deliberate — an agent inventing its own words for "the save failed" is an
+  // agent that reaches for something reassuring.
+  if (!toolFree) {
+    sections.push({
+      id: "recording_the_job",
+      title: "Recording the job",
+      lines: [
+        "Use the enquiry function to record the job before the call ends. That function is the ONLY thing that records anything.",
+        "Its result tells you what happened. When \"saved\" is true, the job is recorded and you may say so. When \"saved\" is false, it is NOT recorded and you must not say it is.",
+        "The result also carries a \"message\". Say that, in your own voice. Do not invent your own wording for a failure, and do not soften it.",
+        "Never say you have recorded, logged, sent or passed on a job before you have called the function and seen its result. Not \"I'll get that down\" as though it is done, not \"leave it with me\".",
+        "If it comes back not saved, tell the caller plainly that you could not record it and that they should ring the locksmith directly. Do not promise to try later — you cannot.",
+        "If the result says the job is already recorded, say so briefly and move on. Do not read the whole thing back again.",
+        "Call it ONCE for one job. If the caller corrects a detail afterwards, that is the same job, not a second one.",
+      ],
+    });
+  }
+
   // ── HOW TO SOUND (M7I-B) ────────────────────────────────────────────
   // The first live call produced good empathy — "I understand this is
   // frustrating" — entirely by model default. Nothing in the prompt or the
@@ -1083,6 +1108,21 @@ function resolveInboundWebhookUrl(config = {}) {
 }
 
 /**
+ * The live URL for a compiled tool, or null when AIDA cannot serve it (M7J).
+ *
+ * Only tools with a real, reachable endpoint appear in this map. The other six
+ * compiled contracts (availability, service-area, on-call, transfer, notify…)
+ * deliberately resolve to null until their routes exist — emitting them would
+ * hand the agent capabilities that answer nothing.
+ */
+function resolveToolUrl(toolName, config = {}) {
+  const urls = {
+    create_locksmith_enquiry: config.toolsEnabled ? config.enquiryToolUrl || null : null,
+  };
+  return Object.prototype.hasOwnProperty.call(urls, toolName) ? urls[toolName] : null;
+}
+
+/**
  * Pure translation of the neutral spec into Retell's documented shapes. No
  * decisions here — if this function needs a judgement, the judgement belongs in
  * stage one.
@@ -1118,14 +1158,35 @@ function toRetellPayload({ compiled, config }) {
     // Resolved from the knowledge base created earlier in the same plan; the
     // compiled artefact never carries a provider id.
     knowledge_base_ids: [ref("receptionist_knowledge", "knowledge_base")],
-    general_tools: spec.tools.map((tool) => ({
-      type: "custom",
-      name: tool.name,
-      description: tool.description,
-      // The real URL is attached at execution time from config; a compiled
-      // artefact must not embed an environment-specific endpoint.
-      parameters: tool.parameters,
-    })),
+    // ── TOOL URLS ARE ATTACHED HERE, NOT COMPILED IN (M7J) ───────────
+    // The compiled SPEC stays environment-free — it must be identical in dev
+    // and prod so its hash means something. The URL is an execution-time fact
+    // and is resolved from config at translation time, which is this function.
+    //
+    // A tool AIDA cannot serve is DROPPED rather than emitted without a url:
+    // Retell would accept the definition and the agent would then believe it
+    // can record an enquiry, call it, and be told nothing useful. An agent that
+    // silently cannot save a job is the failure this whole milestone exists to
+    // remove, so the absence is made total rather than partial.
+    general_tools: spec.tools
+      .map((tool) => {
+        const url = resolveToolUrl(tool.name, config);
+        if (!url) return null;
+        return {
+          type: "custom",
+          name: tool.name,
+          description: tool.description,
+          url,
+          // Retell's default is 2 minutes. A caller is on the line: if AIDA has
+          // not answered in 10 seconds it is not going to, and the agent needs
+          // to get back to the conversation rather than hold dead air.
+          timeout_ms: 10000,
+          speak_during_execution: true,
+          speak_after_execution: true,
+          parameters: tool.parameters,
+        };
+      })
+      .filter(Boolean),
   };
 
   // Retell: POST /create-agent (verified 2026-08-01).

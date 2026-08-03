@@ -138,6 +138,11 @@ function parsePublicUrl(raw) {
 // They have different URLs, different response contracts and different latency
 // budgets, so they get different paths.
 const INBOUND_WEBHOOK_PATH = "/webhooks/retell/inbound";
+// M7J. One path PER TOOL, not one shared tool endpoint: a URL can then be
+// revoked per capability rather than all-or-nothing, and a log line names which
+// tool was called without having to trust the body to say so.
+const TOOL_WEBHOOK_BASE_PATH = "/webhooks/retell/tools";
+const ENQUIRY_TOOL_PATH = `${TOOL_WEBHOOK_BASE_PATH}/create-locksmith-enquiry`;
 const EVENT_WEBHOOK_PATH = "/webhooks/retell";
 
 /**
@@ -224,6 +229,13 @@ function isWebhookEnabled(env = process.env) {
 function isInboundWebhookEnabled(env = process.env) {
   return strictTrue(env.RETELL_INBOUND_WEBHOOK_ENABLED);
 }
+
+// M7J: tool calls WRITE TO THE DATABASE on behalf of a live conversation.
+// Gated separately from both webhooks — see canVerifyToolWebhook for why this
+// is a third switch rather than a reused one.
+function areToolsEnabled(env = process.env) {
+  return strictTrue(env.RETELL_TOOLS_ENABLED);
+}
 function isLiveWritesEnabled(env = process.env) {
   return strictTrue(env.RETELL_LIVE_WRITES_ENABLED);
 }
@@ -309,6 +321,9 @@ function getRetellConfig(env = process.env) {
     // show what a live run would register and why it would not.
     inboundWebhookUrl: buildInboundWebhookUrl(env).url,
     inboundWebhookUrlReason: buildInboundWebhookUrl(env).reason,
+    toolsEnabled: areToolsEnabled(env),
+    enquiryToolUrl: buildToolUrl(env, ENQUIRY_TOOL_PATH).url,
+    enquiryToolUrlReason: buildToolUrl(env, ENQUIRY_TOOL_PATH).reason,
   });
 }
 
@@ -406,6 +421,44 @@ function canVerifyInboundWebhook(env = process.env) {
   if (!config.inboundWebhookEnabled) reasons.push("RETELL_INBOUND_WEBHOOK_ENABLED is not \"true\"");
   // Retell signs with the API key, so no key means no verification is possible.
   if (!config.hasApiKey) reasons.push("RETELL_API_KEY is not set");
+  return { allowed: reasons.length === 0, reasons };
+}
+
+/**
+ * The public URL for one tool path.
+ *
+ * Built from the SAME validated base as the inbound webhook, so a private, http
+ * or query-carrying base is refused in one place rather than two.
+ */
+function buildToolUrl(env = process.env, toolPath = ENQUIRY_TOOL_PATH) {
+  const inbound = buildInboundWebhookUrl(env);
+  if (!inbound.ok) return { ok: false, url: null, reason: inbound.reason };
+  const base = inbound.url.slice(0, -INBOUND_WEBHOOK_PATH.length);
+  return { ok: true, url: `${base}${toolPath}`, reason: null };
+}
+
+/**
+ * May we verify a signature on a TOOL call? (M7J)
+ *
+ * A third switch, for the third reason. The event webhook records what
+ * happened; the inbound webhook decides how a ringing phone is handled; a tool
+ * call WRITES TO THE DATABASE on behalf of a live conversation. Those are three
+ * different amounts of trust, and folding the newest and most powerful one into
+ * an existing flag would mean a deployment that wanted call handling silently
+ * got persistence as well.
+ *
+ * Retell signs custom-function requests with the same X-Retell-Signature scheme
+ * as webhooks (verified against docs.retellai.com/build/single-multi-prompt/
+ * custom-function, reviewed 2026-08-03), so the API key is the signing secret
+ * here too and verification reuses the official SDK verifier rather than a
+ * second hand-rolled HMAC.
+ */
+function canVerifyToolWebhook(env = process.env) {
+  const config = getRetellConfig(env);
+  const reasons = [];
+  if (!config.enabled) reasons.push("RETELL_ENABLED is not \"true\"");
+  if (!config.toolsEnabled) reasons.push("RETELL_TOOLS_ENABLED is not \"true\"");
+  if (!config.hasApiKey) reasons.push("RETELL_API_KEY is not set (it is the signing secret)");
   return { allowed: reasons.length === 0, reasons };
 }
 
@@ -565,6 +618,10 @@ module.exports = {
   isRetellEnabled,
   isWebhookEnabled,
   isInboundWebhookEnabled,
+  areToolsEnabled,
+  buildToolUrl,
+  TOOL_WEBHOOK_BASE_PATH,
+  ENQUIRY_TOOL_PATH,
   INBOUND_WEBHOOK_PATH,
   EVENT_WEBHOOK_PATH,
   buildInboundWebhookUrl,
@@ -579,6 +636,7 @@ module.exports = {
   canPlaceCall,
   canVerifyWebhook,
   canVerifyInboundWebhook,
+  canVerifyToolWebhook,
   canReadDiagnostics,
   assessRetellConfig,
   redactSecrets,

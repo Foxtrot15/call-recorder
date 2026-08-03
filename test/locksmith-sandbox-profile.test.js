@@ -176,11 +176,23 @@ describe("tool-free mode is explicit and auditable", () => {
     assert.equal(payload.responseEngine.general_tools.length, 0);
   });
 
-  test("DEFAULT compilation is unchanged — tools are still emitted", () => {
+  test("DEFAULT compilation still defines every tool contract", () => {
+    // CHANGED BY M7J, deliberately. This used to assert that the PAYLOAD
+    // emitted >= 7 tools as well. It did — none of them with a `url`, because
+    // no route existed. Retell would have accepted those definitions and the
+    // agent would have believed it could record an enquiry.
+    //
+    // The spec (what the product defines) and the payload (what this deployment
+    // can actually serve) are now separate facts. The spec is unchanged; the
+    // payload emits only tools with a real endpoint, which under this test's
+    // CONFIG — no RETELL_TOOLS_ENABLED, no webhook base — is none.
     const { compiled, payload } = compile({ toolFree: false });
     assert.equal(compiled.spec.toolFree, false);
-    assert.ok(compiled.spec.tools.length >= 7, "production behaviour must not change");
-    assert.ok(payload.responseEngine.general_tools.length >= 7);
+    assert.ok(compiled.spec.tools.length >= 7, "the contracts themselves must not change");
+    for (const tool of payload.responseEngine.general_tools) {
+      assert.ok(tool.url, `${tool.name} was advertised with no endpoint behind it`);
+    }
+    assert.equal(payload.responseEngine.general_tools.length, 0, "this config can serve none of them");
   });
 
   test("it never claims an enquiry was saved or sent", () => {
