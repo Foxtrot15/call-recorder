@@ -98,7 +98,11 @@ const OUTCOMES = Object.freeze({
     code: "invalid",
     saved: false,
     status: 200,
-    agentMessage: "I could not record that yet — something was missing or unclear. Ask the caller for what is missing and try once more.",
+    // Rewritten after the live loop. The old wording ("ask the caller for what
+    // is missing and try once more") sent the agent back to collection even
+    // when the caller had already answered, and said nothing about stopping.
+    agentMessage:
+      "Not recorded yet. Check the \"missing\" and \"invalid\" lists: ask only for fields under \"missing\", and for anything under \"invalid\" say you could not read what they gave and ask them to repeat just that one. Do not start the whole enquiry again, and do not try more than twice.",
   },
   unavailable: {
     code: "unavailable",
@@ -145,6 +149,66 @@ function pick(raw, allowed) {
  * than no number, and a second normaliser here would be a second idea of what
  * is dialable.
  */
+// ── SPOKEN DIGITS IN A TOOL ARGUMENT (M7K-LV2) ──────────────────────
+//
+// The first live enquiry loop was caused by this, and the cause is ours:
+//
+//   callback_number: "zero four one two, eight one six, six seven nine"
+//
+// The model passed the number as WORDS. `normaliseAuNumber` correctly refused
+// it — there is not a digit in it — so the tool reported the field unusable,
+// the agent asked again, the caller repeated it, and the same thing happened
+// three times.
+//
+// The parser did not fail. It did exactly its job on input that was not a
+// number. What failed is that M7I-C2 taught the agent to render numbers as
+// words for SPEECH ("say every digit separately, never as digits") and nothing
+// told it that a tool ARGUMENT is machine input with the opposite requirement.
+// The prompt and the schema now say so — and this converts words to digits
+// before the canonical gate as well, because a speech system will produce
+// spoken forms occasionally no matter what the prompt says, and a caller locked
+// out of their house should not pay for that with a loop.
+//
+// `normaliseAuNumber` is UNTOUCHED and remains the only judge of what is
+// dialable. This runs before it, never instead of it.
+//
+// Both "zero" and "oh"/"o" map to 0: people say both, and the whole point is to
+// accept what was actually said.
+const SPOKEN_DIGITS = Object.freeze({
+  zero: "0", oh: "0", o: "0", nought: "0",
+  one: "1", two: "2", three: "3", four: "4",
+  five: "5", six: "6", seven: "7", eight: "8", nine: "9",
+});
+const SPOKEN_MULTIPLIERS = Object.freeze({ double: 2, triple: 3 });
+
+/**
+ * Convert a spoken number to digits, or return the input unchanged.
+ *
+ * Only acts when the value contains NO digits at all — a value that already has
+ * digits is left entirely alone, so this can never rewrite a real number.
+ * Returns null when the words do not resolve to anything, letting the caller
+ * report the field as invalid rather than inventing a number.
+ */
+function digitsFromSpoken(raw) {
+  if (typeof raw !== "string") return null;
+  if (/[0-9]/.test(raw)) return raw; // already numeric — never touch it
+  const words = raw.toLowerCase().match(/[a-z]+/g) || [];
+  if (!words.length) return null;
+
+  let digits = "";
+  let pending = 1;
+  for (const word of words) {
+    if (SPOKEN_MULTIPLIERS[word]) { pending = SPOKEN_MULTIPLIERS[word]; continue; }
+    const digit = SPOKEN_DIGITS[word];
+    // An unrecognised word means this is prose, not a dictated number. Refuse
+    // rather than silently dropping it and assembling a shorter number.
+    if (digit === undefined) return null;
+    digits += digit.repeat(pending);
+    pending = 1;
+  }
+  return digits || null;
+}
+
 function validateEnquiryArgs(args, deps = {}) {
   const normaliseAuNumber = deps.normaliseAuNumber || require("./locksmith-profile").normaliseAuNumber;
   const serviceIds = deps.serviceIds || require("./locksmith-profile-schema").SERVICE_IDS;
@@ -174,9 +238,15 @@ function validateEnquiryArgs(args, deps = {}) {
   if (!rawNumber.trim()) {
     errors.push({ field: "callback_number", code: "missing", message: "callback_number is required." });
   } else {
-    const canonical = normaliseAuNumber(rawNumber);
+    // Words -> digits first, then the canonical gate. See digitsFromSpoken.
+    const numeric = digitsFromSpoken(rawNumber);
+    const canonical = numeric ? normaliseAuNumber(numeric) : null;
     if (!canonical) {
-      errors.push({ field: "callback_number", code: "not_dialable", message: "callback_number is not a dialable Australian number." });
+      // `invalid`, NOT `missing`. The live loop happened partly because every
+      // error was reported to the agent as "missing" — so it kept asking for a
+      // number the caller had already given three times, instead of saying the
+      // one it had could not be read.
+      errors.push({ field: "callback_number", code: "invalid", message: "callback_number was given but is not a usable Australian number." });
     } else {
       values.callback_number = canonical;
     }
@@ -324,8 +394,18 @@ function toToolResponse(captureResult, notification = null) {
     // written for that exact outcome. The capture message stays the fallback.
     message: (notification && notification.agentMessage) || captureResult.agentMessage,
     ...(captureResult.enquiryId ? { reference: captureResult.enquiryId } : {}),
-    ...(captureResult.errors && captureResult.errors.length
-      ? { missing: captureResult.errors.map((e) => e.field) }
+    // ── MISSING IS NOT INVALID (M7K-LV2) ───────────────────────────
+    // Every validation error used to be reported as `missing`. On the live
+    // loop the caller had given their number three times and the agent was
+    // told three times that it was MISSING — so it asked for it again instead
+    // of saying it could not read the one it had. Two different fixes for two
+    // different problems, and the agent cannot pick the right one from a word
+    // that describes the wrong problem.
+    ...(captureResult.errors && captureResult.errors.some((e) => e.code === "missing")
+      ? { missing: captureResult.errors.filter((e) => e.code === "missing").map((e) => e.field) }
+      : {}),
+    ...(captureResult.errors && captureResult.errors.some((e) => e.code !== "missing")
+      ? { invalid: captureResult.errors.filter((e) => e.code !== "missing").map((e) => e.field) }
       : {}),
   };
 }

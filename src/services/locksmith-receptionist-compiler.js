@@ -227,13 +227,30 @@ function buildToolContracts() {
   return Object.freeze([
     Object.freeze({
       name: "create_locksmith_enquiry",
-      description: "Record the caller's job so the locksmith receives it. Call this before ending any call where the caller wants work done.",
+      // M7K-LV2: the description now says what this tool is NOT. A live call
+      // invoked it to answer "has the locksmith been notified?" — using a
+      // write as a status read, which restarted capture on an already-collected
+      // job.
+      description:
+        "Record the caller's job. Call this ONCE per job, only when you have the caller's details. It CREATES a record — it is not a status check, so never call it to find out whether something was already recorded or notified; use the result you already received for that.",
       endpoint: "POST /api/locksmith/enquiry",
       parameters: Object.freeze({
         type: "object",
         properties: {
           caller_name: { type: "string" },
-          callback_number: { type: "string" },
+          // M7K-LV2: the live loop passed "zero four one two, eight one six,
+          // six seven nine" — the number as WORDS, because M7I-C2 teaches the
+          // agent to SPEAK numbers that way and nothing said a tool argument is
+          // different. The schema now says it explicitly.
+          callback_number: {
+            type: "string",
+            // NO international example here: a literal "+61…" on a model-facing
+            // surface is exactly what the no-raw-E.164 guard exists to stop,
+            // because the agent may read it out. The local form carries the
+            // point ("digits, not words") without that risk.
+            description:
+              "The caller's phone number in DIGITS, exactly as they would write it — e.g. \"0412 816 679\". Never spell it out in words here: you SAY it aloud as words, but you SEND it as digits.",
+          },
           suburb: { type: "string" },
           street_address: { type: "string" },
           property_type: { type: "string", enum: ["residential", "commercial", "automotive"] },
@@ -799,6 +816,19 @@ function compileReceptionistSpec({ profile, profileVersion, clientId, templateVe
         "If it comes back not saved, tell the caller plainly that you could not record it and that they should ring the locksmith directly. Do not promise to try later — you cannot.",
         "If the result says the job is already recorded, say so briefly and move on. Do not read the whole thing back again.",
         "Call it ONCE for one job. If the caller corrects a detail afterwards, that is the same job, not a second one.",
+        // ── THE LIVE LOOP (M7K-LV2) ────────────────────────────────
+        // A caller was asked for the same number three times and told each
+        // time that there was "a problem recording" it. The tool had been
+        // invoked to ANSWER a status question, it reported the number as
+        // "missing" when it had actually been unreadable, and nothing bounded
+        // the retry. Each of those gets its own rule.
+        "IT IS NOT A STATUS CHECK. Never call it to find out whether something was recorded or whether the locksmith was told. You already have that answer in the last result you received — use it. Saying \"let me check\" and calling this again is wrong.",
+        "Once you have a result, answer any question about what was recorded, saved or notified FROM THAT RESULT. Do not re-run anything to find out.",
+        "When the number in the arguments is a phone number, write it as DIGITS — \"0412 816 679\". Say it aloud as words, but send digits. These are different things and only the spoken one uses words.",
+        "If it comes back not recorded, look at \"missing\" and \"invalid\". Ask ONLY for what is listed. \"missing\" means they never gave it. \"invalid\" means they DID give it and you could not use it — so say you did not catch it properly and ask them to repeat that one field, nothing else.",
+        "NEVER start the whole enquiry again because one field failed. Do not re-ask for the name, suburb or address you already have.",
+        "TWO ATTEMPTS AT MOST for the same job. If the second fails, stop calling the function, tell the caller plainly that you cannot record it, and suggest they ring the locksmith directly. Do not try a third time.",
+        "Do not invent reasons for a failure, and do not coach the caller on pronunciation. You do not know why it failed, and telling somebody to say \"zero\" instead of \"oh\" when they already said it correctly wastes their time and is not true.",
         // ── RECORDED IS NOT NOTIFIED (M7J-LV) ──────────────────────
         // The first live call answered "has the locksmith been notified?" with
         // "the details are recorded and the locksmith will be notified". Both
@@ -1212,7 +1242,20 @@ function toRetellPayload({ compiled, config }) {
           // not answered in 10 seconds it is not going to, and the agent needs
           // to get back to the conversation rather than hold dead air.
           timeout_ms: 10000,
-          speak_during_execution: true,
+          // ── NO PRE-RESULT NARRATION (M7K-LV2) ────────────────────
+          // With this on, the model composes a sentence at INVOCATION time,
+          // before any result exists. On the live loop it produced:
+          //
+          //   "I've got all your details, Peter. I'll record your lockout now
+          //    and check if the locksmith has been notified."
+          //
+          // — spoken while the call was still in flight, and it is why the
+          // founder believed the enquiry had been recorded when it never was.
+          // The prompt forbids claiming a save before seeing the result; this
+          // setting structurally invites exactly that, so it is off. The tool
+          // answers in well under a second, so the silence it costs is small
+          // and a false claim is not.
+          speak_during_execution: false,
           speak_after_execution: true,
           parameters: tool.parameters,
         };
