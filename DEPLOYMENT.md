@@ -67,7 +67,7 @@ workshop. Semantics owned by
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `LOCKSMITH_ONBOARDING_ENABLED` | review + founder routes | Strict string `"true"` mounts them; anything else (including unset) = every path 404s before any auth runs. **Unset in production today.** |
+| `LOCKSMITH_ONBOARDING_ENABLED` | setup wizard + review + founder routes | Strict string `"true"` mounts them; anything else (including unset) = every path 404s before any auth runs. Also gates the M8A `/client/locksmith-setup/*` surface. **Unset in production today.** |
 
 **Deploy precondition:** these routes also need
 `supabase/sql/lpm2_create_locksmith_onboarding.sql` applied by a human first.

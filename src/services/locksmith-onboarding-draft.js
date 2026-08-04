@@ -394,7 +394,19 @@ function createOnboardingDraftService(deps = {}) {
 
     return guarded(async () => {
       const row = await storeApi.getWorkingDraft(clientId);
-      if (!row) return refuse(OUTCOMES.noDraft, "You haven't started your setup yet.");
+      if (!row) {
+        // Distinguish "never started" from "already handed over": the second is
+        // the common case after submitting, and telling that owner they have not
+        // started is both wrong and alarming.
+        const submitted = await storeApi.getSubmittedVersion(clientId);
+        if (submitted) {
+          return refuse(
+            OUTCOMES.noDraft,
+            "Your settings have been sent for approval, so they're locked while you read them back. Choose \"change something\" on the review page to edit them again."
+          );
+        }
+        return refuse(OUTCOMES.noDraft, "You haven't started your setup yet.");
+      }
 
       const candidate = stepsApi.applyStep(stepId, answers, row.profile);
 

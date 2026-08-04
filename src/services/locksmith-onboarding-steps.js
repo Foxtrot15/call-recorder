@@ -253,7 +253,7 @@ const STEPS = Object.freeze([
         kind: "tel",
         section: "identity",
         required: true,
-        placeholder: "03 9000 0000 or 0400 000 000",
+        placeholder: "0491 570 010",
         spoken: "What number do customers already ring you on?",
         // M7 fix, kept explicit here because it is the mistake this field
         // invites: a published contact number is not where urgent calls go.
@@ -880,7 +880,7 @@ const STEPS = Object.freeze([
         kind: "tel",
         section: "transfer",
         required: true,
-        placeholder: "0400 000 000",
+        placeholder: "0491 570 006",
         spoken: "When it's urgent, what number should I put them through to?",
         help: "Usually a mobile you carry. This is separate from your public business number on purpose — putting a caller back into your own switchboard is how a genuine emergency gets lost.",
         get: (p) => p.transfer.primaryNumber,
@@ -949,7 +949,7 @@ const STEPS = Object.freeze([
         label: "Mobile for call summaries",
         kind: "tel",
         section: "notifications",
-        placeholder: "0400 000 000",
+        placeholder: "0491 570 006",
         spoken: "Where should I send the summary of each call — text, email, both?",
         // Truthful availability. Text messaging is built and tested but not yet
         // approved for live sending, and a customer must not discover that after

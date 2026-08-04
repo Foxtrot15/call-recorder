@@ -580,6 +580,48 @@ function historyHtml() {
   });
 }
 
+describe("M8A example phone numbers can never ring a real handset", () => {
+  // The ACMA range reserved for drama and training. Valid Australian mobiles by
+  // format, so they exercise the real validator, but permanently unallocated.
+  const FICTITIOUS_MIN = 491570006;
+  const FICTITIOUS_MAX = 491570156;
+
+  const FILES = [
+    "src/services/locksmith-onboarding-steps.js",
+    "src/views/locksmith-setup-page.js",
+    "scripts/locksmith-setup-walkthrough.js",
+    "test/locksmith-setup-journey.test.js",
+    "test/locksmith-setup-ui.test.js",
+  ];
+
+  test("every Australian mobile in the M8A files is inside the fictitious range", () => {
+    for (const file of FILES) {
+      const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+      const numbers = [...source.matchAll(/0(4\d{2})\s?(\d{3})\s?(\d{3})/g)].map((m) => Number(`${m[1]}${m[2]}${m[3]}`));
+      for (const n of numbers) {
+        assert.ok(
+          n >= FICTITIOUS_MIN && n <= FICTITIOUS_MAX,
+          `${file} contains 0${n}, which is outside the ACMA fictitious range and could be a real handset`
+        );
+      }
+    }
+  });
+
+  test("the placeholders a locksmith sees are fictitious too", () => {
+    // A placeholder is never dialled by the system, but it is the number a
+    // hurried owner is most likely to copy.
+    for (const step of steps.STEPS) {
+      for (const field of step.fields) {
+        if (field.kind !== "tel" || !field.placeholder) continue;
+        const digits = field.placeholder.replace(/\D/g, "");
+        if (!/^04/.test(digits)) continue;
+        const n = Number(digits.slice(1));
+        assert.ok(n >= FICTITIOUS_MIN && n <= FICTITIOUS_MAX, `${step.id}.${field.name} suggests ${field.placeholder}, which is not a fictitious number`);
+      }
+    }
+  });
+});
+
 describe("M8A the words on the page", () => {
   const JARGON = [
     "retell", "twilio", "supabase", "webhook", "e.164", "e164", "llm", "prompt",
