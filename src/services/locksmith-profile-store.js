@@ -405,6 +405,114 @@ async function updateReviewState({ clientId, version, confirmations, reviewNotes
 }
 
 /**
+ * The client's open WORKING DRAFT — a `status:"draft"` row, which is the
+ * partially-filled setup form (M8A). Distinct from `needs_review`, which is a
+ * finished draft waiting to be read.
+ *
+ * Highest version wins rather than `maybeSingle()`: "one working draft per
+ * client" is an app invariant that the shipped SQL does not yet index, so a
+ * duplicate must degrade to "carry on with the newest" rather than throw and
+ * lock the owner out of their own setup.
+ */
+async function getWorkingDraft(clientId) {
+  const supabase = require("./supabase");
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("*")
+    .eq("client_id", clientId)
+    .eq("status", "draft")
+    .order("version", { ascending: false })
+    .limit(1);
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`working draft lookup failed: ${error.message}`);
+  }
+  return data && data.length ? data[0] : null;
+}
+
+/**
+ * Write the profile BODY of a working draft.
+ *
+ * The `.eq("status", "draft")` filter is the safety property of this whole
+ * milestone: `needs_review`, `approved`, `superseded` and `rejected` rows are
+ * unreachable from here, so no amount of setup-form traffic can alter a
+ * configuration that is live or under review. A zero-row update is reported as
+ * a conflict, never as a silent success.
+ */
+async function updateDraftProfile({ clientId, version, profile, expectedUpdatedAt = null }) {
+  const supabase = require("./supabase");
+  const nowIso = new Date().toISOString();
+  const fields = {
+    profile,
+    schema_version: profile && profile.schemaVersion ? profile.schemaVersion : null,
+    ...toQueryableColumns(profile),
+    updated_at: nowIso,
+  };
+
+  let update = supabase.from(TABLE).update(fields).eq("client_id", clientId).eq("version", version).eq("status", "draft");
+  if (expectedUpdatedAt) update = update.eq("updated_at", expectedUpdatedAt);
+
+  const { data, error } = await update.select();
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`draft profile update failed: ${error.message}`);
+  }
+  if (!data || data.length === 0) {
+    return { ok: false, code: "stale_draft", message: "Your setup changed in another window. Reload to see the latest answers." };
+  }
+  return { ok: true, row: data[0] };
+}
+
+/**
+ * Hand a finished working draft over for review: `draft` → `needs_review`.
+ *
+ * This is the moment the owner stops editing and starts reading. It changes no
+ * profile content — only who may touch it, and through which surface.
+ */
+async function submitDraftForReview({ clientId, version, actor, expectedUpdatedAt = null, source = "setup_ui" }) {
+  const row = await getVersion(clientId, version);
+  if (!row) return { ok: false, code: "not_found", message: "That setup no longer exists." };
+  if (!actor || actor.clientId !== row.client_id) {
+    return { ok: false, code: "not_authorised", message: "You are not authorised to submit this setup." };
+  }
+  if (!canTransition(row.status, "needs_review")) {
+    return { ok: false, code: "bad_status", message: `Setup with status "${row.status}" cannot be submitted for review.` };
+  }
+
+  const supabase = require("./supabase");
+  const nowIso = new Date().toISOString();
+  let update = supabase
+    .from(TABLE)
+    .update({ status: "needs_review", updated_at: nowIso })
+    .eq("client_id", clientId)
+    .eq("version", version)
+    .eq("status", "draft");
+  if (expectedUpdatedAt) update = update.eq("updated_at", expectedUpdatedAt);
+
+  const { data, error } = await update.select();
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`submit for review failed: ${error.message}`);
+  }
+  if (!data || data.length === 0) {
+    return { ok: false, code: "stale_draft", message: "Your setup changed in another window. Reload before submitting." };
+  }
+
+  await recordAuditEvent(
+    buildAuditEvent({
+      clientId,
+      sessionId: row.session_id,
+      profileVersion: version,
+      eventType: "profile.submitted_for_review",
+      actorType: actor.type,
+      actorId: actor.id,
+      source,
+    })
+  );
+  return { ok: true, row: data[0] };
+}
+
+/**
  * Approve a version. Guard first, then an optimistic update matched on
  * (client_id, version, status, updated_at) so a racing approval or a background
  * correction cannot be approved from under the reviewer. Supersedes the
@@ -504,6 +612,9 @@ module.exports = {
   listVersions,
   nextVersionNumber,
   createDraftVersion,
+  getWorkingDraft,
+  updateDraftProfile,
+  submitDraftForReview,
   updateReviewState,
   approveVersion,
   rejectVersion,
