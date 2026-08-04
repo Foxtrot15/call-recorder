@@ -66,6 +66,43 @@ function memoryStore({ seedApproved = null } = {}) {
       drafts.sort((a, b) => b.version - a.version);
       return drafts[0] || null;
     },
+    async getSubmittedVersion(clientId) {
+      const submitted = [...rows.values()].filter((r) => r.client_id === clientId && r.status === "needs_review");
+      submitted.sort((a, b) => b.version - a.version);
+      return submitted[0] || null;
+    },
+    async reopenDraft({ clientId, version, actor }) {
+      const row = rows.get(version);
+      if (!row || row.client_id !== clientId) return { ok: false, code: "not_found", message: "Gone." };
+      if (!actor || actor.clientId !== row.client_id) return { ok: false, code: "not_authorised", message: "No." };
+      if (row.status !== "needs_review") return { ok: false, code: "bad_status", message: `Settings with status "${row.status}" cannot be reopened.` };
+      row.status = "draft";
+      row.confirmations = {};
+      row.updated_at = new Date(Date.now() + 99).toISOString();
+      return { ok: true, row };
+    },
+    applyConfirmation: (existing, args) => realStore.applyConfirmation(existing, args),
+    async updateReviewState({ clientId, version, confirmations, expectedUpdatedAt }) {
+      const row = rows.get(version);
+      if (!row || row.client_id !== clientId) return { ok: false, code: "stale_review", message: "Gone." };
+      if (!["draft", "needs_review"].includes(row.status)) return { ok: false, code: "stale_review", message: "Closed." };
+      if (expectedUpdatedAt && row.updated_at !== expectedUpdatedAt) return { ok: false, code: "stale_review", message: "Moved." };
+      row.confirmations = confirmations;
+      row.updated_at = new Date(Date.now() + Math.random() * 100 + 1).toISOString();
+      return { ok: true, row };
+    },
+    // Runs the REAL approval guard against the in-memory row, so these tests
+    // cannot pass by relaxing a rule the production path enforces.
+    async approveVersion({ clientId, version, actor, expectedUpdatedAt, reason }) {
+      const row = rows.get(version);
+      const verdict = realStore.evaluateApproval({ row, profile: row && row.profile, confirmations: row && row.confirmations, actor, expectedUpdatedAt });
+      if (!verdict.ok) return { ok: false, blockers: verdict.blockers };
+      for (const other of rows.values()) if (other.status === "approved") other.status = "superseded";
+      row.status = "approved";
+      row.approved_at = new Date().toISOString();
+      audit.push({ event_type: "profile.approved", profile_version: version, reason });
+      return { ok: true, row };
+    },
     async getVersion(clientId, version) {
       const row = rows.get(version);
       return row && row.client_id === clientId ? row : null;
@@ -713,6 +750,146 @@ describe("M8A submission and the approval boundary", () => {
     const r = await svc.saveStep({ clientId: CLIENT, stepId: "identity", answers: { description: "sneak" }, actor: ACTOR });
     assert.equal(r.ok, false);
     assert.equal(r.outcome, OUTCOMES.noDraft, "a submitted version was still editable through the setup form");
+  });
+});
+
+describe("M8A a submitted setup is frozen, not forked", () => {
+  test("starting again while a version is under review returns THAT version, not a blank one", async () => {
+    const store = memoryStore();
+    const svc = service(store);
+    await svc.startDraft({ clientId: CLIENT, actor: ACTOR });
+    await completeSetup(svc);
+    const submitted = await svc.submitForReview({ clientId: CLIENT, actor: ACTOR });
+
+    const again = await svc.startDraft({ clientId: CLIENT, actor: ACTOR });
+    assert.equal(again.ok, true);
+    assert.equal(again.created, false, "a second draft was forked while one was under review");
+    assert.equal(again.submitted, true);
+    assert.equal(again.version, submitted.version);
+    assert.equal(store.rows.size, 1, "a blank duplicate draft was created — the owner's answers would look lost");
+    assert.equal(steps.readStep("identity", again.profile).spokenName, "Peninsula Lock and Key");
+  });
+
+  test("reopening returns it to draft and clears every tick", async () => {
+    const store = memoryStore();
+    const svc = service(store);
+    await svc.startDraft({ clientId: CLIENT, actor: ACTOR });
+    await completeSetup(svc);
+    const submitted = await svc.submitForReview({ clientId: CLIENT, actor: ACTOR });
+
+    // Tick a couple of sections first, so we can prove they are cleared.
+    await svc.confirmSection({ clientId: CLIENT, section: "identity", actor: ACTOR });
+    await svc.confirmSection({ clientId: CLIENT, section: "areas", actor: ACTOR });
+    assert.ok(Object.keys(store.rows.get(submitted.version).confirmations).length > 0);
+
+    const reopened = await svc.reopenForEditing({ clientId: CLIENT, actor: ACTOR });
+    assert.equal(reopened.ok, true);
+    assert.equal(reopened.reopened, true);
+    assert.equal(reopened.status, "draft");
+    assert.deepEqual(store.rows.get(submitted.version).confirmations, {}, "ticks survived a change to the text they were about");
+
+    // And it is editable again.
+    const saved = await svc.saveStep({ clientId: CLIENT, stepId: "identity", answers: { description: "Edited." }, actor: ACTOR, allowIncomplete: true });
+    assert.equal(saved.ok, true);
+  });
+
+  test("an approved version can never be reopened", async () => {
+    const store = memoryStore({ seedApproved: fullProfile() });
+    // There is no working draft and no submitted version — only a live,
+    // approved one. Reopening must refuse rather than reach for it.
+    const r = await service(store).reopenForEditing({ clientId: CLIENT, actor: ACTOR });
+    assert.equal(r.ok, false, "an approved, live configuration was editable in place");
+    assert.equal(r.outcome, OUTCOMES.noDraft);
+    assert.equal(store.rows.get(1).status, "approved", "the live version was moved");
+  });
+
+  test("the real store refuses to reopen anything that is not needs_review", () => {
+    // Belt and braces on the transition table itself: the in-memory fake mirrors
+    // it, so assert the production rule directly.
+    for (const status of ["approved", "superseded", "rejected"]) {
+      assert.equal(realStore.canTransition(status, "draft"), false, `"${status}" is reopenable`);
+    }
+    assert.equal(realStore.canTransition("needs_review", "draft"), true);
+  });
+});
+
+describe("M8A confirmation and approval on the setup surface", () => {
+  async function readyForApproval() {
+    const store = memoryStore();
+    const svc = service(store);
+    await svc.startDraft({ clientId: CLIENT, actor: ACTOR });
+    await completeSetup(svc);
+    await svc.submitForReview({ clientId: CLIENT, actor: ACTOR });
+    return { store, svc };
+  }
+
+  test("confirming one STEP ticks every profile section that step owns", async () => {
+    const { store, svc } = await readyForApproval();
+    const r = await svc.confirmSection({ clientId: CLIENT, section: "jobs", actor: ACTOR });
+    assert.equal(r.ok, true);
+    const step = steps.getStep("jobs");
+    for (const section of step.profileSections) {
+      assert.ok(r.confirmations[section] && r.confirmations[section].confirmedAt, `"${section}" was not ticked by confirming the jobs step`);
+    }
+    assert.ok(!r.outstandingSteps.includes("jobs"));
+  });
+
+  test("ticking all seven steps leaves nothing outstanding", async () => {
+    const { svc } = await readyForApproval();
+    let last = null;
+    for (const step of steps.STEPS) {
+      last = await svc.confirmSection({ clientId: CLIENT, actor: ACTOR, section: step.id });
+      assert.equal(last.ok, true, `confirming ${step.id} failed: ${last.message}`);
+    }
+    assert.deepEqual(last.outstandingConfirmations, [], "a safety-critical section was unreachable from the wizard");
+    assert.deepEqual(last.outstandingSteps, []);
+  });
+
+  test("approval is refused until every step is ticked", async () => {
+    const { svc } = await readyForApproval();
+    const early = await svc.approve({ clientId: CLIENT, actor: ACTOR });
+    assert.equal(early.ok, false);
+    assert.ok(early.blockers.some((b) => b.code === "confirmations_missing"));
+  });
+
+  test("with every step ticked, approval succeeds and does NOT activate", async () => {
+    const { store, svc } = await readyForApproval();
+    for (const step of steps.STEPS) await svc.confirmSection({ clientId: CLIENT, actor: ACTOR, section: step.id });
+
+    const r = await svc.approve({ clientId: CLIENT, actor: ACTOR, reason: "Read it all, looks right." });
+    assert.equal(r.ok, true, `refused: ${JSON.stringify(r.blockers || r.message)}`);
+    assert.equal(r.activated, false, "approval reported itself as activation");
+
+    const approved = await store.getApprovedVersion(CLIENT);
+    assert.ok(approved);
+    assert.equal(approved.version, r.version);
+    assert.ok(store.audit.some((e) => (e.event_type || e.eventType) === "profile.approved"));
+  });
+
+  test("a raw profile section key is also accepted, for a future voice or API caller", async () => {
+    const { svc } = await readyForApproval();
+    const r = await svc.confirmSection({ clientId: CLIENT, actor: ACTOR, section: "transfer" });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.confirmedSections, ["transfer"]);
+  });
+
+  test("a section that is neither a step nor a profile key is refused", async () => {
+    const { svc } = await readyForApproval();
+    for (const bad of ["nope", "constructor", "__proto__", "toString"]) {
+      const r = await svc.confirmSection({ clientId: CLIENT, actor: ACTOR, section: bad });
+      assert.equal(r.ok, false, `"${bad}" was accepted as a confirmable section`);
+    }
+  });
+
+  test("another tenant cannot confirm or approve", async () => {
+    const { svc } = await readyForApproval();
+    const intruder = { type: "client", id: "u9", clientId: "someone-else" };
+    const c = await svc.confirmSection({ clientId: CLIENT, actor: intruder, section: "identity" });
+    assert.equal(c.ok, false);
+    assert.equal(c.outcome, OUTCOMES.notAuthorised);
+    const a = await svc.approve({ clientId: CLIENT, actor: intruder });
+    assert.equal(a.ok, false);
+    assert.equal(a.outcome, OUTCOMES.notAuthorised);
   });
 });
 

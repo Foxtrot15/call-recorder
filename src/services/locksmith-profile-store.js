@@ -431,6 +431,29 @@ async function getWorkingDraft(clientId) {
 }
 
 /**
+ * The client's finished-but-unapproved version — a `needs_review` row. This is
+ * what the review page reads after the setup form has been handed over.
+ *
+ * Same highest-version-wins reasoning as getWorkingDraft: an unexpected
+ * duplicate must not throw and strand the owner mid-approval.
+ */
+async function getSubmittedVersion(clientId) {
+  const supabase = require("./supabase");
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("*")
+    .eq("client_id", clientId)
+    .eq("status", "needs_review")
+    .order("version", { ascending: false })
+    .limit(1);
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`submitted version lookup failed: ${error.message}`);
+  }
+  return data && data.length ? data[0] : null;
+}
+
+/**
  * Write the profile BODY of a working draft.
  *
  * The `.eq("status", "draft")` filter is the safety property of this whole
@@ -507,6 +530,56 @@ async function submitDraftForReview({ clientId, version, actor, expectedUpdatedA
       actorType: actor.type,
       actorId: actor.id,
       source,
+    })
+  );
+  return { ok: true, row: data[0] };
+}
+
+/**
+ * Take a submitted version back for editing: `needs_review` → `draft`.
+ *
+ * Every confirmation is cleared in the same write. That is the M2 rule applied
+ * consistently — a correction always invalidates the tick that preceded it —
+ * and here it matters more, because the alternative is a version that carries
+ * ticks recorded against text the reviewer has since changed.
+ */
+async function reopenDraft({ clientId, version, actor, source = "setup_ui" }) {
+  const row = await getVersion(clientId, version);
+  if (!row) return { ok: false, code: "not_found", message: "That setup no longer exists." };
+  if (!actor || actor.clientId !== row.client_id) {
+    return { ok: false, code: "not_authorised", message: "You are not authorised to change this setup." };
+  }
+  if (!canTransition(row.status, "draft")) {
+    return { ok: false, code: "bad_status", message: `Settings with status "${row.status}" cannot be reopened. Any change starts a new version.` };
+  }
+
+  const supabase = require("./supabase");
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ status: "draft", confirmations: {}, updated_at: nowIso })
+    .eq("client_id", clientId)
+    .eq("version", version)
+    .eq("status", "needs_review")
+    .select();
+  if (error) {
+    if (tableMissing(error)) throw provisioningError();
+    throw new Error(`reopen failed: ${error.message}`);
+  }
+  if (!data || data.length === 0) {
+    return { ok: false, code: "stale_draft", message: "These settings changed. Reload before editing them." };
+  }
+
+  await recordAuditEvent(
+    buildAuditEvent({
+      clientId,
+      sessionId: row.session_id,
+      profileVersion: version,
+      eventType: "profile.reopened_for_editing",
+      actorType: actor.type,
+      actorId: actor.id,
+      source,
+      detail: { confirmationsCleared: Object.keys(row.confirmations || {}).length },
     })
   );
   return { ok: true, row: data[0] };
@@ -613,8 +686,10 @@ module.exports = {
   nextVersionNumber,
   createDraftVersion,
   getWorkingDraft,
+  getSubmittedVersion,
   updateDraftProfile,
   submitDraftForReview,
+  reopenDraft,
   updateReviewState,
   approveVersion,
   rejectVersion,

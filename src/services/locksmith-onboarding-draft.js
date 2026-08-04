@@ -339,7 +339,16 @@ function createOnboardingDraftService(deps = {}) {
 
     return guarded(async () => {
       const existing = await storeApi.getWorkingDraft(clientId);
-      if (existing) return { ok: true, outcome: OUTCOMES.ok, created: false, ...project(existing) };
+      if (existing) return { ok: true, outcome: OUTCOMES.ok, created: false, submitted: false, ...project(existing) };
+
+      // A version already handed over for review is NOT a reason to start a new
+      // one. Creating a second draft here would seed it from the approved
+      // profile — or from blank, for a first-time client — and the owner would
+      // open setup to an empty form and reasonably conclude they had lost
+      // everything they just typed. Report the submitted version instead; the
+      // caller sends them to review, where they can approve it or take it back.
+      const submitted = await storeApi.getSubmittedVersion(clientId);
+      if (submitted) return { ok: true, outcome: OUTCOMES.ok, created: false, submitted: true, ...project(submitted) };
 
       const approved = await storeApi.getApprovedVersion(clientId);
       const profile = approved && approved.profile ? JSON.parse(JSON.stringify(approved.profile)) : seedProfile(clientId);
@@ -354,7 +363,7 @@ function createOnboardingDraftService(deps = {}) {
         source: sourceChannel,
       });
       logger.log(`[setup] draft_started client=${clientId} version=${row.version} from=${approved ? approved.version : "blank"} channel=${sourceChannel}`);
-      return { ok: true, outcome: OUTCOMES.ok, created: true, basedOnVersion: approved ? approved.version : null, ...project(row) };
+      return { ok: true, outcome: OUTCOMES.ok, created: true, submitted: false, basedOnVersion: approved ? approved.version : null, ...project(row) };
     });
   }
 
@@ -516,6 +525,175 @@ function createOnboardingDraftService(deps = {}) {
     });
   }
 
+  /**
+   * What the review stage should show: the submitted version if there is one,
+   * otherwise the working draft.
+   *
+   * A typed setup deliberately has no onboarding SESSION. That model is "one
+   * attempt to onboard a locksmith by voice" and its state machine insists on a
+   * transcript and an extraction on the way to review — inventing a fake
+   * transcript to satisfy it would corrupt the meaning of every session row.
+   * So review and approval for a typed setup live here instead, on the SAME
+   * store functions and behind the SAME approval guard. Nothing about the rules
+   * differs; only the page the client is looking at.
+   */
+  async function loadForReview({ clientId }) {
+    if (!clientId) return refuse(OUTCOMES.notAuthorised, "A setup needs to know which business it is for.");
+    return guarded(async () => {
+      const submitted = await storeApi.getSubmittedVersion(clientId);
+      const row = submitted || (await storeApi.getWorkingDraft(clientId));
+      if (!row) return refuse(OUTCOMES.noDraft, "You haven't started your setup yet.");
+      return {
+        ok: true,
+        outcome: OUTCOMES.ok,
+        submitted: Boolean(submitted),
+        confirmations: row.confirmations || {},
+        outstandingConfirmations: outstandingSections(row.confirmations),
+        outstandingSteps: outstandingSteps(row.confirmations),
+        ...project(row),
+      };
+    });
+  }
+
+  /**
+   * Tick one step of the review.
+   *
+   * The owner reads and ticks the SEVEN steps they filled in; the approval guard
+   * counts the TWELVE canonical profile sections. Each step declares the sections
+   * it owns, so one tick records every section that step is responsible for. The
+   * union of those declarations is asserted to equal CONFIRMATION_KEYS, which is
+   * what stops this convenience from quietly leaving a safety-critical section
+   * unconfirmed.
+   *
+   * Only reachable on a `needs_review` row, which is what makes confirmation mean
+   * something: the owner is ticking settings that are finished and frozen, not a
+   * form still being typed into.
+   */
+  async function confirmSection({ clientId, section, actor, expectedUpdatedAt = null }) {
+    if (!clientId) return refuse(OUTCOMES.notAuthorised, "A setup needs to know which business it is for.");
+    if (!actor || actor.clientId !== clientId) return refuse(OUTCOMES.notAuthorised, "You are not authorised to confirm these settings.");
+
+    const step = stepsApi.getStep(section);
+    // Accept either a step id (what the review page sends) or a raw profile
+    // section key (what a future voice agent or API caller may send).
+    const targets = step ? step.profileSections : S.CONFIRMATION_KEYS.includes(section) ? [section] : null;
+    if (!targets || !targets.length) return refuse(OUTCOMES.invalidAnswers, "That isn't a section you can confirm.");
+
+    return guarded(async () => {
+      const row = await storeApi.getSubmittedVersion(clientId);
+      if (!row) return refuse(OUTCOMES.noDraft, "There is nothing waiting for your approval.");
+
+      let confirmations = row.confirmations;
+      for (const target of targets) {
+        confirmations = storeApi.applyConfirmation(confirmations, { section: target, actorId: actor.id });
+      }
+      const written = await storeApi.updateReviewState({
+        clientId,
+        version: row.version,
+        confirmations,
+        expectedUpdatedAt: expectedUpdatedAt || row.updated_at,
+      });
+      if (!written.ok) return refuse(OUTCOMES.stale, written.message);
+
+      await safeAudit(storeApi, logger, {
+        clientId,
+        profileVersion: row.version,
+        eventType: "profile.section_confirmed",
+        actorType: actor.type,
+        actorId: actor.id,
+        source: "setup_ui",
+        detail: { step: step ? step.id : null, sections: targets },
+      });
+
+      return {
+        ok: true,
+        outcome: OUTCOMES.ok,
+        section,
+        confirmedSections: targets,
+        confirmations: written.row.confirmations,
+        outstandingConfirmations: outstandingSections(written.row.confirmations),
+        outstandingSteps: outstandingSteps(written.row.confirmations),
+        updatedAt: written.row.updated_at,
+      };
+    });
+  }
+
+  /**
+   * Take a submitted version back for editing.
+   *
+   * The alternative — forcing the owner to start again from the approved
+   * version — would mean anyone who spotted a typo on the review page lost every
+   * other answer they had just given. `needs_review → draft` is already a legal
+   * transition; this is the first thing to use it.
+   *
+   * Every confirmation is cleared, because a tick recorded against words that
+   * have since changed is worse than no tick at all.
+   */
+  async function reopenForEditing({ clientId, actor, sourceChannel = "client_ui" }) {
+    if (!clientId) return refuse(OUTCOMES.notAuthorised, "A setup needs to know which business it is for.");
+    if (!actor || actor.clientId !== clientId) return refuse(OUTCOMES.notAuthorised, "You are not authorised to change this setup.");
+
+    return guarded(async () => {
+      const existing = await storeApi.getWorkingDraft(clientId);
+      if (existing) return { ok: true, outcome: OUTCOMES.ok, reopened: false, ...project(existing) };
+
+      const submitted = await storeApi.getSubmittedVersion(clientId);
+      if (!submitted) return refuse(OUTCOMES.noDraft, "There is nothing to edit.");
+
+      const result = await storeApi.reopenDraft({ clientId, version: submitted.version, actor, source: sourceChannel });
+      if (!result.ok) return refuse(result.code === "stale_draft" ? OUTCOMES.stale : OUTCOMES.badVersion, result.message);
+
+      logger.log(`[setup] reopened client=${clientId} version=${submitted.version}`);
+      return { ok: true, outcome: OUTCOMES.ok, reopened: true, ...project(result.row) };
+    });
+  }
+
+  /**
+   * Approve the submitted version.
+   *
+   * Delegates wholesale to store.approveVersion, which runs the M2 approval
+   * guard: tenant authorisation, staleness, lifecycle, full profile validation,
+   * every provisioning blocker, and an explicit tick against every
+   * safety-critical section. This function adds no rule of its own and — more
+   * importantly — relaxes none.
+   */
+  async function approve({ clientId, actor, reason = null, expectedUpdatedAt = null }) {
+    if (!clientId) return refuse(OUTCOMES.notAuthorised, "A setup needs to know which business it is for.");
+    if (!actor || actor.clientId !== clientId) return refuse(OUTCOMES.notAuthorised, "You are not authorised to approve these settings.");
+
+    return guarded(async () => {
+      const row = await storeApi.getSubmittedVersion(clientId);
+      if (!row) return refuse(OUTCOMES.noDraft, "There is nothing waiting for your approval.");
+
+      const result = await storeApi.approveVersion({
+        clientId,
+        version: row.version,
+        actor,
+        reason,
+        expectedUpdatedAt: expectedUpdatedAt || null,
+        source: "setup_ui",
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          outcome: OUTCOMES.invalidAnswers,
+          message: "These settings can't be approved yet.",
+          blockers: result.blockers,
+        };
+      }
+
+      logger.log(`[setup] approved client=${clientId} version=${row.version}`);
+      return {
+        ok: true,
+        outcome: OUTCOMES.ok,
+        version: row.version,
+        // Approval makes settings eligible to be built. It does not switch a
+        // phone over, and the client is told so in the same breath.
+        activated: false,
+      };
+    });
+  }
+
   /** Version history for the client, newest first. No internal ids leak. */
   async function listHistory({ clientId, limit = 50 }) {
     if (!clientId) return refuse(OUTCOMES.notAuthorised, "A setup needs to know which business it is for.");
@@ -546,11 +724,35 @@ function createOnboardingDraftService(deps = {}) {
     loadDraft,
     saveStep,
     submitForReview,
+    loadForReview,
+    confirmSection,
+    reopenForEditing,
+    approve,
     rollbackToVersion,
     listHistory,
     OUTCOMES,
     DRAFT_SERVICE_VERSION,
   };
+}
+
+/** Canonical profile sections still awaiting a tick. This is what the guard counts. */
+function outstandingSections(confirmations) {
+  const confirmed = confirmations && typeof confirmations === "object" ? confirmations : {};
+  return S.CONFIRMATION_KEYS.filter((key) => {
+    const entry = steps.lookup(confirmed, key);
+    return !entry || !entry.confirmedAt;
+  });
+}
+
+/**
+ * Wizard steps still awaiting a tick — a step counts as outstanding while ANY
+ * section it owns is unconfirmed. This is what the review page shows, because
+ * "confirm your service areas" is a thing an owner can act on and
+ * "confirm serviceAreas" is not.
+ */
+function outstandingSteps(confirmations) {
+  const pending = new Set(outstandingSections(confirmations));
+  return steps.STEPS.filter((step) => step.profileSections.some((section) => pending.has(section))).map((step) => step.id);
 }
 
 /** Shape a stored row for a caller. The profile body travels; nothing internal does. */

@@ -221,6 +221,11 @@ const STEPS = Object.freeze([
     title: "Your business",
     intent: "How the phone is answered, and who is answering it.",
     interviewGroups: Object.freeze(["identity"]),
+    // The canonical profile sections this step is responsible for. The union
+    // across every step must equal CONFIRMATION_KEYS, so ticking all seven steps
+    // ticks all twelve safety-critical sections and none is left unread.
+    // Asserted in test/locksmith-setup-journey.test.js.
+    profileSections: Object.freeze(["identity"]),
     fields: Object.freeze([
       scalarField({
         name: "spokenName",
@@ -365,6 +370,7 @@ const STEPS = Object.freeze([
     title: "The work you take",
     intent: "Every category of work the business will actually accept. Opt-in only.",
     interviewGroups: Object.freeze(["services_accepted", "services_declined"]),
+    profileSections: Object.freeze(["servicesAccepted", "servicesDeclined"]),
     fields: Object.freeze([
       Object.freeze({
         name: "services",
@@ -468,6 +474,7 @@ const STEPS = Object.freeze([
     title: "Where you go",
     intent: "Three states, plus the rule for a suburb nobody listed.",
     interviewGroups: Object.freeze(["service_areas"]),
+    profileSections: Object.freeze(["serviceAreas"]),
     fields: Object.freeze([
       scalarField({
         name: "primary",
@@ -548,6 +555,7 @@ const STEPS = Object.freeze([
     title: "When you work",
     intent: "Ordinary hours, after hours, holidays, and how quickly someone rings back.",
     interviewGroups: Object.freeze(["hours", "after_hours"]),
+    profileSections: Object.freeze(["hours"]),
     fields: Object.freeze([
       Object.freeze({
         name: "ordinary",
@@ -735,6 +743,10 @@ const STEPS = Object.freeze([
     title: "How we handle a job",
     intent: "What counts as urgent, what we must find out, and what we may say about money.",
     interviewGroups: Object.freeze(["urgency", "caller_info", "pricing", "forbidden"]),
+    // `forbiddenPromises` has no editable field — it is the always-on safety
+    // floor. It is confirmed here because this is the step where the owner is
+    // told what we will never say, and the review page prints the full list.
+    profileSections: Object.freeze(["urgencyRules", "pricing", "callerInfo", "forbiddenPromises"]),
     fields: Object.freeze([
       Object.freeze({
         name: "urgencyPresets",
@@ -860,6 +872,7 @@ const STEPS = Object.freeze([
     title: "Reaching you",
     intent: "Where an urgent call goes, and who hears about the rest.",
     interviewGroups: Object.freeze(["transfer", "fallback", "notifications"]),
+    profileSections: Object.freeze(["transfer", "notifications"]),
     fields: Object.freeze([
       scalarField({
         name: "transferPrimary",
@@ -1011,6 +1024,8 @@ const STEPS = Object.freeze([
     title: "How we sound",
     intent: "The voice a caller hears, in your words.",
     interviewGroups: Object.freeze(["tone", "privacy"]),
+    // `identity` is confirmed on step 1; tone writes into it but does not own it.
+    profileSections: Object.freeze(["privacy"]),
     fields: Object.freeze([
       scalarField({
         name: "tone",
