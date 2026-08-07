@@ -436,6 +436,11 @@ const QUEUE_SKIP_CODES = Object.freeze([
   "already_leased", // another worker holds it
   "already_engaged", // it has moved past `queued` in the lifecycle
   "lifecycle_not_queueable", // it is not in a state a call can start from
+  // Two records, one business. A1 derives prospectId from the identity
+  // fingerprint, so two rows for the same locksmith in the same suburb SHARE an
+  // id. They are one calling target, and returning both would dial the business
+  // twice — see the note in acquisition-batch.js about the same collision.
+  "identity_collision",
 ]);
 
 const QUEUE_SKIP_LABELS = Object.freeze({
@@ -444,6 +449,7 @@ const QUEUE_SKIP_LABELS = Object.freeze({
   already_leased: "Already handed to another worker",
   already_engaged: "Already being worked",
   lifecycle_not_queueable: "Not in a state a call can start from",
+  identity_collision: "Another record for the same business is already in this selection",
 });
 
 // The lifecycle states a queue selection may draw from. Deliberately short:

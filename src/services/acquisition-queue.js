@@ -191,10 +191,45 @@ function createCallQueue({ now, evaluate, audit = null, leaseTtlMs = DEFAULT_LEA
       candidates.push({ prospect, qualification, eligibility });
     }
 
+    // ── ONE BUSINESS, ONE PLACE IN THE QUEUE ───────────────────────
+    //
+    // A1 derives prospectId from the identity fingerprint, so two records for
+    // the same locksmith in the same suburb ALREADY share an id — "Preston Key
+    // & Safe" and "Preston Key and Safe Pty Ltd" are one prospectId, and the
+    // batch module carries the same warning about them.
+    //
+    // Left uncollapsed this is not a cosmetic duplicate in a list: leases are
+    // keyed by prospectId, so the second grant silently overwrites the first,
+    // two workers walk away believing they hold it, and the business is called
+    // twice. Dedupe resolution does not save us here either — it runs over the
+    // set the caller passed, and a caller can pass whatever it likes.
+    //
+    // Collapsing deterministically (best score, then earliest discovery, then
+    // name) means the same input always yields the same representative.
+    const bestById = new Map();
+    const collided = [];
+    for (const c of [...candidates].sort((a, b) => {
+      const s = b.qualification.score - a.qualification.score;
+      if (s !== 0) return s;
+      const d = String(a.prospect.discoveredAt || "").localeCompare(String(b.prospect.discoveredAt || ""));
+      if (d !== 0) return d;
+      return String(a.prospect.businessName || "").localeCompare(String(b.prospect.businessName || ""));
+    })) {
+      const id = c.prospect.prospectId;
+      if (bestById.has(id)) {
+        collided.push(skip(c.prospect, "identity_collision", `"${bestById.get(id).prospect.businessName}" is the same business (${id}) and is already in this selection.`));
+        continue;
+      }
+      bestById.set(id, c);
+    }
+    skipped.push(...collided);
+
+    const deduped = [...bestById.values()];
+
     // Ordering is qualification's, not the queue's — one ranking rule, in the
     // module that owns the signals it ranks on.
-    const ranked = rankQualified(candidates.map((c) => c.qualification));
-    const byId = new Map(candidates.map((c) => [c.qualification.prospectId, c]));
+    const ranked = rankQualified(deduped.map((c) => c.qualification));
+    const byId = new Map(deduped.map((c) => [c.qualification.prospectId, c]));
     const ordered = ranked.map((q) => byId.get(q.prospectId)).filter(Boolean);
 
     return { instant, ordered, skipped, considered: list.length };

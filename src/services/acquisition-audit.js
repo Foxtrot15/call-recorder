@@ -34,7 +34,12 @@ const { stableStringify } = require("./acquisition-evidence");
 const MAX_TEXT = 1000;
 
 // What kind of thing a decision is about.
-const AUDIT_ENTITY_TYPES = Object.freeze(["prospect", "phone", "batch", "suppression", "campaign", "system"]);
+//
+// `queue` was added in M8B. Reserving a prospect for a worker, releasing it and
+// completing it are decisions about who was going to be called and by whom, so
+// they belong in this chain alongside the review and gate decisions rather than
+// in a second log that could disagree with it.
+const AUDIT_ENTITY_TYPES = Object.freeze(["prospect", "phone", "batch", "queue", "suppression", "campaign", "system"]);
 
 // The decision itself. PASS/VETO/DEFER mirror the compliance-engine vocabulary
 // so the gate stack and this log speak the same language; the rest cover events

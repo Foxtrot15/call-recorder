@@ -69,16 +69,25 @@ const INFERENCE_WEIGHT = 0.5;
 // Tier bands over the fact-weighted score. Round numbers on purpose — these are
 // editorial bands, not a calibrated model, and pretending otherwise by using
 // 63.5 would invite somebody to treat them as fitted.
+//
+// They are, however, calibrated against the achievable range rather than
+// guessed. The table's maximum is 136 (112 in facts, 24 in weighted
+// inferences), and a well-sourced locksmith with a website, an ABN, a callable
+// number and evidence of emergency work already scores in the low 80s — so the
+// first draft's 70/45/20 put almost everything in `priority` and ranked
+// nothing. A band that does not divide the population is decoration.
 const TIER_BANDS = Object.freeze([
-  { tier: "priority", min: 70 },
-  { tier: "standard", min: 45 },
-  { tier: "marginal", min: 20 },
+  { tier: "priority", min: 95 },
+  { tier: "standard", min: 65 },
+  { tier: "marginal", min: 40 },
   { tier: "excluded", min: -Infinity },
 ]);
 
-// The bar for `qualified`. Below it a record is `not_qualified` — a real answer,
-// distinct from `insufficient_information`, which means we could not tell.
-const QUALIFICATION_MINIMUM = 45;
+// The bar for `qualified` is the `standard` band, derived rather than repeated
+// so the two cannot drift apart. Below it a record is `not_qualified` — a real
+// answer, distinct from `insufficient_information`, which means we could not
+// tell either way.
+const QUALIFICATION_MINIMUM = TIER_BANDS.find((b) => b.tier === "standard").min;
 
 // The markets the locksmith pilot serves. A prospect outside them is not a bad
 // business, it is simply not one we can serve yet — so this is a disqualifier

@@ -77,6 +77,14 @@ function summarisePipeline({
   let qualifiedCount = 0;
   let callableNow = 0;
   let permissionUnknown = 0;
+  // RECORDS ARE NOT BUSINESSES.
+  //
+  // A1 derives prospectId from the identity fingerprint, so two rows for the
+  // same locksmith share one id. Both are genuinely callable records, so
+  // counting them as two is not wrong — but the queue offers that business
+  // once, and a founder comparing "callable now: 6" against a queue of 5 is
+  // owed the reason rather than left to find it. Both numbers are reported.
+  const callableBusinessIds = new Set();
 
   for (const prospect of list) {
     lifecycle[prospect.lifecycle] = (lifecycle[prospect.lifecycle] || 0) + 1;
@@ -102,6 +110,7 @@ function summarisePipeline({
         permissionUnknown += 1;
       } else if (decision.eligible) {
         callableNow += 1;
+        callableBusinessIds.add(prospect.prospectId);
       } else {
         category = categoriseDecision(decision, duplicateStatusFor(prospect.prospectId, duplicateResolution));
         blocked[category] = (blocked[category] || 0) + 1;
@@ -149,6 +158,8 @@ function summarisePipeline({
       prospects: list.length,
       qualified: qualifiedCount,
       callableNow,
+      // Distinct businesses behind those records — what the queue will offer.
+      callableBusinesses: callableBusinessIds.size,
       blocked: CATEGORIES.reduce((t, c) => t + blocked[c.key], 0),
       permissionUnknown,
       engaged,
@@ -189,7 +200,7 @@ function describePipeline(summary) {
 
   lines.push(`Prospects:        ${t.prospects}`);
   lines.push(`  qualified:      ${t.qualified}`);
-  lines.push(`  callable now:   ${t.callableNow}`);
+  lines.push(`  callable now:   ${t.callableNow}${t.callableBusinesses !== t.callableNow ? `  (${t.callableBusinesses} distinct businesses — the rest are second records for one of them)` : ""}`);
   if (t.permissionUnknown > 0) lines.push(`  permission unknown: ${t.permissionUnknown}`);
   if (t.suppressionEntries !== null) lines.push(`Suppression list: ${t.suppressionEntries} entr${t.suppressionEntries === 1 ? "y" : "ies"} (includes businesses not in this list)`);
   if (t.leased !== null) lines.push(`Leased to workers: ${t.leased}`);

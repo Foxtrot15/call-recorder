@@ -576,3 +576,60 @@ describe("moving a selected prospect into the queued state", () => {
     assert.strictEqual(released.ok, true, released.message);
   });
 });
+
+// ── One business, one place in the queue ────────────────────────────
+//
+// Found by the M8B walkthrough, not by a unit test: "Preston Key & Safe" and
+// "Preston Key and Safe Pty Ltd" are one prospectId, because A1 derives the id
+// from the identity fingerprint. The queue returned both and leased both — and
+// because leases are keyed by prospectId, the second grant silently overwrote
+// the first, so two workers each believed they held it.
+
+describe("two records for one business collapse to one calling target", () => {
+  /** Two differently-spelled records that resolve to the same prospectId. */
+  const collidingPair = () => {
+    const a = approved({ businessName: "Preston Key & Safe", suburb: "Preston", abn: "53 337 901 664" });
+    const b = approved({ businessName: "Preston Key and Safe Pty Ltd", suburb: "Preston", abn: "53 337 901 664" });
+    assert.strictEqual(a.prospectId, b.prospectId, "the fixture must actually collide, or this proves nothing");
+    return [a, b];
+  };
+
+  it("offers the business once, not twice", () => {
+    const queue = makeQueue();
+    const next = queue.preview({ prospects: collidingPair(), limit: 10, evidenceFor }).next;
+    assert.strictEqual(next.length, 1, `the same business was offered ${next.length} times`);
+  });
+
+  it("says why the other record was dropped", () => {
+    const queue = makeQueue();
+    const skipped = queue.preview({ prospects: collidingPair(), limit: 10, evidenceFor }).skipped;
+    assert.strictEqual(skipped.length, 1);
+    assert.strictEqual(skipped[0].code, "identity_collision");
+    assert.match(skipped[0].message, /same business/);
+  });
+
+  it("leases it once, so two workers cannot both believe they hold it", () => {
+    const queue = makeQueue();
+    const selection = queue.selectNext({ prospects: collidingPair(), limit: 5, workerId: "worker-a", evidenceFor });
+    assert.strictEqual(selection.selected.length, 1);
+    assert.strictEqual(queue.activeLeases().length, 1);
+
+    const other = queue.selectNext({ prospects: collidingPair(), limit: 5, workerId: "worker-b", evidenceFor });
+    assert.strictEqual(other.selected.length, 0, "worker-b must not get the business worker-a holds");
+  });
+
+  it("picks the same representative every time, whatever order they arrive in", () => {
+    const queue = makeQueue();
+    const pair = collidingPair();
+    const forward = queue.preview({ prospects: pair, limit: 5, evidenceFor }).next[0].businessName;
+    const backward = queue.preview({ prospects: [...pair].reverse(), limit: 5, evidenceFor }).next[0].businessName;
+    assert.strictEqual(backward, forward);
+  });
+
+  it("does not collapse genuinely different businesses", () => {
+    const queue = makeQueue();
+    const distinct = [approved({ businessName: "Alpha Locksmiths", suburb: "Carlton" }), approved({ businessName: "Bravo Lock & Key", suburb: "Fitzroy" })];
+    assert.notStrictEqual(distinct[0].prospectId, distinct[1].prospectId);
+    assert.strictEqual(queue.preview({ prospects: distinct, limit: 5, evidenceFor }).next.length, 2);
+  });
+});

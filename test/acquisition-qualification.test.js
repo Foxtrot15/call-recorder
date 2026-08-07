@@ -461,3 +461,35 @@ describe("the module is deterministic, frozen and offline", () => {
     }
   });
 });
+
+// ── Band calibration ────────────────────────────────────────────────
+
+describe("the tier bands divide the population", () => {
+  const { TIER_BANDS, SIGNALS: TABLE } = require("../src/services/acquisition-qualification");
+
+  it("the qualification bar is the standard band, not a second number that can drift", () => {
+    assert.strictEqual(QUALIFICATION_MINIMUM, TIER_BANDS.find((b) => b.tier === "standard").min);
+  });
+
+  it("bands are ordered strongest first and cover every score", () => {
+    for (let i = 0; i + 1 < TIER_BANDS.length; i += 1) {
+      assert.ok(TIER_BANDS[i].min > TIER_BANDS[i + 1].min, `${TIER_BANDS[i].tier} must sit above ${TIER_BANDS[i + 1].tier}`);
+    }
+    assert.strictEqual(TIER_BANDS[TIER_BANDS.length - 1].min, -Infinity, "some band must catch every remaining score");
+    assert.deepStrictEqual(TIER_BANDS.map((b) => b.tier), [...S.QUALIFICATION_TIERS]);
+  });
+
+  it("priority is reachable but not automatic", () => {
+    // A band nothing can reach is decoration; a band everything reaches ranks
+    // nothing. Both were true of the first draft.
+    const max = TABLE.reduce((t, s) => t + Math.round(s.points * (s.kind === "inference" ? INFERENCE_WEIGHT : 1)), 0);
+    const priority = TIER_BANDS.find((b) => b.tier === "priority").min;
+    assert.ok(priority < max, `priority (${priority}) must be reachable within the table's maximum (${max})`);
+
+    // A solid, ordinary locksmith — website, ABN, register, one landline — must
+    // NOT be priority. If it is, priority means nothing.
+    const ordinary = qualify(prospect({ abn: "51 824 753 556", tradeCategory: "Locksmith" }), { evidenceRows: evidence([{ kind: "trade_category", value: "Locksmith" }]) });
+    assert.ok(ordinary.score < priority, `an ordinary locksmith scored ${ordinary.score}, at or above the priority bar`);
+    assert.strictEqual(ordinary.verdict, "qualified", "…but it must still qualify");
+  });
+});
