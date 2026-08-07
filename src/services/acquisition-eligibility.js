@@ -443,4 +443,9 @@ module.exports = {
   createEligibilityEngine,
   ELIGIBILITY_CODES,
   CHECK_ORDER,
+  // Exported for the M8E authorisation gate, which has to look suppression up
+  // by the SAME identity key this engine checks it against. A second derivation
+  // of that key would be a second answer to "who is this business?", and the
+  // one that drifted would be the one that authorised a call.
+  assessmentFingerprint,
 };

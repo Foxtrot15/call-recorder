@@ -65,6 +65,11 @@ const STORE_METHODS = Object.freeze([
   // suppression — append-only, no delete anywhere in the contract
   "listSuppressions",
   "appendSuppression",
+  // The authoritative read (M8E). Narrow, targeted, and never served from a
+  // cache: this is what the final authorisation gate asks before a call could
+  // be permitted, and its whole purpose is to be right when the hydrated index
+  // is not. See acquisition-authorisation.js.
+  "lookupSuppression",
   // leases
   "listLiveLeases",
   "acquireLease",
@@ -126,6 +131,14 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
     async appendSuppression(row) {
       suppressions.push({ ...row, sequence: suppressions.length + 1 });
       return frozenCopy(suppressions[suppressions.length - 1]);
+    },
+    async lookupSuppression({ fingerprint = null, e164 = null } = {}) {
+      if (fingerprint === null && e164 === null) return [];
+      // The same superset the Supabase adapter selects, so the two adapters
+      // answer identically and the contract test can assert they do.
+      return suppressions
+        .filter((r) => (fingerprint !== null && r.fingerprint === fingerprint) || (e164 !== null && r.e164 === e164))
+        .map(frozenCopy);
     },
 
     // ── leases ──
@@ -340,6 +353,64 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
       const { data, error } = await db().from(TABLES.suppressions).insert(toSuppressionRow(row)).select().single();
       if (error) fail(TABLES.suppressions, "insert", error);
       return fromSuppressionRow(data);
+    },
+
+    /**
+     * THE AUTHORITATIVE SUPPRESSION READ (M8E).
+     *
+     * Returns the rows that COULD match this business, for the domain to decide
+     * on. It deliberately does not decide anything itself.
+     *
+     * ── WHY THE MATCHING RULE IS NOT IN THIS QUERY ──────────────────
+     * The rule is subtle: a number-scoped row matches on the number only, and a
+     * business-scoped row matches on the identity fingerprint OR on the number
+     * it was recorded against. Writing that in SQL would be a SECOND copy of
+     * acquisition-suppression.check(), and the eligibility engine's own header
+     * says why that is unacceptable — "a parallel implementation would drift,
+     * and the copy that drifted would be the one that authorised a call".
+     *
+     * So the database NARROWS and the domain DECIDES. `fingerprint = $1 or
+     * e164 = $2` is a provable superset of all three matching rules, so feeding
+     * this result through the same check() gives the same answer as checking
+     * the whole table. A test asserts that equivalence rather than trusting it.
+     *
+     * ── WHY TWO QUERIES AND NOT ONE `.or()` ─────────────────────────
+     * PostgREST's or-filter is a comma-separated string, so a fingerprint
+     * containing a comma or a dot — "St. Kilda Locks" — would change the
+     * meaning of the filter rather than be matched by it. Two equality filters
+     * cannot be confused by their own values, and each uses the partial index
+     * laq2 already created for exactly this column.
+     *
+     * No new SQL. laq2 built idx_acq_suppressions_fingerprint and
+     * idx_acq_suppressions_e164 for this read before it existed.
+     */
+    async lookupSuppression({ fingerprint = null, e164 = null } = {}) {
+      if (fingerprint === null && e164 === null) return [];
+
+      const rows = [];
+      if (fingerprint !== null) {
+        const { data, error } = await db().from(TABLES.suppressions).select("*").eq("fingerprint", fingerprint);
+        if (error) fail(TABLES.suppressions, "read", error);
+        rows.push(...(data || []));
+      }
+      if (e164 !== null) {
+        const { data, error } = await db().from(TABLES.suppressions).select("*").eq("e164", e164);
+        if (error) fail(TABLES.suppressions, "read", error);
+        rows.push(...(data || []));
+      }
+
+      // A row matching on both predicates comes back twice; the domain would
+      // then report one opt-out as two, which reads as a business that objected
+      // repeatedly. De-duplicated on the primary key.
+      const seen = new Set();
+      const unique = [];
+      for (const row of rows) {
+        const key = row.id === undefined || row.id === null ? JSON.stringify(row) : row.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(row);
+      }
+      return unique.map(fromSuppressionRow);
     },
 
     async listLiveLeases() {
