@@ -1,4 +1,4 @@
-# AIDA Locksmith Acquisition — the acquisition engine (A1 · A2 · M8B)
+# AIDA Locksmith Acquisition — the acquisition engine (A1 · A2 · M8B · M8C)
 
 **Status:** built dormant, **not deployed**. All SQL written, **not applied**. No
 website crawled, no external API called, no number washed, no call placed.
@@ -11,6 +11,12 @@ boundary, the discovery adapter contract, the evidence ledger, the append-only
 decision log, the prospect lifecycle, the human review step, the qualification
 model, the queue boundary and the outcome model.
 
+> **Dated update — 2026-08-07 (M8C).** Acquisition state is now durable: see
+> §25 onward. Three defects were found and fixed before any SQL was applied,
+> the most serious being a business-scoped opt-out that recorded the dialled
+> number and never compared it (§26 D3). Both migrations remain **unapplied**;
+> [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) owns how to apply them.
+>
 > **Dated update — 2026-08-07 (M8B).** Two corrections to what this document
 > previously said. (1) The section headed *"A2 (in progress, uncommitted)"* was
 > stale: A2 was committed in `1794af3`, and every module it described is in the
@@ -1042,3 +1048,213 @@ Everything in §A2.9 (A-L1 … A-L9) still stands and still blocks. In addition:
 **M-4 is the one that matters most.** Nothing in the queue authorises a call. A
 future dispatcher that trusted `eligibility_snapshot` would reintroduce exactly
 the staleness this milestone was built to eliminate.
+
+---
+
+# M8C — durable state and restart-safe suppression
+
+> **Status:** built. `laq1` and `laq2` are written and **still not applied**.
+> Nothing calls, texts, emails, scrapes or contacts a provider.
+
+The suppressions, leases and outcomes M8B produced lived in process memory. Kill
+the process and the locksmith who opted out this morning was callable this
+afternoon. M8C is that, fixed, and the proof that it is fixed.
+
+## 25. What M8C added
+
+| File | Purpose |
+|---|---|
+| `src/services/acquisition-store.js` | The store contract, an in-memory implementation, and a lazy-Supabase adapter |
+| `src/services/acquisition-durable.js` | Durable suppression, queue, outcomes, and the lease reaper |
+| `test/acquisition-restart.test.js` | The process-restart proof |
+| `test/acquisition-store.test.js` | Contract parity, adapter translation, and the safety ratchets |
+| `docs/ACQUISITION_SQL_RUNBOOK.md` | Exact manual apply/verify steps — **stops before application** |
+
+## 26. Three defects the audit found first
+
+**D1 — LAQ1's `acquisition_decisions.entity_type` CHECK omitted `'queue'`,**
+which M8B had added to the code. Every queue selection, release and completion
+row would have been rejected the moment the decision log was persisted. The
+migration test cross-checked five other enums against the code and not this one.
+That check now exists, along with ones for audit decisions, evidence kinds and
+capture modes.
+
+**D2 — LAQ2's `acquisition_contact_outcomes` used `ON DELETE CASCADE`** on an
+append-only table. The cascade fires the refuse-mutation trigger and aborts with
+"outcomes is append-only", which is a true but baffling thing to be told when
+you asked to delete a prospect — and it made "they asked us not to call again"
+deletable by deleting the row it points at. Now `RESTRICT`.
+
+**D3 — a business-scoped opt-out recorded the dialled number and never matched
+on it.** The fingerprint is built from the trading name and the locality, so it
+drifts: re-import the same locksmith as "Preston South" rather than "Preston",
+and the identical phone number came back **not suppressed**. The M8B walkthrough
+passed only because its re-import happened to produce a byte-identical
+fingerprint. A business-scoped entry now matches on the identity **or** its
+recorded number; either is enough, and the number is the more stable key.
+
+Both migrations were amended in place. They have never been applied, so a
+compensating migration would only preserve a history that never happened.
+
+## 27. The architecture: reads sync, writes async
+
+`suppression.check()` is called once per candidate per selection by
+`acquisition-eligibility`, `-batch`, `-queue` and `-readmodel`, all synchronous.
+Making it async would have rippled through four modules and roughly seven
+hundred tests to buy nothing.
+
+So the durable layer **wraps** the pure cores rather than rewriting them:
+
+- an in-memory index, **hydrated from the store at construction**, serves every
+  read synchronously;
+- writes go through the store and are awaited.
+
+The only changes to existing modules are two additive hydration parameters
+(`initialEntries`, `initialLeases`) and making outcome recording async so it can
+await a suppression that may now be a durable write. `await` handles the pure
+list and the durable service identically, so the recorder composes with either
+without knowing which it was given.
+
+### The limitation, stated
+
+A suppression written by a **second process** is not visible here until
+`rehydrate()` is called. The pilot is single-process; this is accepted, not
+solved. What still holds across processes is the part that matters: the
+database's partial unique index refuses a second live lease whatever any cache
+believes, and the suppression table is append-only, so nothing another process
+does can un-suppress anybody.
+
+## 28. Durable suppression
+
+Hydrated at construction, written durably before becoming visible. If the store
+write fails the entry is **refused and is not visible in memory either** — the
+alternative ordering has a failure mode where this process believes a business
+is suppressed, the next one does not, and the difference is a phone call.
+
+There is no delete, remove, unsuppress, clear or purge anywhere: not in the
+domain API, not in the store contract, and `assertStoreContract` **refuses to
+construct** a store that offers one.
+
+## 29. Durable queue and leases
+
+Lease acquisition is atomic because it is an INSERT racing
+`idx_acq_queue_one_live_lease`, not a read-then-write in application code. A
+23505 is reported as "somebody else has it", which is a normal outcome of a
+selection rather than an error.
+
+`requestId` idempotency moved into the store. A Map stops working at exactly
+the moment a worker is most likely to retry — a restart mid-run — which is the
+one case idempotency exists for.
+
+Eligibility is still re-run at selection. `eligibility_snapshot` is written for
+the audit trail and is **never read back as authority**; whatever eventually
+dials must re-evaluate, because a wash can expire between reservation and call.
+
+### Expired leases behave differently from M8B, deliberately
+
+`idx_acq_queue_one_live_lease` is partial on `released_at is null`. Expiry
+cannot be in the predicate — an index predicate must be immutable and cannot
+reference `now()`. So an expired-but-unreleased lease **still holds the slot**,
+in Postgres and in the in-memory store alike; the two must agree or the restart
+proof is about the wrong thing.
+
+Reclaiming therefore goes through the reaper. The operational consequence is
+real: **if nobody sweeps, a crashed worker's leases stay held.** The read model
+surfaces exactly that as `leasesAwaitingReaping`, a number that only grows when
+nothing is sweeping.
+
+## 30. The lease reaper
+
+Dormant by default — `enabled` is false unless a caller passes true, and there
+is no timer, interval or scheduler anywhere in the module. `sweep()` runs when
+something calls it and never otherwise.
+
+It reads expired leases and releases them. It does not evaluate eligibility,
+does not select, does not re-queue, and holds nothing that could dial. A
+released prospect becomes available to the next selection, which re-runs
+eligibility from scratch — so a business suppressed while its lease was held is
+refused by the engine, not resurrected by the reaper. Asserted by test.
+
+Idempotent: releasing an already-released lease matches zero rows and is counted
+as `alreadyGone`. `dryRun` reports what a sweep would do without doing it.
+
+## 31. Durable outcomes, and the failure semantics
+
+There is no cross-table transaction available. PostgREST issues one statement
+per call, so "suppress and record the outcome" cannot be made atomic from this
+side. That is a choice about which half may survive alone, and the two are not
+equally bad:
+
+| Failure | Consequence |
+|---|---|
+| suppression written, outcome row lost | The business is **safe**. The narrative has a gap, recoverable from the hash-chained decision log. |
+| outcome row written, suppression lost | The record says "they asked us never to call again" and the engine hands them to a worker tomorrow. |
+
+So **suppression goes first, and if it fails the outcome is refused** — not
+recorded with a warning, refused, so the caller has to deal with it. If the
+suppression lands and the outcome row then fails, the error reports
+`suppressionApplied: true` and says in words that the business is not callable
+and only the record is missing. Nothing is rolled back: un-applying a
+suppression to keep two tables tidy trades a missing narrative for a callable
+business.
+
+Both paths are asserted by test.
+
+## 32. The restart proof
+
+`test/acquisition-restart.test.js`. `freshServices()` discards every service
+object — suppression, queue, outcomes, eligibility, audit — and rebuilds them
+around the **same store**, which is what a restart does to a process sitting in
+front of a database that does not restart with it.
+
+The sequence: ingest, qualify, confirm callable, lease, opt out, **restart**,
+then re-import three ways (different punctuation, a second source with a drifted
+suburb, a freshly created identity). All three are still suppressed and none is
+offered to a worker.
+
+Two guards stop it being self-congratulatory:
+
+- the rebuilt audit log is asserted **empty**, so a pass cannot come from state
+  that never left memory;
+- a **control test throws the store away too** and confirms the business *does*
+  come back callable — the failure M8C prevents, demonstrated by removing the
+  thing that prevents it.
+
+Also proven: a live lease survives recreation and cannot be re-issued to a
+second worker; an expired lease is reclaimable once reaped and not before;
+`requestId` idempotency survives a restart; outcomes and read-model counts
+survive recreation.
+
+No database is contacted. The in-memory store is the reference implementation of
+the contract the Supabase adapter implements, and the adapter's translation is
+covered separately with an injected fake client. §7 of the runbook repeats the
+proof against the real database, by hand, after the SQL is applied.
+
+## 33. What M8C deliberately does not do
+
+- **Does not apply any SQL.** Both migrations remain unapplied, and a test
+  asserts nothing in `src/` or `scripts/` opens or executes a `.sql` file.
+- **Does not add a scheduler.** The reaper is dormant and has no timer.
+- **Does not build an administrative remediation flow.** Suppression stays
+  permanent with no way out; §7 of the runbook shows the deliberate,
+  trigger-disabling admin action needed to remove even a test probe.
+- **Does not build the dialler.**
+- **Does not connect to Supabase.** The adapter exists, is contract-tested with
+  a fake client, and has never been pointed at a project.
+
+## 34. Remaining blockers before any dialler can exist
+
+Everything in §A2.9 (A-L1 … A-L9) and §24 (M-1 … M-6) still stands. M8C closes
+M-2 and M-3 in code but not in deployment — the tables do not exist yet.
+
+| # | Blocker | Status after M8C |
+|---|---|---|
+| **A-L1** | Counsel sign-off on the calling window | Open. Blocks every prospect. |
+| **A-L6** | Attempt caps, retry spacing, cooldowns | Open. Blocks every prospect. |
+| **M-1** | Apply LAQ1 then LAQ2, verify RLS | Runbook written; **not applied** |
+| **M-2** | Replace in-memory stores with the tables | Code done; needs M-1 |
+| **M-3** | Lease reaper | Built, dormant; needs an operator to run it |
+| **M-4** | Re-run eligibility at the moment of dialling | Still required. The stored snapshot is audit-only and a test asserts it is never read back. |
+| **M-5** | `service_area` / `operating_status` capture path | Open |
+| **M-6** | Authoritative public-holiday source | Open; the fixture expires 2026-12-31 |
+| **M-7** | Cross-process suppression visibility | New in M8C. Single-process today; `rehydrate()` is the seam. |
