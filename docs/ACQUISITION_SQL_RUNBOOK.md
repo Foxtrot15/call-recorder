@@ -470,15 +470,20 @@ expensive to reverse afterwards.
 
 ### What dev holds now
 
-Three rows, deliberately, from §7. They describe an invented business on an
-invented number, they are the only acquisition data on dev, and they are not to
-be removed — see §7.4.
+Four rows, deliberately — three from §7 (M8D) and one from M8E. They describe
+two invented businesses on invented numbers, they are the only acquisition data
+on dev, and they are not to be removed — see §7.4.
 
-| Table | Row |
-|---|---|
-| `acquisition_suppressions` | one `opt_out`, actor `m8d-restart-probe` |
-| `acquisition_contact_outcomes` | one `opt_out`, actor `m8d-restart-probe` |
-| `acquisition_prospects` | `M8D Restart Probe Locksmiths`, `discovered_by = m8d-restart-probe` |
+| Table | Row | From |
+|---|---|---|
+| `acquisition_suppressions` | one `opt_out`, actor `m8d-restart-probe` | M8D |
+| `acquisition_contact_outcomes` | one `opt_out`, actor `m8d-restart-probe` | M8D |
+| `acquisition_prospects` | `M8D Restart Probe Locksmiths` | M8D |
+| `acquisition_suppressions` | one `opt_out`, actor `m8e-crossprocess-probe` | M8E |
+
+The M8E row cost **one** row rather than three, and the reason is the property
+M8E exists to defend: suppressions carry no foreign key, so proving one needs no
+prospect and no outcome to hang it on.
 
 `supabase/sql/verification/07_restart_proof_verify.sql` asserts exactly this,
 and asserts that all four append-only triggers are still enabled.

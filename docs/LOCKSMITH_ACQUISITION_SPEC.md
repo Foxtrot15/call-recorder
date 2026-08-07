@@ -1263,7 +1263,7 @@ M-2 and M-3 in code but not in deployment — the tables do not exist yet.
 | **M-4** | Re-run eligibility at the moment of dialling | Still required. The stored snapshot is audit-only and a test asserts it is never read back. |
 | **M-5** | `service_area` / `operating_status` capture path | Open |
 | **M-6** | Authoritative public-holiday source | Open; the fixture expires 2026-12-31 |
-| **M-7** | Cross-process suppression visibility | New in M8C. Single-process today; `rehydrate()` is the seam. |
+| ~~**M-7**~~ | ~~Cross-process suppression visibility~~ | **CLOSED in M8E.** Proven across two real processes against dev Postgres: B held stale memory, A committed an opt-out, B's gate still refused. See §36. |
 
 ---
 
@@ -1335,3 +1335,139 @@ Three rows remain on dev by design — one suppression, one contact outcome, and
 the prospect they point at, all `m8d-restart-probe`, describing an invented
 business on an invented number. They cannot be removed without disabling an
 append-only trigger, and that trade was made deliberately: see runbook §7.4.
+
+---
+
+## 36. M8E — the final pre-dial authorisation gate, and the end of M-7
+
+**Owns (source of truth for):** where a suppression answer may come from a cache
+and where it may not.
+
+### 36.1 The rule, in two lines
+
+> **EARLY FILTER.** The hydrated suppression index may reject cheaply, anywhere:
+> discovery, ranking, batching, the queue, the founder's screens.
+>
+> **FINAL AUTHORISATION.** An authoritative durable suppression read is
+> mandatory. No future dialler may bypass it.
+
+The index keeps its speed and loses its authority at exactly one point.
+
+### 36.2 What M-7 actually was
+
+Sharper than M8C recorded it. The suppression index is hydrated once, at
+construction, from a single `listSuppressions()`. `rehydrate()` is exported —
+and had **no callers anywhere in the repository**. The only `rehydrate()` calls
+that existed were the queue's own, rebuilding leases.
+
+So staleness was not "until the next round". A process that started on Monday
+held Monday's view of who had opted out for as long as it lived.
+
+### 36.3 The gate
+
+`createDialAuthoriser({ now, store, engineOptions }).authorise(prospect, ctx)` —
+`src/services/acquisition-authorisation.js`.
+
+It reads suppression from the store **every time**, for the one business it is
+asked about, then re-runs the whole eligibility engine against that answer. DNCR
+and its freshness, duplicates, campaign and kill-switch, counsel and attempt
+policy, batch approval, timezone, holidays and the calling window are all
+re-evaluated at authorisation time by the modules that own them. A stored
+`eligibility_snapshot` is never consulted; it remains audit-only.
+
+It returns a structured decision. On refusal it names the reason in the
+**existing** `ELIGIBILITY_CODES` vocabulary — `suppressed_permanently`,
+`no_usable_number`, `dncr_not_checked`, `outside_calling_policy` — because a
+parallel `BLOCKED_*` vocabulary would mean two names for every refusal and a
+translation table between them.
+
+**One code is genuinely new.** `suppression_store_unavailable` describes the
+*gate's* failure, not the prospect's:
+
+> If authoritative suppression state cannot be read, the answer is **BLOCKED**,
+> not "probably safe". "We could not establish whether this business opted out"
+> is not a fact about the business and must never be reported as one.
+
+### 36.4 Three decisions worth recording
+
+**Pre-fetch, then re-run.** `suppression.check()` is synchronous and has four
+callers. Making it async would ripple through all of them and every test that
+drives them — the cost M8C refused to pay. So the durable read happens at the
+boundary, once, and the engine is built around the result.
+
+**The database narrows; the domain decides.** `lookupSuppression()` selects
+`fingerprint = $1 or e164 = $2` and returns rows. Writing the matching rule in
+SQL would be a second copy of `acquisition-suppression.check()`, and the copy
+that drifted would be the one that authorised a call. The predicate is a
+provable superset of all three matching rules, and a test asserts the narrowed
+verdict equals the whole-table verdict.
+
+**No pre-built engine parameter.** An engine binds suppression at construction
+and `evaluate()` cannot override it, so a caller passing one would hand over the
+stale index — and the gate would read the database, discard the answer, and
+authorise from memory while reporting `suppressionSource: "durable"`. The
+factory takes collaborators and builds the engine itself.
+
+### 36.5 Where the authoritative read happens, and how often
+
+**Once per authorisation, at the irreversible boundary.** Explicitly **not**:
+
+- not once per discovered prospect,
+- not once per ranking calculation,
+- not once per dashboard render,
+- not once per queue candidate.
+
+Expected volume is therefore bounded by *calls that could be placed*, not by
+prospects considered. At the pilot's ceiling — tens of calls a day — that is
+**tens of reads a day**, each two indexed equality lookups on
+`idx_acq_suppressions_fingerprint` and `idx_acq_suppressions_e164`. Discovery
+and ranking over hundreds of prospects still touch the database zero times.
+
+### 36.6 Bypass prevention
+
+An authorised decision carries an **`AuthorisedDial`** slip stamped with a
+module-private Symbol. It cannot be forged, it is frozen, and every field on it
+is inert. A future dialler whose signature demands one cannot be handed a
+prospect that skipped the gate.
+
+Four ratchets fail the build if that erodes: only the gate may mint a slip; no
+acquisition module may reach a provider; any acquisition module that grows an
+execution verb must import the authoriser; and no execution verb exists yet.
+
+### 36.7 The proof
+
+Two real Node processes, real dev Postgres, a file handshake so the sequence is
+deterministic rather than timed. `scripts/dev/acquisition-crossprocess-proof/`.
+
+| | |
+|---|---|
+| B1 | B hydrated while the business was **not** suppressed |
+| A1–A3 | A, a separate process, committed the opt-out and read it back |
+| B2 | **B's memory remained stale** — it never rehydrated, and nothing calls `rehydrate()` |
+| B3 | Postgres held the opt-out |
+| **B4** | **the gate refused, from durable state, despite B's stale memory** |
+| B5 | no dial permission was minted |
+| B6 | a drifted re-import was still refused |
+| B7 | an unreadable store was **blocked**, not assumed safe |
+| B8–B9 | the gate exposes a decision and nothing that acts |
+
+Number-scoped suppression, business-scoped-without-number, DNCR, window,
+holiday, batch and counsel refusals are proven offline against the in-memory
+store, which is the same contract the Supabase adapter implements.
+
+### 36.8 What M8E deliberately does not do
+
+- **Does not build, enable or prepare a dialler.** There is still no dialler,
+  and a ratchet asserts it.
+- **Does not make the hydrated index authoritative anywhere.** It is a cache,
+  and after M8E it is documented as one.
+- **Does not add a scheduler, a poller, a bus or a TTL.** Each of those fails
+  open when it breaks; this fails closed by construction.
+- **Does not apply SQL.** `laq2` had already created both indexes this read
+  needs.
+
+### 36.9 Dev residue
+
+**One row**, approved in advance: one fictional `opt_out`,
+actor `m8e-crossprocess-probe`. No prospect row and no outcome row — because
+suppressions carry no foreign key, which is the same property M8E defends.
