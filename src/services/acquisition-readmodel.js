@@ -48,7 +48,12 @@ const { duplicateStatusFor } = require("./acquisition-dedupe");
  * @param {function} [qualifyFor]  (prospect) => qualification assessment
  * @param {function} [evidenceFor] (prospectId) => evidence rows
  * @param {object}   [suppression] the suppression list, for its own count
- * @param {object}   [queue]       a call queue, for its live leases
+ * @param {object}   [queue]       a call queue, for its live leases (M8B, sync)
+ * @param {Array}    [leases]      durable live leases, already loaded (M8C).
+ *                                 Supplied rather than fetched because this
+ *                                 function is synchronous and the durable store
+ *                                 is not — the caller awaits
+ *                                 `queue.activeLeases()` and passes the result.
  * @param {object}   [duplicateResolution]
  * @param {Date}     [at]
  */
@@ -59,6 +64,8 @@ function summarisePipeline({
   evidenceFor = () => [],
   suppression = null,
   queue = null,
+  leases = null,
+  reaped = null,
   duplicateResolution = null,
   context = {},
   market = null,
@@ -168,7 +175,15 @@ function summarisePipeline({
       // list at all. Naming it `suppressionEntries` rather than `suppressed`
       // stops it being summed with the prospect counts.
       suppressionEntries: suppression ? suppression.count() : null,
-      leased: queue ? queue.activeLeases({ at: instant || undefined }).length : null,
+      // Durable leases take precedence over the in-process queue's view: after
+      // a restart the queue's hydrated cache and the store agree, but the store
+      // is the one that is true across processes.
+      leased: Array.isArray(leases) ? leases.length : queue && typeof queue.activeLeases === "function" && queue.kind !== "durable-queue" ? queue.activeLeases({ at: instant || undefined }).length : null,
+      // Live leases whose expiry has passed and which nothing has reclaimed.
+      // A number that only grows means the reaper is not being run.
+      leasesAwaitingReaping: Array.isArray(leases) && instant ? leases.filter((l) => Date.parse(l.expiresAt) <= instant.getTime()).length : null,
+      // What a reaper sweep actually released, when the caller has one to report.
+      leasesReaped: Number.isFinite(reaped) ? reaped : null,
     }),
 
     lifecycle: Object.freeze(lifecycle),
@@ -203,7 +218,8 @@ function describePipeline(summary) {
   lines.push(`  callable now:   ${t.callableNow}${t.callableBusinesses !== t.callableNow ? `  (${t.callableBusinesses} distinct businesses — the rest are second records for one of them)` : ""}`);
   if (t.permissionUnknown > 0) lines.push(`  permission unknown: ${t.permissionUnknown}`);
   if (t.suppressionEntries !== null) lines.push(`Suppression list: ${t.suppressionEntries} entr${t.suppressionEntries === 1 ? "y" : "ies"} (includes businesses not in this list)`);
-  if (t.leased !== null) lines.push(`Leased to workers: ${t.leased}`);
+  if (t.leased !== null) lines.push(`Leased to workers: ${t.leased}${t.leasesAwaitingReaping ? `  (${t.leasesAwaitingReaping} expired, awaiting reaping)` : ""}`);
+  if (t.leasesReaped !== null) lines.push(`Leases reaped:     ${t.leasesReaped}`);
 
   if (summary.blockedBreakdown.length) {
     lines.push("");
