@@ -311,3 +311,72 @@ describe("the pilot's starting list", () => {
     }
   });
 });
+
+// ── M8C: a business-scoped entry matches on its recorded number too ──
+//
+// Found by the M8C audit. A business-scoped opt-out stored the number that was
+// dialled and then `check()` compared only the fingerprint. Because the
+// fingerprint is built from the trading name and the locality, it DRIFTS: the
+// same locksmith re-imported from a second source as "Preston South" rather
+// than "Preston" produced a different fingerprint, and the identical phone
+// number came back not-suppressed. That is a call to somebody who opted out.
+
+describe("an opt-out survives the identity drifting (M8C)", () => {
+  const OPTED_OUT_NUMBER = "+61355502287";
+  const original = identityFingerprint({ businessName: "Preston Key & Safe", suburb: "Preston", state: "VIC" });
+
+  function listWithOptOut() {
+    const list = make();
+    const result = list.suppress({
+      reason: "opt_out",
+      fingerprint: original,
+      e164: OPTED_OUT_NUMBER,
+      actor: "Peter Dang",
+      actorKind: "human",
+      note: "Asked never to be contacted again.",
+    });
+    assert.strictEqual(result.ok, true, result.message);
+    return list;
+  }
+
+  const drifted = [
+    ["a differently-spelled suburb", { businessName: "Preston Key & Safe", suburb: "Preston South", state: "VIC" }],
+    ["no suburb at all", { businessName: "Preston Key & Safe", suburb: null, state: "VIC" }],
+    ["a reworded trading name", { businessName: "Preston Key and Safe Group", suburb: "Preston", state: "VIC" }],
+    ["both drifted at once", { businessName: "Preston Key & Safe Locksmiths", suburb: "Preston Sth", state: "VIC" }],
+  ];
+
+  for (const [label, identity] of drifted) {
+    it(`catches the same number under ${label}`, () => {
+      const fingerprint = identityFingerprint(identity);
+      assert.notStrictEqual(fingerprint, original, "the fixture must actually drift, or this proves nothing");
+      assert.strictEqual(listWithOptOut().check({ e164: OPTED_OUT_NUMBER, fingerprint }).suppressed, true, `"${label}" escaped the opt-out`);
+    });
+  }
+
+  it("still catches it on the identity when the number is not to hand", () => {
+    assert.strictEqual(listWithOptOut().check({ fingerprint: original }).suppressed, true);
+  });
+
+  it("recording a number and then ignoring it would be worse than not recording it", () => {
+    // The entry stores the number; this asserts the entry is actually consulted
+    // on it, so the stored value is a control rather than decoration.
+    const list = listWithOptOut();
+    assert.strictEqual(list.all()[0].e164, OPTED_OUT_NUMBER);
+    assert.strictEqual(list.check({ e164: OPTED_OUT_NUMBER }).suppressed, true, "the recorded number must be matched on its own");
+  });
+
+  it("does not over-match — a different business on a different number is clear", () => {
+    const other = identityFingerprint({ businessName: "Brunswick Rapid Locksmiths", suburb: "Brunswick", state: "VIC" });
+    assert.strictEqual(listWithOptOut().check({ e164: "+61355501180", fingerprint: other }).suppressed, false);
+  });
+
+  it("a number-scoped entry stays about the number only", () => {
+    // wrong_number is genuinely a fact about a handset. Widening it to the
+    // business would suppress a locksmith because one of its numbers was stale.
+    const list = make();
+    list.suppress({ reason: "wrong_number", e164: "+61399990000", actor: "Peter", note: "Reached a residence." });
+    assert.strictEqual(list.check({ e164: "+61399990000" }).suppressed, true);
+    assert.strictEqual(list.check({ fingerprint: original, e164: "+61355502287" }).suppressed, false);
+  });
+});

@@ -174,6 +174,49 @@ describe("outcomes record what happened, permanently", () => {
 describe("the vocabulary in SQL matches the vocabulary in code", () => {
   const S = require("../src/services/acquisition-schema");
 
+  // LAQ1 statements, comments stripped, so the two files can be cross-checked
+  // against the same code the application runs.
+  const laq1 = LAQ1.split("\n")
+    .filter((l) => !l.trimStart().startsWith("--"))
+    .join("\n");
+
+  it("the audit entity types in LAQ1 match AUDIT_ENTITY_TYPES", () => {
+    // This is the check that was missing, and D1 walked straight through the
+    // gap: M8B added `queue` to the code and nothing compared it to the CHECK
+    // constraint, so every queue audit row would have been rejected the moment
+    // the decision log was persisted.
+    const { AUDIT_ENTITY_TYPES } = require("../src/services/acquisition-audit");
+    const from = laq1.indexOf("entity_type         text not null");
+    const to = laq1.indexOf("entity_id", from);
+    assert.ok(from > 0 && to > from, "the entity_type CHECK was not found — this test is not checking anything");
+    const inSql = [...laq1.slice(from, to).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    assert.deepStrictEqual([...inSql].sort(), [...AUDIT_ENTITY_TYPES].sort(), "the decision log and the database disagree about what a decision can be about");
+  });
+
+  it("the audit decisions in LAQ1 match AUDIT_DECISIONS", () => {
+    const { AUDIT_DECISIONS } = require("../src/services/acquisition-audit");
+    const from = laq1.indexOf("decision            text not null");
+    const to = laq1.indexOf("actor               text not null", from);
+    assert.ok(from > 0 && to > from);
+    const inSql = [...laq1.slice(from, to).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    assert.deepStrictEqual([...inSql].sort(), [...AUDIT_DECISIONS].sort());
+  });
+
+  it("the evidence kinds and capture modes in LAQ1 match the vocabulary", () => {
+    const kindFrom = laq1.indexOf("kind                text not null");
+    const kindTo = laq1.indexOf("capture_mode", kindFrom);
+    const kinds = [...laq1.slice(kindFrom, kindTo).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    assert.deepStrictEqual([...kinds].sort(), [...S.EVIDENCE_KINDS].sort());
+
+    // capture_mode deliberately OMITS 'live_fetch' — the offline boundary
+    // reaching into the schema. That asymmetry is intentional and asserted.
+    const modeFrom = laq1.indexOf("capture_mode        text not null");
+    const modeTo = laq1.indexOf("value               text not null", modeFrom);
+    const modes = [...laq1.slice(modeFrom, modeTo).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    assert.ok(!modes.includes("live_fetch"), "the database must refuse evidence claiming a live fetch");
+    assert.deepStrictEqual([...modes].sort(), [...S.CAPTURE_MODES].filter((m) => m !== "live_fetch").sort());
+  });
+
   it("the lifecycle CHECK lists exactly the states the application knows", () => {
     // Boundaries must be SQL, not comment text — comments are stripped above,
     // so slicing to a `-- ──` header silently runs to the end of the file.
@@ -227,5 +270,40 @@ describe("the file says what it is", () => {
       const src = fs.readFileSync(path.join(__dirname, "..", "scripts", file), "utf8");
       assert.ok(!src.includes("laq2_create_acquisition_queue"), `scripts/${file} references the migration file`);
     }
+  });
+});
+
+// ── M8C: what a delete may and may not take with it ─────────────────
+
+describe("deleting a prospect cannot erase what happened (M8C)", () => {
+  it("contact outcomes are RESTRICT, not CASCADE", () => {
+    // D2 from the M8C audit. A cascade on an append-only table fires the
+    // refuse-mutation trigger and aborts with a baffling error; worse, it makes
+    // "they asked us not to call again" deletable by deleting the prospect.
+    const block = statements.slice(
+      statements.indexOf("create table if not exists public.acquisition_contact_outcomes"),
+      statements.indexOf("create index if not exists idx_acq_outcomes_prospect")
+    );
+    assert.ok(block.length > 100, "the outcomes block was not found");
+    assert.ok(/references public\.acquisition_prospects \(prospect_id\) on delete restrict/.test(block), "outcomes must not cascade");
+    assert.ok(!/on delete cascade/.test(block));
+  });
+
+  it("only genuinely derived state cascades", () => {
+    // A lease and a qualification score can be rebuilt from the append-only
+    // tables. An outcome and a suppression cannot.
+    const cascading = [];
+    for (const m of statements.matchAll(/create table if not exists public\.(\w+)([\s\S]*?)\n\);/g)) {
+      if (/on delete cascade/.test(m[2])) cascading.push(m[1]);
+    }
+    assert.deepStrictEqual(cascading.sort(), ["acquisition_call_queue", "acquisition_qualifications"]);
+  });
+
+  it("suppression still has no foreign key at all", () => {
+    const block = statements.slice(
+      statements.indexOf("create table if not exists public.acquisition_suppressions"),
+      statements.indexOf("create index if not exists idx_acq_suppressions_fingerprint")
+    );
+    assert.ok(!/references/.test(block), "a foreign key here would let a deleted prospect erase its own opt-out");
   });
 });

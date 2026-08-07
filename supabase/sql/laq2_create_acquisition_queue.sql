@@ -244,8 +244,20 @@ create index if not exists idx_acq_queue_expires on public.acquisition_call_queu
 create table if not exists public.acquisition_contact_outcomes (
   id                  uuid primary key default gen_random_uuid(),
 
+  -- RESTRICT, not CASCADE. Two reasons, and the second is the one that matters.
+  --
+  -- Mechanically: this table is append-only, enforced by a BEFORE DELETE
+  -- trigger. A cascade would fire that trigger and abort the transaction with
+  -- "acquisition_contact_outcomes is append-only", which is a true but
+  -- baffling error to receive when you asked to delete a prospect. RESTRICT
+  -- says what is actually wrong.
+  --
+  -- Substantively: an outcome is the record that a conversation happened.
+  -- "They asked us not to call again on the 3rd" must not become deletable by
+  -- deleting the row it points at — that is the same class of mistake as
+  -- putting a foreign key on the suppression table.
   prospect_id         text not null
-                        references public.acquisition_prospects (prospect_id) on delete cascade,
+                        references public.acquisition_prospects (prospect_id) on delete restrict,
 
   outcome             text not null
                         check (outcome in ('booked','qualified','not_interested','opt_out',

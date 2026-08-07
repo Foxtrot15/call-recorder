@@ -189,8 +189,14 @@ create table if not exists public.acquisition_decisions (
   schema_version      text not null default 'acq-1',
   sequence            bigint not null,
 
+  -- 'queue' was added in M8B (reserving a prospect for a worker, releasing it,
+  -- completing it). Corrected here rather than by an ALTER in laq2 because this
+  -- file has never been applied: amending an unapplied migration leaves one
+  -- readable statement, whereas a compensating ALTER would preserve a history
+  -- that never happened and leave a reader wondering which one is current.
   entity_type         text not null
-                        check (entity_type in ('prospect','phone','batch','suppression','campaign','system')),
+                        check (entity_type in ('prospect','phone','batch','queue',
+                                               'suppression','campaign','system')),
   entity_id           text not null,
   event               text not null,
 

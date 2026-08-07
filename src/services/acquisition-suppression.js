@@ -144,8 +144,27 @@ function createSuppressionList({ now, audit = null, sink = null } = {}) {
     const identity = clip(fingerprint, 200);
 
     const matches = entries.filter((row) => {
-      if (row.scope === "business") return identity !== null && row.fingerprint === identity;
-      return number !== null && row.e164 === number;
+      // A NUMBER-SCOPED entry is a fact about a handset. Only the number matches.
+      if (row.scope !== "business") return number !== null && row.e164 === number;
+
+      // A BUSINESS-SCOPED entry matches on the identity OR on the number it was
+      // recorded against.
+      //
+      // The identity fingerprint is built from the trading name and the
+      // locality, so it drifts: the same locksmith re-imported from a second
+      // source as "Preston South" rather than "Preston", or with "Group"
+      // appended to its name, produces a DIFFERENT fingerprint. Matching on
+      // identity alone meant an opt-out we had recorded against a number was
+      // then ignored on that very number, and the business became callable
+      // again the moment somebody re-imported it from a source that spelled the
+      // suburb differently.
+      //
+      // Recording the number they opted out on and then refusing to look at it
+      // is strictly worse than never recording it, because it reads like a
+      // control that is not one. The number is a far more stable key than the
+      // name — so both are compared, and either is enough.
+      if (identity !== null && row.fingerprint === identity) return true;
+      return number !== null && row.e164 !== null && row.e164 === number;
     });
 
     if (matches.length === 0) {
