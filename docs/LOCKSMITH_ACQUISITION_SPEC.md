@@ -1,12 +1,23 @@
-# AIDA Locksmith Acquisition — Prospect Intelligence and Evidence (A1)
+# AIDA Locksmith Acquisition — the acquisition engine (A1 · A2 · M8B)
 
-**Status:** built dormant, **not deployed**. SQL written, **not applied**. No
+**Status:** built dormant, **not deployed**. All SQL written, **not applied**. No
 website crawled, no external API called, no number washed, no call placed.
-**Scope:** the first four steps of the acquisition pipeline — discovery, official
-source identification, identity and phone evidence capture, and human review.
+**Scope:** the whole pipeline from sourced lead to a callable queue candidate —
+discovery, source identification, evidence capture, human review, normalisation,
+deduplication, qualification, the compliance gate, permanent suppression, founder
+batch approval, the dormant call queue, and contact outcomes.
 **Owns (source of truth for):** the acquisition vocabulary, the offline
 boundary, the discovery adapter contract, the evidence ledger, the append-only
-decision log, the prospect lifecycle, and the human review step.
+decision log, the prospect lifecycle, the human review step, the qualification
+model, the queue boundary and the outcome model.
+
+> **Dated update — 2026-08-07 (M8B).** Two corrections to what this document
+> previously said. (1) The section headed *"A2 (in progress, uncommitted)"* was
+> stale: A2 was committed in `1794af3`, and every module it described is in the
+> tree with tests. (2) A1's claim that the pipeline stops at review is no longer
+> the whole picture — §15 onward describes what M8B added. Nothing was removed
+> or weakened; the offline boundary, the compliance precedence and the
+> suppression semantics are unchanged.
 
 > **Companion documents.** [OUTBOUND_BDM_ARCHITECTURE.md](OUTBOUND_BDM_ARCHITECTURE.md)
 > owns *which* compliance gates exist and *why* (Australian law, §2/§5).
@@ -343,11 +354,17 @@ Encoded contracts:
 ## 12. Verification
 
 ```bash
-npm test                              # the full suite
-node --test "test/acquisition-*.test.js"
-node scripts/acquisition-dry-run.js   # offline end-to-end walkthrough
-node scripts/acquisition-dry-run.js --verbose
+npm test                                        # the full suite
+node --test "test/acquisition-*.test.js"        # the acquisition suite alone
+
+node scripts/acquisition-dry-run.js             # A1 — discovery, evidence, review
+node scripts/acquisition-batch-dry-run.js       # A2 — wash, eligibility, batch approval
+node scripts/acquisition-m8b-walkthrough.js     # M8B — the whole machine, end to end
+node scripts/acquisition-m8b-walkthrough.js --verbose
 ```
+
+The M8B walkthrough **exits non-zero** if any of the invariants it exists to
+demonstrate fails, so it is a test as well as a demonstration; the suite runs it.
 
 The dry run prints what a founder would see and ends with an explicit list of
 **what has not happened** — no website fetched, no register queried, no wash, no
@@ -369,12 +386,11 @@ database write.
 
 ---
 
-# A2 (in progress, uncommitted) — calling policy
+# A2 — calling policy, eligibility and founder approval
 
-> **Status:** the modules below are built and tested but deliberately
-> **uncommitted**. Nothing dials. The remaining A2 work — duplicate resolution,
-> the plain-language eligibility engine and founder batch approval — is not yet
-> written.
+> **Status:** committed in `1794af3`, with tests. Nothing dials. (This heading
+> previously read "in progress, uncommitted", and was stale — corrected
+> 2026-08-07.)
 
 ## A2.1 What exists so far
 
@@ -659,3 +675,370 @@ dialler, no scheduler, no wash, and no batch. The next milestone (A2) adds
 normalisation, deduplication, the DNCR wash port, suppression, calling-policy
 checks, the plain-language eligibility decision, and founder batch approval —
 and still does not place a call.*
+
+---
+
+# M8B — the acquisition machine
+
+> **Status:** built dormant. SQL written, **not applied**. Nothing calls, texts,
+> emails, scrapes, or contacts a provider. The terminal artifact is a list of
+> prospects with lease tokens — data describing an intention.
+
+A1 and A2 produced a pipeline that could decide whether a business was *allowed*
+to be called. M8B answers the two questions that were still missing — *is it
+worth calling?* and *who is next?* — and closes the loop with what happened when
+we approached it.
+
+## 15. What M8B added
+
+| File | Purpose |
+|---|---|
+| `src/services/acquisition-qualification.js` | Deterministic, explainable locksmith qualification |
+| `src/services/acquisition-queue.js` | The dormant outbound call queue |
+| `src/services/acquisition-outcome.js` | Contact outcomes and their approved consequences |
+| `src/services/acquisition-readmodel.js` | The founder/operator pipeline summary |
+| `src/services/acquisition-m8b-fixtures.js` | A second adversarial dataset (does **not** self-register) |
+| `scripts/acquisition-m8b-walkthrough.js` | The offline end-to-end walkthrough |
+| `supabase/sql/laq2_create_acquisition_queue.sql` | Four additive tables — **written, not applied** |
+
+Extended: `acquisition-schema.js` (engagement states, remediation table,
+qualification and queue vocabulary), `acquisition-prospect.js`
+(remediation-gated transitions), `acquisition-audit.js` (the `queue` entity
+type).
+
+Backfilled: dedicated test files for `acquisition-phone`,
+`acquisition-suppression`, `acquisition-dncr`, `acquisition-holidays`,
+`acquisition-attempt-policy` and `acquisition-audit`, which had none.
+
+## 16. The prospect lifecycle, in full
+
+```text
+discovered ─► evidence_captured ─► review_pending ─┬─► review_rejected
+                                                   │
+                                                   └─► review_approved ─► queued ─► attempted
+                                                                            ▲          │
+                                (lease expired, batch revoked) ─────────────┘          │
+                                                                                       ▼
+                                                    callback_requested ◄──────────  connected
+                                                            │                          │
+                                                            ▼                          ▼
+                                                         queued              interested ─► customer
+                                                                             not_interested
+                                                                             disqualified
+
+any state ───────────────────────────────────────────────────────────► suppressed  (terminal)
+```
+
+Two halves of **one** machine, deliberately. A record with
+`lifecycle: review_approved` and a separate `engagement: not_interested` is a
+record with two answers to "may we contact this business", and the wrong one
+eventually wins.
+
+Notable guards:
+
+- **`customer` can only become `suppressed`.** A client is not a prospect and
+  must never reappear in a prospecting queue.
+- **`queued` can always be released** back to `review_approved`. If it could
+  not, a revoked batch or an expired lease would strand the record forever.
+- **`suppressed` remains terminal.** No transition, and no remediation, revives
+  it. There is no un-suppress anywhere: not in the module, not in the schema,
+  not in the database.
+
+### Remediation-gated transitions
+
+Three moves re-approach a business that has already given or received an answer,
+so they require a **named human approver and a justification** on top of the
+actor and reason every transition already carries:
+
+| Transition | Why it is gated |
+|---|---|
+| `not_interested → queued` | Re-approaching a business that already said no |
+| `not_interested → customer` | Recording a sale to a business that declined |
+| `disqualified → review_pending` | Reopening a business we decided not to pursue |
+
+An approver named `system`, `AIDA`, `bot`, `automation`, `auto`, `robot`,
+`service`, `cron` or `scheduler` is refused: a remediation signed by the
+automation that wants it is not a control.
+
+**Suppression is deliberately absent from that table**, and a test asserts it
+can never be added. A suppression recorded in error is superseded by a
+`manual_exclusion` note explaining the error; the business is not resurrected,
+because the one bug you cannot recover from is un-suppressing somebody who
+opted out — they do not get to opt out twice, and the second call is the one
+that becomes a complaint.
+
+## 17. Qualification
+
+`src/services/acquisition-qualification.js` answers *is this worth approaching,
+and how does it compare?* — and nothing else. It knows nothing about
+suppression, the DNCR, calling hours or holidays, and a test greps its output to
+keep it that way. If a high score could ever be read as a green light,
+eventually it would be.
+
+**There is no model.** The score is the sum of a fixed table of named signals,
+each returned with the points it contributed and a sentence saying why it fired.
+`compareQualifications(a, b)` answers "why is this locksmith above that one?" by
+naming the signals that differ — which is the question, and "0.82 confidence" is
+not an answer to it.
+
+### Facts and inferences do not mix
+
+A **fact** is observed and points at evidence. An **inference** must name the
+facts it was drawn from, may never read another inference (so the reasoning is
+one layer deep and cannot become circular), and is worth half as much by
+construction. A prospect cannot climb the list on conclusions alone.
+
+### Unknown never helps
+
+Every signal resolves to `yes`, `no` or `unknown`; only `yes` scores. Unknowns
+are listed by name. Three things are reported as **never observable** on every
+single assessment, whether or not the rest of the record is complete:
+
+- how many calls they take
+- how many calls they miss
+- what happens now when they cannot answer
+
+There is deliberately **no call-volume signal to score**. It is the most
+tempting number to invent here and the one we genuinely cannot see from outside.
+Omitting these from a report when everything else looked good would read as "we
+checked and it was fine".
+
+Operator attestations (`technicianCount`, `serviceAreaSuburbCount`, …) are
+reported in `attested`, separately from observations — a founder reading a
+ranking is entitled to know that "12 technicians" came from a person.
+
+### Bigger is not worse
+
+No row in the table awards negative points, and a test asserts none ever will. A
+business with more calls may be a **better** AIDA customer. A sole operator and
+a twelve-van business both qualify, and the fixture contains both to prove it.
+
+What gets excluded is a different thing that happens to be big:
+
+| Disqualifier | Fires when |
+|---|---|
+| `not_a_locksmith` | Nothing in the name, category or trade evidence says locksmith |
+| `lead_generation_page` | The source is a lead-resale funnel — calling it reaches a broker |
+| `national_call_centre` | A national coverage claim **and** no local number or locality |
+| `no_callable_number_kind` | Every published number is premium or short |
+| `outside_target_market` | Not a market we serve (a neutral reason, not a judgement) |
+| `already_a_client` | Ours already |
+
+Exclusions are **overrides, not penalties**: a ruled-out record still scores, and
+still sorts last.
+
+Matching is whole-word over a normalised string. This is load-bearing rather
+than fussy: substring matching qualified "Blockbuster Video" as a locksmith.
+
+### Bands and ranking
+
+`priority ≥ 95 · standard ≥ 65 · marginal ≥ 40 · excluded` over a table whose
+maximum is 136. The bar for `qualified` is derived from the `standard` band
+rather than repeated, so the two cannot drift. The bands are calibrated against
+the achievable range: the first draft's thresholds put 8 of 10 locksmiths in
+`priority`, and a band that does not divide the population is decoration.
+
+Ranking is a **total order** with six named tie-breakers — score, official
+source, facts established, fewer unknowns, found earlier, then `prospectId`. The
+last one is what makes it total; without it two equal prospects swap places
+between runs.
+
+## 18. The call queue
+
+`src/services/acquisition-queue.js`. **It cannot place a call.** No dialler, no
+scheduler, no provider client, no transport, and no function that could become
+one by configuration. Tests assert it reaches no network, imports nothing
+non-local, and exports nothing that reads like a dispatcher.
+
+### It holds no cached eligibility
+
+The most important property in the file. A verdict computed at ingestion is a
+statement about the world at ingestion time — calling hours pass, washes expire,
+batch approvals go stale, and somebody opts out at 4pm. So `evaluate` is called
+for **every candidate on every selection**, with `at` set to the instant being
+asked about, and any `eligibility` sitting on an incoming record is ignored
+outright. A test forges exactly the shape a naive implementation would believe.
+
+`preview()` runs the identical assessment, so a screen can never show a
+different order from the one workers get.
+
+### Two questions, never merged
+
+Qualification and eligibility meet here and stay separate. A prospect is skipped
+as `not_qualified` **or** as `not_eligible`, never as "low score", because those
+need completely different actions from a founder. Ordering is qualification's;
+permission is eligibility's.
+
+### Leases and idempotency
+
+`selectNext` reserves what it returns against a **named worker** for a bounded
+time. A second worker asking at the same instant gets different prospects. An
+expired lease frees the record, so a dead worker strands nothing — the failure
+mode is "called later than intended", never "called twice at once". A
+`requestId` makes selection idempotent: a timeout between a worker and the queue
+must not silently double the day's calls.
+
+### One business, one place in the queue
+
+A1 derives `prospectId` from the identity fingerprint, so two records for the
+same locksmith in the same suburb **share an id**. Candidates therefore collapse
+by `prospectId`, deterministically, with the dropped record reported as
+`identity_collision`. This was found by the walkthrough, not by a unit test: the
+queue offered the same business twice and leased it twice, and because leases
+are keyed by `prospectId`, the second grant silently overwrote the first.
+
+### Storage
+
+The in-memory lease table is the domain model, not the storage. The durable form
+is `acquisition_call_queue` in `laq2`, where "one live lease per business" is a
+partial unique index — a constraint the database enforces even when two
+processes genuinely race, which application code cannot.
+
+## 19. Contact outcomes
+
+`src/services/acquisition-outcome.js`. Callers say **what happened**, never what
+state the prospect should be in. If they said both, two callers would eventually
+disagree, and the one that was wrong would be the one that left a business
+callable after an opt-out.
+
+The path is walked through the same whitelist every other transition uses. If
+any hop is illegal the whole recording is refused and nothing moves — a
+half-applied outcome is worse than a rejected one.
+
+| Outcome | Reached the business? | Ends at | Consequence |
+|---|---|---|---|
+| `no_answer`, `voicemail` | no | `attempted` | counts as an attempt (**unapproved**, A-L7) |
+| `wrong_person` | **no** | `attempted` | suppresses the **number** (approved) |
+| `callback` | yes | `callback_requested` | reschedule (**unapproved**) |
+| `not_interested`, `declined` | yes | `not_interested` | cooldown (**unapproved**, A-L8) |
+| `opt_out` | yes | `suppressed` | suppresses the **business** (approved) |
+| `booked`, `qualified` | yes | `interested` | stop calling (approved) |
+
+`wrong_person` deliberately lands on `attempted`, not `connected`. Somebody
+answered, but not this locksmith — recording it as a connection would put a
+conversation in the history that never happened.
+
+**Suppression happens before the transition.** If the write fails, the recording
+fails and the prospect stays where it was. Transitioning first has a failure
+mode where a business is marked handled while remaining callable. With no
+suppression list available at all, an opt-out is **refused** rather than
+recorded: a record that says the right thing attached to a system that will call
+them anyway is worse than no record.
+
+An outcome cannot be recorded against a business no call could have reached.
+"They said no" about a record that was never queued is either mis-keyed or
+somebody calling outside the queue, and both need noticing.
+
+Conversion to `customer` is a separate entry point, not a tenth outcome: it
+happens after the conversation, often days later.
+
+## 20. Suppression semantics (unchanged, now durable)
+
+- **Permanent.** No remove, delete, unsuppress or clear exists in the module,
+  and `laq2` enforces it with the append-only trigger rather than by withheld
+  grants.
+- **Business-scoped by default.** An opt-out is a statement about the
+  relationship, not about a handset, so it catches every number the business has
+  now or publishes later. Only `wrong_number` and `dncr_listed` are
+  number-scoped.
+- **Normalisation happens before comparison.** `laq2` CHECK-constrains `e164` to
+  `+61` form, because comparing published spellings means "(03) 5550 2287" and
+  "03-5550-2287" are different numbers and the second one gets called.
+- **It survives the prospect record.** `acquisition_suppressions` has **no
+  foreign key** to `acquisition_prospects` — a cascade would let a deleted
+  prospect erase its own opt-out, and a non-cascading key would be removed by
+  whoever needed to delete. It is keyed on values a re-import reproduces.
+
+## 21. The founder read model
+
+`src/services/acquisition-readmodel.js` computes nothing itself. Blocked
+prospects are categorised by `acquisition-batch.categoriseDecision` — the same
+function the founder batch screen uses — because two screens categorising the
+same refusal differently is a support conversation nobody can resolve.
+
+It re-evaluates rather than caching, for the same reason the queue does.
+
+Three shapes chosen against the dangerous direction of error:
+
+- With **no eligibility engine**, permission is `UNKNOWN` for every prospect.
+  Not callable, not blocked — the optimistic guess is the dangerous one.
+- `suppressionEntries` is **null, never zero**, when no list was supplied. Zero
+  reads as "nobody has opted out", which is a far stronger claim than "we did
+  not look". It is not called `suppressed` because the count includes businesses
+  that are not in the prospect list at all.
+- The outcome distribution is **derived from the lifecycle**, not kept alongside
+  it. A second tally would drift, and the drifted one would be believed.
+
+There is deliberately **no dashboard**: no HTML, no route, no client bundle. The
+backend contract is the thing that has to be right, and a screen built before it
+settles gets rebuilt.
+
+## 22. The walkthrough
+
+```bash
+node scripts/acquisition-m8b-walkthrough.js
+node scripts/acquisition-m8b-walkthrough.js --verbose
+```
+
+Thirteen invented businesses through the whole machine, offline. It **exits
+non-zero** if two workers get the same prospect, if the re-imported record
+escapes suppression, if the re-import is judged callable, or if the audit chain
+breaks — so it is a test, not only a demonstration, and
+`test/acquisition-m8b-walkthrough.test.js` runs it.
+
+What it demonstrates on data rather than in prose:
+
+- Two spellings of one number normalise to one string, which is what lets dedupe
+  work and what stops an opt-out being escaped by reformatting.
+- A Perth locksmith is not callable at 07:30 its time while a Melbourne one is
+  at 09:30 theirs.
+- Melbourne Cup Day blocks Victoria and leaves New South Wales alone.
+- The 2026 calendar refuses 2027 rather than degrading into calling on Christmas
+  Day.
+- Eligibility permits the plumber and the lead-resale page; qualification
+  removes them. Two questions, two answers.
+- A locksmith opts out, is re-imported under a different name and punctuation,
+  resolves to the same identity, and never reappears in the queue.
+
+Every number is in an ACMA fiction range and every own-domain is under
+`example.*`, both asserted by test. Directory hostnames are deliberately real,
+because source classification is a pure function of the reference string and an
+invented directory domain would not classify as a directory — the record would
+stop exercising the gate it exists for. Nothing is fetched from any of them; the
+offline boundary makes that impossible.
+
+The run ends with an explicit list of what did **not** happen.
+
+> The walkthrough **simulates** counsel sign-off (A-L1) and attempt-policy
+> approval (A-L6), loudly, because without them the eligibility engine blocks
+> every prospect and the run would stop at step 7. Neither has been obtained.
+
+## 23. What M8B deliberately does not do
+
+- **Does not place, schedule or prepare a call.** There is no dialler.
+- **Does not send SMS or email.**
+- **Does not scrape anything.** The offline boundary is unchanged and still a
+  hardcoded constant with no environment override.
+- **Does not query the DNC Register.** Results are imported from an attested
+  file; there is no live mode.
+- **Does not apply any SQL.** `laq1` and `laq2` are both written and unapplied.
+- **Does not build a dashboard.**
+- **Does not wire qualification into the eligibility engine.** Commercial fit
+  and legal permission stay separate questions with separate owners.
+
+## 24. What a future milestone must do before anything dials
+
+Everything in §A2.9 (A-L1 … A-L9) still stands and still blocks. In addition:
+
+| # | Requirement | Why |
+|---|---|---|
+| **M-1** | Apply `laq1`, then `laq2`, and re-verify RLS | Both are unapplied; ordering matters |
+| **M-2** | Replace the in-memory stores with the LAQ2 tables | Suppression that lives in a process is not suppression |
+| **M-3** | Build a lease reaper | An expired lease should be released with a row saying so, not evaporate |
+| **M-4** | Re-run eligibility **at the moment of dialling** | The queue's snapshot is for audit, not authorisation — a wash can expire between reservation and call |
+| **M-5** | Decide the `service_area` / `operating_status` capture path | The discovery contract derives neither, so both are permanently unknown today |
+| **M-6** | Replace the holiday fixture with an authoritative source | Coverage ends 2026-12-31 and the calendar refuses everything after it |
+
+**M-4 is the one that matters most.** Nothing in the queue authorises a call. A
+future dispatcher that trusted `eligibility_snapshot` would reintroduce exactly
+the staleness this milestone was built to eliminate.
