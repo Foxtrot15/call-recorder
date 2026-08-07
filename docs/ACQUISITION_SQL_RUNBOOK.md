@@ -1,13 +1,29 @@
 # Acquisition SQL Runbook — applying LAQ1 and LAQ2 to dev
 
-**Status:** written, **not executed**. Nothing in this repository applies SQL,
-and a test asserts that. Every step below is something a human runs by hand.
+**Status:** **APPLIED TO DEV** on 2026-08-07 (M8D), against project ref
+`wvwemitmmsdytyutaqbm`. **NOT applied to production.** Nothing in this
+repository applies SQL, and a test asserts that — every step below is something
+a human runs by hand, and every step below was run by hand.
 
 **Owns (source of truth for):** the order LAQ1 and LAQ2 are applied in, how each
 is verified, and what can and cannot be rolled back.
 
-> **Apply to the dev Supabase project only.** Nothing here has been run against
-> anything. Production is out of scope for this runbook and for M8C.
+> **Apply to the dev Supabase project only.** Production is out of scope for
+> this runbook, for M8C and for M8D.
+
+**The verification assets referenced below are checked in**, under
+`supabase/sql/verification/`. They are read-only or self-rolling-back, ASCII
+only, and were run in this order against dev:
+
+| File | What it does |
+|---|---|
+| `01_preflight.sql` | Confirms nothing acquisition-shaped exists yet |
+| `02_laq1_verify.sql` | LAQ1 structure: tables, RLS, policies, constraints, indexes, triggers |
+| `03_laq1_verify_detail.sql` | The LAQ1 checks `02` cannot make: trigger **enabled** state, row counts, CHECK bodies |
+| `04_laq2_verify.sql` | LAQ2 structure, including the partial unique index and RESTRICT/CASCADE split |
+| `05_behavioural_probes.sql` | 30 behavioural probes (§6) |
+| `06_probe_cleanup_check.sql` | Proves §6 left nothing behind |
+| `07_restart_proof_verify.sql` | Proves §7 left exactly its three intentional rows |
 
 ---
 
@@ -190,184 +206,205 @@ Expect a CHECK violation.
 
 ---
 
-## 6. Self-rolling-back probes — the invariants that matter
+## 6. Behavioural probes — the invariants that matter
 
-Every block below ends in `rollback`. Nothing persists.
+**Checked in as `supabase/sql/verification/05_behavioural_probes.sql`.** Run that
+file; the SQL below explains what it does and why it is shaped the way it is.
 
-```sql
--- 6.1  ONE LIVE LEASE PER BUSINESS. This is the rule application code cannot
---      guarantee under a race, and the reason the index exists.
-begin;
-  insert into public.acquisition_prospects
-    (prospect_id, business_name, timezone, origin, discovered_at)
-  values ('pr_lease', 'Lease Probe', 'Australia/Melbourne', 'fixture', now());
+**Expected result: an ERROR whose message is a 30-line report ending
+`SUMMARY: 30 of 30 passed, 0 failed.`** An error here is success — see
+"the deliberate abort" below.
 
-  insert into public.acquisition_call_queue
-    (prospect_id, e164, worker_id, lease_token, granted_at, expires_at)
-  values ('pr_lease', '+61355501042', 'worker-a', 'tok-a', now(), now() + interval '5 min');
+### 6.0 Why these are not flat `begin; … rollback;` blocks
 
-  -- This must FAIL.
-  insert into public.acquisition_call_queue
-    (prospect_id, e164, worker_id, lease_token, granted_at, expires_at)
-  values ('pr_lease', '+61355501042', 'worker-b', 'tok-b', now(), now() + interval '5 min');
-rollback;
-```
-Expect
-`ERROR: duplicate key value violates unique constraint "idx_acq_queue_one_live_lease"`.
+An earlier version of this section was wrong, and the way it was wrong is worth
+recording because it is an easy mistake to repeat.
+
+It looked like this:
 
 ```sql
--- 6.2  …and releasing the first frees the slot.
+-- BROKEN. Do not copy this shape.
 begin;
-  insert into public.acquisition_prospects
-    (prospect_id, business_name, timezone, origin, discovered_at)
-  values ('pr_lease2', 'Lease Probe 2', 'Australia/Melbourne', 'fixture', now());
-  insert into public.acquisition_call_queue
-    (prospect_id, e164, worker_id, lease_token, granted_at, expires_at)
-  values ('pr_lease2', '+61355501042', 'worker-a', 'tok-c', now(), now() + interval '5 min');
-
-  update public.acquisition_call_queue set released_at = now() where lease_token = 'tok-c';
-
-  insert into public.acquisition_call_queue
-    (prospect_id, e164, worker_id, lease_token, granted_at, expires_at)
-  values ('pr_lease2', '+61355501042', 'worker-b', 'tok-d', now(), now() + interval '5 min');
+  insert into public.acquisition_suppressions (...) values (...);
+  update public.acquisition_suppressions set note = 'changed' where actor = 'runbook';  -- must FAIL
+  delete from public.acquisition_suppressions where actor = 'runbook';                  -- must FAIL
 rollback;
 ```
-Expect both inserts to succeed.
+
+**The second expected failure is unreachable.** In Postgres the first exception
+aborts the transaction, so the `DELETE` does not raise the append-only error at
+all — it returns `25P02 current transaction is aborted, commands ignored until
+end of transaction block`. The block appears to pass while testing only half of
+what it claims. Every `-- must FAIL` after the first one in a flat transaction
+is decoration.
+
+The fix is a nested PL/pgSQL block. Postgres wraps `BEGIN … EXCEPTION … END` in
+an implicit **savepoint**, so catching the expected exception rolls back only
+that probe and the surrounding transaction survives:
 
 ```sql
--- 6.3  SUPPRESSION IS PERMANENT — the table refuses to forget.
-begin;
-  insert into public.acquisition_suppressions
-    (reason, scope, fingerprint, e164, actor, actor_kind, note, suppressed_at)
-  values ('opt_out', 'business', 'probe-locksmiths#preston|vic', '+61355502287',
-          'runbook', 'human', 'Probe.', now());
-
-  -- Both of these must FAIL.
-  update public.acquisition_suppressions set note = 'changed' where actor = 'runbook';
-  delete from public.acquisition_suppressions where actor = 'runbook';
-rollback;
+begin
+  update public.acquisition_evidence set value = 'x' where evidence_id = 'probe';
+  -- reached only if the trigger failed to fire
+  v_report := v_report || E'\nP01 FAIL  no error raised';
+exception when others then
+  v_report := v_report || E'\nP01 ' || case when sqlstate = '23001' then 'PASS ' else 'FAIL ' end
+              || ' got ' || sqlstate;
+end;
 ```
-Expect
-`ERROR: Table acquisition_suppressions is append-only: UPDATE is not permitted.`
 
-```sql
--- 6.4  A business-scoped suppression cannot be stored without an identity.
-begin;
-  insert into public.acquisition_suppressions
-    (reason, scope, e164, actor, note, suppressed_at)
-  values ('opt_out', 'business', '+61355502287', 'runbook', 'Probe.', now());
-rollback;
-```
-Expect a violation of `acq_suppression_scope_key`.
+Two further things this shape buys:
 
-```sql
--- 6.5  A number that was not normalised is refused, so comparison stays sound.
-begin;
-  insert into public.acquisition_suppressions
-    (reason, scope, e164, actor, note, suppressed_at)
-  values ('wrong_number', 'number', '(03) 5550 1042', 'runbook', 'Probe.', now());
-rollback;
-```
-Expect a CHECK violation on `e164`.
+- **Verdicts assert the specific SQLSTATE, not merely "an error happened".** A
+  probe that raises the *wrong* error reads FAIL. The four that matter are
+  `23001` restrict_violation (the append-only trigger), `23514` check_violation,
+  `23505` unique_violation, `23503` foreign_key_violation.
+- **All 30 probes run in one pass**, each reporting its own result, instead of
+  the run stopping at the first expected failure.
 
-```sql
--- 6.6  DELETING A PROSPECT CANNOT ERASE ITS OPT-OUT.
---      The single most important probe in this runbook.
-begin;
-  insert into public.acquisition_prospects
-    (prospect_id, business_name, timezone, origin, discovered_at)
-  values ('pr_del', 'Delete Probe', 'Australia/Melbourne', 'fixture', now());
+### 6.1 The deliberate abort, and why there is no `rollback;`
 
-  insert into public.acquisition_suppressions
-    (reason, scope, fingerprint, e164, actor, actor_kind, note, suppressed_at)
-  values ('opt_out', 'business', 'delete-probe#preston|vic', '+61355509999',
-          'runbook', 'human', 'Probe.', now());
+The probe file is **one statement — a single `DO` block** — and it ends by
+raising an exception that carries the report.
 
-  delete from public.acquisition_prospects where prospect_id = 'pr_del';
+That is not a workaround for the editor, it is the stronger guarantee. An
+earlier harness used a temporary table to collect results and a trailing
+`rollback;` to undo the fixtures. It failed with
+`42P01 relation "m8d_probe_results" does not exist`: the Supabase SQL editor
+does not keep a `TEMPORARY` table alive across statement boundaries, so the
+table was gone by the time the `DO` block ran, and the first probe's exception
+handler died trying to record its result.
 
-  -- The suppression must STILL be here.
-  select count(*) from public.acquisition_suppressions where actor = 'runbook';
-rollback;
-```
-Expect the delete to succeed and the count to be **1**. There is no foreign key
-from suppression to prospects, deliberately — a cascade would let a deleted
-prospect erase its own opt-out, which is the accident the whole design prevents.
+The current shape depends on nothing but **Postgres statement atomicity**: a
+statement that ends in an uncaught exception is rolled back completely, whatever
+the client does with transactions. It cannot leave fixture data behind even if
+every statement is autocommitted. There is no `COMMIT` anywhere in the file.
 
-```sql
--- 6.7  An outcome cannot be erased by deleting the prospect either.
-begin;
-  insert into public.acquisition_prospects
-    (prospect_id, business_name, timezone, origin, discovered_at)
-  values ('pr_out', 'Outcome Probe', 'Australia/Melbourne', 'fixture', now());
-  insert into public.acquisition_contact_outcomes
-    (prospect_id, outcome, reached_the_business, lifecycle_from, lifecycle_to,
-     actor, actor_kind, note, recorded_at)
-  values ('pr_out', 'opt_out', true, 'queued', 'suppressed',
-          'runbook', 'human', 'Probe.', now());
+### 6.2 What the 30 probes cover
 
-  -- This must FAIL.
-  delete from public.acquisition_prospects where prospect_id = 'pr_out';
-rollback;
-```
-Expect a foreign-key RESTRICT violation.
+| Probes | Invariant |
+|---|---|
+| P01–P08 | Append-only: **UPDATE and DELETE both refused**, on evidence, decisions, suppressions and outcomes — all eight arms, independently |
+| P09–P10 | Derived state stays **mutable**: a lease can be released, a score recomputed. Had the trigger been attached here by mistake the queue would deadlock permanently |
+| P11–P18 | CHECK constraints: `live_fetch` refused; unknown lifecycle refused; `queued` accepted; `queue` entity_type accepted; suppression scope key both directions; non-normalised E.164 refused; valid E.164 accepted |
+| P19–P24 | **Second live lease refused**; releasing frees the slot; duplicate `lease_token`; duplicate `request_id`; one qualification per prospect; dangling `supersedes_id` |
+| P25–P27 | FK **RESTRICT**: a prospect with an outcome, evidence or phone cannot be deleted |
+| P28–P29 | FK **CASCADE**: qualification and queue rows follow their prospect |
+| **P30** | **A suppression survives its prospect being deleted** |
+
+P19 and P20 are deliberately separate. P19 proves the partial unique index
+refuses a second live lease; P20 proves releasing frees the slot. A plain
+`UNIQUE` index would pass P19 and fail P20 — only the pair distinguishes the
+constraint that is actually wanted.
+
+A single session cannot stage a true race. P19 proves the *constraint that
+decides* one, which is the part application code cannot supply.
+
+### 6.3 Afterwards
+
+Run `supabase/sql/verification/06_probe_cleanup_check.sql`. It is read-only and
+proves from the database side that the abort left nothing behind: eight tables
+empty (C1–C8), and no row bearing a probe identifier (D1–D8).
+
+**Result on dev, 2026-08-07:** 30/30 probes passed; cleanup 16/16 with all
+counts zero.
 
 ---
 
 ## 7. Prove suppression survives a restart, on the real database
 
 This is the M8C invariant, checked against Postgres rather than a test double.
+It was run on dev on 2026-08-07 and **passed 13/13**.
 
-1. Point the app at dev with the acquisition flags on, in a Node REPL from the
-   repository root:
+**Checked in as `scripts/dev/acquisition-restart-proof/`** — `common.js`,
+`phase1.js`, `phase2.js`, `cleanup.js`.
 
-```js
-const { createSupabaseAcquisitionStore } = require("./src/services/acquisition-store");
-const { createDurableSuppression } = require("./src/services/acquisition-durable");
-const now = () => new Date();
+### 7.1 Two processes, not a REPL
 
-const store = createSupabaseAcquisitionStore();
-const s1 = await createDurableSuppression({ now, store });
-await s1.suppress({
-  reason: "opt_out",
-  fingerprint: "restart-probe#preston|vic",
-  e164: "+61355500001",
-  actor: "runbook",
-  actorKind: "human",
-  note: "Restart probe — delete this row by hand afterwards.",
-});
-console.log(s1.check({ fingerprint: "restart-probe#preston|vic" }).suppressed); // true
+An earlier version of this section asked you to type into a Node REPL, exit it,
+and type into a second one. The scripts do the same thing reproducibly:
+
+```bash
+cd <acquisition worktree>
+NODE_PATH=../call-recorder/node_modules node scripts/dev/acquisition-restart-proof/phase1.js
+# phase1 exits. The heap is gone.
+NODE_PATH=../call-recorder/node_modules node scripts/dev/acquisition-restart-proof/phase2.js
+NODE_PATH=../call-recorder/node_modules node scripts/dev/acquisition-restart-proof/cleanup.js
 ```
 
-2. **Exit the REPL entirely.** `process.exit()`, or close the terminal. The
-   point is to destroy the heap.
+Then run `supabase/sql/verification/07_restart_proof_verify.sql`.
 
-3. Start a new REPL and build a completely fresh service:
+**Nothing is handed between phase 1 and phase 2** — no state file, no export.
+Phase 2 re-derives the prospect ids from the same fixtures, because the identity
+fingerprint is deterministic. That is what makes it a restart proof rather than
+a restatement.
 
-```js
-const { createSupabaseAcquisitionStore } = require("./src/services/acquisition-store");
-const { createDurableSuppression } = require("./src/services/acquisition-durable");
-const store = createSupabaseAcquisitionStore();
-const s2 = await createDurableSuppression({ now: () => new Date(), store });
+**Phase 2 opens with a false-positive guard (R0):** it builds the identical
+services against an *empty in-memory* store and asserts they come up empty.
+Without R0, every subsequent pass could be an artefact of state that never left
+memory.
 
-// Must be true. Note the drifted suburb — this is the re-import case.
-console.log(s2.check({ e164: "+61355500001", fingerprint: "restart-probe#preston-south|vic" }).suppressed);
-```
+### 7.2 Environment
 
-Expect `true`. If it prints `false`, **M8C has failed on the real database** and
-nothing should proceed to a dialler.
+`NODE_PATH` points at the runtime worktree's `node_modules` so
+`@supabase/supabase-js` resolves. **Nothing is installed into the acquisition
+worktree and `package.json` is untouched** — the dep-free test convention holds.
 
-4. The probe row is real and permanent by design. Remove it deliberately, as a
-   one-off admin action, and record that you did:
+Credentials are read from a dev `.env` by the script itself, so the service key
+never reaches a command line, a shell history, or any output. Set
+`ACQUISITION_ENV_FILE` to point at your own; the default is a sibling worktree.
 
-```sql
--- Only because it is a runbook probe on DEV. Never do this to a real opt-out.
-alter table public.acquisition_suppressions disable trigger acq_suppressions_no_update;
-delete from public.acquisition_suppressions where actor = 'runbook';
-alter table public.acquisition_suppressions enable trigger acq_suppressions_no_update;
-```
+**`loadEnv()` throws unless `SUPABASE_URL` contains the dev project ref, before
+a client is constructed.** Pointing this at production fails closed.
 
-> Leaving the trigger disabled is how permanence quietly stops being permanent.
-> Re-enable it in the same session, then re-run 6.3 to confirm it bites again.
+### 7.3 What phase 2 proves
+
+| | Proves |
+|---|---|
+| R0 | Empty store ⇒ empty services (false-positive guard) |
+| R1 | The opt-out survived process death |
+| R2 | **The re-imported business is still suppressed** — trading name, suburb, source and number formatting all drifted, prospect identity regenerated |
+| R3 | Eligibility refuses it (`suppressed_permanently`) |
+| R4 | **No lease is issued** |
+| R5 | The active lease survived the restart |
+| R6 | The active lease **cannot be duplicated** — a second acquire returns null via the partial unique index |
+| R7 | An expired lease is **not** self-releasing; it stays held until reaped |
+| R8 | The reaper released **only** the expired lease; the long lease is untouched |
+| R9 | **A reaped prospect is re-evaluated, not auto-queued** — its lease is free, yet selection still refuses it |
+| R10 | The outcome and its `suppression_applied` flag survived |
+| R11 | The read model reports suppressed, rebuilt from the hydrated index |
+
+R8 is a real distinction rather than a sweep that catches everything: one
+business holds a 5-minute lease, the other 24 hours, and the sweep runs at
++10 minutes.
+
+### 7.4 Cleanup leaves three rows, deliberately
+
+**Do not disable the append-only triggers to remove them.** A previous version
+of this section told you to, and it was wrong to.
+
+The restart proof cannot roll back — its whole claim is that state survives
+process death. What it writes is therefore real, and three rows cannot be
+removed without switching enforcement off:
+
+| Row | Why it stays |
+|---|---|
+| The suppression | `acq_suppressions_no_update` refuses DELETE |
+| The DO_NOT_CALL outcome | `acq_outcomes_no_update` refuses DELETE |
+| The prospect both point at | FK `ON DELETE RESTRICT` |
+
+`cleanup.js` removes everything else, then **attempts the prospect delete and
+reports the RESTRICT refusal rather than skipping it** — the refusal is the
+evidence.
+
+All three describe an invented business on an invented number and can never
+match anything real. Leaving them costs nothing; the invariant *"the append-only
+triggers on this database have never been disabled"* is worth more than an empty
+table, and `07_restart_proof_verify.sql` check **F8** asserts exactly that.
+
+> If you ever do need to remove such a row, that is a deliberate, logged,
+> one-off admin decision — not a cleanup step, and not something this runbook
+> will hand you a recipe for.
 
 ---
 
@@ -424,9 +461,32 @@ expensive to reverse afterwards.
 
 - Nothing starts calling. Both the counsel sign-off (A-L1) and the attempt
   policy (A-L6) are still unapproved, and the eligibility engine blocks every
-  prospect while either is.
+  prospect while either is. **Applying the schema changed none of that.**
 - Update the status line at the top of
-  [LOCKSMITH_ACQUISITION_SPEC.md](LOCKSMITH_ACQUISITION_SPEC.md), which
-  currently says both migrations are unapplied.
+  [LOCKSMITH_ACQUISITION_SPEC.md](LOCKSMITH_ACQUISITION_SPEC.md).
+  *Done for dev on 2026-08-07.*
 - Run the lease reaper manually once and confirm it reports zero:
   a sweep that reaps something on an empty queue means something is wrong.
+
+### What dev holds now
+
+Three rows, deliberately, from §7. They describe an invented business on an
+invented number, they are the only acquisition data on dev, and they are not to
+be removed — see §7.4.
+
+| Table | Row |
+|---|---|
+| `acquisition_suppressions` | one `opt_out`, actor `m8d-restart-probe` |
+| `acquisition_contact_outcomes` | one `opt_out`, actor `m8d-restart-probe` |
+| `acquisition_prospects` | `M8D Restart Probe Locksmiths`, `discovered_by = m8d-restart-probe` |
+
+`supabase/sql/verification/07_restart_proof_verify.sql` asserts exactly this,
+and asserts that all four append-only triggers are still enabled.
+
+### Before production
+
+Everything in this runbook applies again, in order, with one addition: dev was
+empty when LAQ1 ran and production will not be. Re-read §1 and §8 with that in
+mind, and do not assume a clean `01_preflight.sql` — on production the expected
+answer to "does anything acquisition-shaped exist" may legitimately change over
+time.
