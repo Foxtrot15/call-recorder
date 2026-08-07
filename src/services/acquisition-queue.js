@@ -105,7 +105,7 @@ function skip(prospect, code, detail = null) {
  * @param {object}   [audit]     the append-only decision log
  * @param {number}   [leaseTtlMs]
  */
-function createCallQueue({ now, evaluate, audit = null, leaseTtlMs = DEFAULT_LEASE_TTL_MS } = {}) {
+function createCallQueue({ now, evaluate, audit = null, leaseTtlMs = DEFAULT_LEASE_TTL_MS, initialLeases = null } = {}) {
   if (typeof now !== "function") throw new Error("createCallQueue requires an injected now().");
   if (typeof evaluate !== "function") {
     throw new Error("createCallQueue requires an evaluate() function — the queue must not decide eligibility itself.");
@@ -113,6 +113,21 @@ function createCallQueue({ now, evaluate, audit = null, leaseTtlMs = DEFAULT_LEA
 
   /** prospectId → { token, workerId, expiresAt, grantedAt } */
   const leases = new Map();
+
+  // HYDRATION (M8C). Live leases loaded from the durable store at construction,
+  // so a restarted process knows which businesses another worker is already
+  // holding. Without this, a restart mid-run hands out a second lease for a
+  // prospect somebody is in the middle of, which is the double-call this whole
+  // mechanism exists to prevent.
+  for (const row of Array.isArray(initialLeases) ? initialLeases : []) {
+    if (!row || !row.prospectId || !row.leaseToken) continue;
+    leases.set(row.prospectId, {
+      token: row.leaseToken,
+      workerId: row.workerId,
+      grantedAt: row.grantedAt,
+      expiresAt: row.expiresAt,
+    });
+  }
   /** requestId → frozen selection, so a retry cannot reserve twice */
   const completedRequests = new Map();
   let leaseCounter = 0;

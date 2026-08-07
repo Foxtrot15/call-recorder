@@ -372,145 +372,157 @@ say(`worker-a retries request wt-1: reserved ${queue.activeLeases().length} in t
 say("");
 say(workerA.note);
 
-// ── 9. An outcome ───────────────────────────────────────────────────
+// Everything from here needs `await`: recording an outcome became async in
+// M8C so that the suppression it triggers can be a durable write. CommonJS
+// has no top-level await, hence the main().
+async function main() {
+  // ── 9. An outcome ───────────────────────────────────────────────────
 
-step("OUTCOME — a locksmith asks not to be contacted again");
+  step("OUTCOME — a locksmith asks not to be contacted again");
 
-const outcomes = createOutcomeRecorder({ now, suppression, audit, attemptPolicy });
+  const outcomes = createOutcomeRecorder({ now, suppression, audit, attemptPolicy });
 
-// Move the subject through the states a real attempt would produce.
-const prestonRow = [...workerA.selected, ...workerB.selected].find((r) => r.businessName === "Preston Key & Safe");
-let preston = reviewed.find((p) => p.businessName === "Preston Key & Safe");
-const { transitionProspect } = req("src/services/acquisition-prospect");
-preston = transitionProspect(preston, "queued", { actor: "acquisition-queue", reason: "Selected into an approved calling batch.", now }).prospect;
+  // Move the subject through the states a real attempt would produce.
+  const prestonRow = [...workerA.selected, ...workerB.selected].find((r) => r.businessName === "Preston Key & Safe");
+  let preston = reviewed.find((p) => p.businessName === "Preston Key & Safe");
+  const { transitionProspect } = req("src/services/acquisition-prospect");
+  preston = transitionProspect(preston, "queued", { actor: "acquisition-queue", reason: "Selected into an approved calling batch.", now }).prospect;
 
-say(`Nobody has been called. What follows is a founder typing what a locksmith said.`);
-say("");
-const optOut = outcomes.record({
-  prospect: preston,
-  outcome: "opt_out",
-  actor: "Peter Dang",
-  actorKind: "human",
-  note: "Said they are not interested and asked us never to contact them again.",
-  e164: prestonRow ? prestonRow.e164 : numberOf("Preston Key & Safe"),
-});
+  say(`Nobody has been called. What follows is a founder typing what a locksmith said.`);
+  say("");
+  const optOut = await outcomes.record({
+    prospect: preston,
+    outcome: "opt_out",
+    actor: "Peter Dang",
+    actorKind: "human",
+    note: "Said they are not interested and asked us never to contact them again.",
+    e164: prestonRow ? prestonRow.e164 : numberOf("Preston Key & Safe"),
+  });
 
-if (!optOut.ok) {
-  console.error(`Recording the outcome failed: ${optOut.message}`);
+  if (!optOut.ok) {
+    console.error(`Recording the outcome failed: ${optOut.message}`);
+    process.exit(1);
+  }
+  bullet(`${preston.businessName}: ${optOut.from} → ${optOut.to}`);
+  bullet(`Hops recorded: ${optOut.hops.map((h) => `${h.from}→${h.to}`).join(", ")}`);
+  bullet(`Suppression: ${optOut.suppression.applied ? `${optOut.suppression.scope}-wide, reason "${optOut.suppression.reason}"` : "none"}`);
+  bullet(optOut.consequence.message);
+
+  const prestonSuppressed = preston;
+  const optedOut = optOut.prospect;
+
+  // ── 10. Re-import ───────────────────────────────────────────────────
+
+  step("RE-IMPORT — the same business arrives again, three months later");
+
+  say("A second data drop contains the same locksmith with its name and number");
+  say("written differently:");
+  bullet(`  original:  "Preston Key & Safe"        (03) 5550 2287`);
+  bullet(`  re-import: "Preston Key and Safe Pty Ltd"  03-5550-2287`);
+  say("");
+
+  const reimport = reviewed.find((p) => p.businessName === "Preston Key and Safe Pty Ltd");
+  const reimportFingerprint = identityFingerprint(reimport);
+  const originalFingerprint = identityFingerprint(prestonSuppressed);
+
+  bullet(`identity fingerprint, original:  ${originalFingerprint}`);
+  bullet(`identity fingerprint, re-import: ${reimportFingerprint}`);
+  bullet(`Same identity: ${originalFingerprint === reimportFingerprint ? "YES" : "NO"}`);
+
+  const hit = suppression.check({ e164: numberOf("Preston Key and Safe Pty Ltd"), fingerprint: reimportFingerprint });
+  bullet(`Suppression check on the re-imported record: ${hit.suppressed ? "SUPPRESSED" : "NOT SUPPRESSED"}`);
+  if (hit.suppressed) bullet(`  ${hit.message}`);
+
+  const reimportDecision = evaluate(reimport, { evidenceRows: evidenceFor(reimport.prospectId) });
+  bullet(`Eligibility on the re-imported record: ${reimportDecision.eligible ? "CALLABLE" : reimportDecision.code}`);
+
+  const postOptOutQueue = queue.preview({
+    prospects: [...reviewed.filter((p) => p.businessName !== "Preston Key & Safe"), optedOut],
+    limit: 20,
+    at: RUN_AT,
+    evidenceFor,
+    qualificationFor: (p) => qualifications.get(p.prospectId),
+  });
+  const stillOffered = postOptOutQueue.next.some((r) => r.businessName.startsWith("Preston Key"));
+  say("");
+  say(`Either spelling of this business appearing in the queue: ${stillOffered ? "YES — THIS IS A BUG" : "NO"}`);
+  say("");
+  say("Normalisation happens BEFORE the suppression comparison, and suppression is");
+  say("keyed on the business identity rather than on the prospect row — so throwing");
+  say("the record away and re-importing it cannot resurrect them.");
+
+  // ── 11. Read model ──────────────────────────────────────────────────
+
+  step("READ MODEL — what a founder would see");
+
+  const finalProspects = [...reviewed.filter((p) => p.businessName !== "Preston Key & Safe"), optedOut];
+  const summary = summarisePipeline({
+    prospects: finalProspects,
+    evaluate,
+    qualifyFor: (p) => qualifications.get(p.prospectId),
+    evidenceFor,
+    suppression,
+    queue,
+    duplicateResolution,
+    at: RUN_AT,
+  });
+  say(describePipeline(summary));
+  say("");
+  say('"Callable now" here is larger than the queue offered, and that is the design:');
+  say("this number is COMPLIANCE only — it counts everyone we are permitted to call.");
+  say("The queue then applies qualification on top, which is what removed the plumber");
+  say("and the lead-resale page. Two questions, two answers, never merged into one.");
+
+  // ── 12. Audit ───────────────────────────────────────────────────────
+
+  step("AUDIT — the trail, and whether it has been tampered with");
+
+  const rows = audit.all();
+  say(`Decision log: ${rows.length} rows, hash-chained.`);
+  const verification = verifyRows(rows);
+  say(`Chain verification: ${verification.ok ? "INTACT" : `BROKEN at index ${verification.brokenAt}`}`);
+  if (VERBOSE) {
+    for (const r of rows.slice(-8)) say(`   ${r.recordedAt}  ${String(r.entityType).padEnd(12)} ${String(r.event).padEnd(18)} ${r.actor}`);
+  }
+
+  // ── What did not happen ─────────────────────────────────────────────
+
+  console.log(`\n${line("═")}`);
+  console.log("WHAT DID NOT HAPPEN");
+  console.log(line("═"));
+  for (const s of [
+    "No website was fetched. No search API, directory or business register was queried.",
+    "No number was washed against the real Do Not Call Register — the results were imported from an invented file.",
+    "No call was placed, scheduled, or prepared. There is no dialler in this build.",
+    "No SMS and no email was sent.",
+    "No database was written to. Every store above is in memory and is gone when this process exits.",
+    "No provider was contacted: not Twilio, not Retell, not Anthropic.",
+    "No SQL was applied. supabase/sql/laq2_*.sql is written and unapplied, like laq1 before it.",
+    "No counsel has approved the calling window, and no one has approved the attempt caps.",
+  ]) {
+    console.log(`  ✗ ${s}`);
+  }
+  console.log("");
+  console.log("  The terminal artifact of this entire walkthrough is a list of prospects");
+  console.log("  with lease tokens. Data describing an intention — not an instruction.");
+  console.log(line("═"));
+
+  // A non-zero exit if any invariant the walkthrough exists to demonstrate failed.
+  const failures = [];
+  if (overlap.length !== 0) failures.push("two workers were handed the same prospect");
+  if (stillOffered) failures.push("an opted-out business reappeared in the queue after re-import");
+  if (!hit.suppressed) failures.push("the re-imported record was not caught by suppression");
+  if (reimportDecision.eligible) failures.push("the re-imported record was judged callable");
+  if (!verification.ok) failures.push("the audit chain did not verify");
+  if (failures.length) {
+    console.error(`\nWALKTHROUGH FAILED:\n${failures.map((f) => `  ✗ ${f}`).join("\n")}`);
+    process.exit(1);
+  }
+
+}
+
+main().catch((err) => {
+  console.error(`
+WALKTHROUGH CRASHED: ${err && err.stack ? err.stack : err}`);
   process.exit(1);
-}
-bullet(`${preston.businessName}: ${optOut.from} → ${optOut.to}`);
-bullet(`Hops recorded: ${optOut.hops.map((h) => `${h.from}→${h.to}`).join(", ")}`);
-bullet(`Suppression: ${optOut.suppression.applied ? `${optOut.suppression.scope}-wide, reason "${optOut.suppression.reason}"` : "none"}`);
-bullet(optOut.consequence.message);
-
-const prestonSuppressed = preston;
-const optedOut = optOut.prospect;
-
-// ── 10. Re-import ───────────────────────────────────────────────────
-
-step("RE-IMPORT — the same business arrives again, three months later");
-
-say("A second data drop contains the same locksmith with its name and number");
-say("written differently:");
-bullet(`  original:  "Preston Key & Safe"        (03) 5550 2287`);
-bullet(`  re-import: "Preston Key and Safe Pty Ltd"  03-5550-2287`);
-say("");
-
-const reimport = reviewed.find((p) => p.businessName === "Preston Key and Safe Pty Ltd");
-const reimportFingerprint = identityFingerprint(reimport);
-const originalFingerprint = identityFingerprint(prestonSuppressed);
-
-bullet(`identity fingerprint, original:  ${originalFingerprint}`);
-bullet(`identity fingerprint, re-import: ${reimportFingerprint}`);
-bullet(`Same identity: ${originalFingerprint === reimportFingerprint ? "YES" : "NO"}`);
-
-const hit = suppression.check({ e164: numberOf("Preston Key and Safe Pty Ltd"), fingerprint: reimportFingerprint });
-bullet(`Suppression check on the re-imported record: ${hit.suppressed ? "SUPPRESSED" : "NOT SUPPRESSED"}`);
-if (hit.suppressed) bullet(`  ${hit.message}`);
-
-const reimportDecision = evaluate(reimport, { evidenceRows: evidenceFor(reimport.prospectId) });
-bullet(`Eligibility on the re-imported record: ${reimportDecision.eligible ? "CALLABLE" : reimportDecision.code}`);
-
-const postOptOutQueue = queue.preview({
-  prospects: [...reviewed.filter((p) => p.businessName !== "Preston Key & Safe"), optedOut],
-  limit: 20,
-  at: RUN_AT,
-  evidenceFor,
-  qualificationFor: (p) => qualifications.get(p.prospectId),
 });
-const stillOffered = postOptOutQueue.next.some((r) => r.businessName.startsWith("Preston Key"));
-say("");
-say(`Either spelling of this business appearing in the queue: ${stillOffered ? "YES — THIS IS A BUG" : "NO"}`);
-say("");
-say("Normalisation happens BEFORE the suppression comparison, and suppression is");
-say("keyed on the business identity rather than on the prospect row — so throwing");
-say("the record away and re-importing it cannot resurrect them.");
-
-// ── 11. Read model ──────────────────────────────────────────────────
-
-step("READ MODEL — what a founder would see");
-
-const finalProspects = [...reviewed.filter((p) => p.businessName !== "Preston Key & Safe"), optedOut];
-const summary = summarisePipeline({
-  prospects: finalProspects,
-  evaluate,
-  qualifyFor: (p) => qualifications.get(p.prospectId),
-  evidenceFor,
-  suppression,
-  queue,
-  duplicateResolution,
-  at: RUN_AT,
-});
-say(describePipeline(summary));
-say("");
-say('"Callable now" here is larger than the queue offered, and that is the design:');
-say("this number is COMPLIANCE only — it counts everyone we are permitted to call.");
-say("The queue then applies qualification on top, which is what removed the plumber");
-say("and the lead-resale page. Two questions, two answers, never merged into one.");
-
-// ── 12. Audit ───────────────────────────────────────────────────────
-
-step("AUDIT — the trail, and whether it has been tampered with");
-
-const rows = audit.all();
-say(`Decision log: ${rows.length} rows, hash-chained.`);
-const verification = verifyRows(rows);
-say(`Chain verification: ${verification.ok ? "INTACT" : `BROKEN at index ${verification.brokenAt}`}`);
-if (VERBOSE) {
-  for (const r of rows.slice(-8)) say(`   ${r.recordedAt}  ${String(r.entityType).padEnd(12)} ${String(r.event).padEnd(18)} ${r.actor}`);
-}
-
-// ── What did not happen ─────────────────────────────────────────────
-
-console.log(`\n${line("═")}`);
-console.log("WHAT DID NOT HAPPEN");
-console.log(line("═"));
-for (const s of [
-  "No website was fetched. No search API, directory or business register was queried.",
-  "No number was washed against the real Do Not Call Register — the results were imported from an invented file.",
-  "No call was placed, scheduled, or prepared. There is no dialler in this build.",
-  "No SMS and no email was sent.",
-  "No database was written to. Every store above is in memory and is gone when this process exits.",
-  "No provider was contacted: not Twilio, not Retell, not Anthropic.",
-  "No SQL was applied. supabase/sql/laq2_*.sql is written and unapplied, like laq1 before it.",
-  "No counsel has approved the calling window, and no one has approved the attempt caps.",
-]) {
-  console.log(`  ✗ ${s}`);
-}
-console.log("");
-console.log("  The terminal artifact of this entire walkthrough is a list of prospects");
-console.log("  with lease tokens. Data describing an intention — not an instruction.");
-console.log(line("═"));
-
-// A non-zero exit if any invariant the walkthrough exists to demonstrate failed.
-const failures = [];
-if (overlap.length !== 0) failures.push("two workers were handed the same prospect");
-if (stillOffered) failures.push("an opted-out business reappeared in the queue after re-import");
-if (!hit.suppressed) failures.push("the re-imported record was not caught by suppression");
-if (reimportDecision.eligible) failures.push("the re-imported record was judged callable");
-if (!verification.ok) failures.push("the audit chain did not verify");
-if (failures.length) {
-  console.error(`\nWALKTHROUGH FAILED:\n${failures.map((f) => `  ✗ ${f}`).join("\n")}`);
-  process.exit(1);
-}

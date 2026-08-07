@@ -47,12 +47,39 @@ function clip(value, max) {
  * @param {object}   [audit]  the append-only decision log
  * @param {function} [sink]   durable store; if it throws, the write is refused
  */
-function createSuppressionList({ now, audit = null, sink = null } = {}) {
+function createSuppressionList({ now, audit = null, sink = null, initialEntries = null } = {}) {
   if (typeof now !== "function") {
     throw new Error("createSuppressionList requires an injected now().");
   }
 
+  // HYDRATION (M8C). This list is a pure in-memory index and stays one; what it
+  // gained is the ability to be built from rows that already exist. The durable
+  // layer in acquisition-durable.js loads them from the store at construction,
+  // which is what makes a restart survivable — without this, the index always
+  // starts empty and the first check after a restart clears everybody.
+  //
+  // Entries arrive pre-validated, having been through suppress() before they
+  // were ever stored. They are re-frozen and re-sequenced, not re-checked: a
+  // row that was refused at write time never reached the store, and refusing it
+  // again at read time could only DROP a suppression, which is the one
+  // direction this module must never fail in.
   const entries = [];
+  for (const row of Array.isArray(initialEntries) ? initialEntries : []) {
+    if (!row || typeof row !== "object") continue;
+    entries.push(
+      Object.freeze({
+        sequence: entries.length + 1,
+        reason: row.reason,
+        reasonLabel: S.SUPPRESSION_REASON_LABELS[row.reason] || row.reason,
+        scope: row.scope,
+        e164: row.e164 || null,
+        fingerprint: row.fingerprint || null,
+        actor: row.actor,
+        note: row.note,
+        suppressedAt: row.suppressedAt,
+      })
+    );
+  }
 
   /**
    * Permanently exclude a business and/or a number.

@@ -157,7 +157,13 @@ function createOutcomeRecorder({ now, suppression = null, audit = null, attemptP
    *                            number rather than a business
    * @param {object} [remediation]  passed through for remediation-gated moves
    */
-  function record({ prospect, outcome, actor, actorKind = "system", note, e164 = null, remediation = null } = {}) {
+  // ASYNC SINCE M8C. The suppression collaborator may be the pure in-memory
+  // list (returns a result object) or the durable service (returns a promise of
+  // one). `await` handles both identically, so this module composes with either
+  // without knowing which it was given — and the "suppress before you
+  // transition" ordering below now spans a durable write rather than a Map
+  // insert, which is the whole point.
+  async function record({ prospect, outcome, actor, actorKind = "system", note, e164 = null, remediation = null } = {}) {
     if (!prospect || typeof prospect !== "object" || Array.isArray(prospect)) {
       return { ok: false, code: "prospect_invalid", message: "There is no prospect to record an outcome against." };
     }
@@ -204,7 +210,7 @@ function createOutcomeRecorder({ now, suppression = null, audit = null, attemptP
         return { ok: false, code: "number_required", message: "A wrong-number outcome suppresses the number that was dialled, so it needs that number." };
       }
 
-      suppressionResult = suppression.suppress({
+      suppressionResult = await suppression.suppress({
         reason: numberScoped ? "wrong_number" : "opt_out",
         e164: number,
         // A business-wide suppression needs the identity, or the same locksmith
