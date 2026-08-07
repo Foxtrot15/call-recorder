@@ -203,9 +203,16 @@ function createProspect(rawInput = {}) {
  * seemingly harmless ones like discovered → review_approved, because skipping
  * evidence capture is exactly the shortcut that must not exist.
  *
+ * A small set of transitions (S.REMEDIATION_TRANSITIONS) additionally require a
+ * named approver and a justification, because they re-approach a business that
+ * has already given or received an answer. See the comment on that table.
+ *
+ * @param {object} [opts.remediation]  { approvedBy, justification } — required
+ *   only for the transitions listed in S.REMEDIATION_TRANSITIONS.
+ *
  * Returns { ok:true, prospect } (a new frozen object) or { ok:false, code, message }.
  */
-function transitionProspect(prospect, to, { actor, reason, now } = {}) {
+function transitionProspect(prospect, to, { actor, reason, now, remediation = null } = {}) {
   if (!prospect || typeof prospect !== "object") {
     return { ok: false, code: "prospect_invalid", message: "No prospect was given." };
   }
@@ -238,7 +245,44 @@ function transitionProspect(prospect, to, { actor, reason, now } = {}) {
     return { ok: false, code: "clock_missing", message: "transitionProspect requires an injected now()." };
   }
 
-  const entry = Object.freeze({ from, to, at: now().toISOString(), actor: who, reason: why });
+  // Remediation-gated transitions. An actor and a reason are already required
+  // above; these need a SECOND person to have authorised the move, named, plus
+  // a justification. "Peter, because the list was short" must not be enough to
+  // ring somebody back who already said no.
+  const remediationNeeded = S.REMEDIATION_TRANSITIONS[S.REMEDIATION_KEY(from, to)];
+  let remediationEntry = null;
+  if (remediationNeeded) {
+    const approvedBy = clip(remediation && remediation.approvedBy, 120);
+    const justification = clip(remediation && remediation.justification, MAX_TEXT);
+    if (!approvedBy || !justification) {
+      return {
+        ok: false,
+        code: "remediation_required",
+        message:
+          `Going from "${S.PROSPECT_STATE_LABELS[from]}" to "${S.PROSPECT_STATE_LABELS[to]}" needs an explicit administrative decision — ${remediationNeeded} ` +
+          "Record who approved it and why.",
+      };
+    }
+    // The approver must be a person. A remediation signed by "system" is the
+    // automation authorising itself, which is not a control.
+    if (isNonHuman(approvedBy)) {
+      return {
+        ok: false,
+        code: "remediation_actor_invalid",
+        message: `"${approvedBy}" is not a person. Re-approaching a business that already answered has to be approved by a named human.`,
+      };
+    }
+    remediationEntry = Object.freeze({ approvedBy, justification });
+  }
+
+  const entry = Object.freeze({
+    from,
+    to,
+    at: now().toISOString(),
+    actor: who,
+    reason: why,
+    ...(remediationEntry ? { remediation: remediationEntry } : {}),
+  });
 
   return {
     ok: true,
@@ -248,6 +292,15 @@ function transitionProspect(prospect, to, { actor, reason, now } = {}) {
       history: Object.freeze([...(prospect.history || []), entry]),
     }),
   };
+}
+
+// Names that are not a person. Kept in step with the same rule in
+// acquisition-review.js and acquisition-batch.js: an automated actor may record
+// a transition, but it may not AUTHORISE re-approaching somebody.
+const NON_HUMAN_ACTORS = Object.freeze(["system", "aida", "bot", "automation", "auto", "robot", "service", "cron", "scheduler"]);
+
+function isNonHuman(name) {
+  return NON_HUMAN_ACTORS.includes(String(name).trim().toLowerCase());
 }
 
 /**

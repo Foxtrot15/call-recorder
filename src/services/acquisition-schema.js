@@ -126,12 +126,34 @@ const REQUIRED_EVIDENCE_KINDS = Object.freeze(["business_name", "phone", "trade_
 // The states a prospect moves through. One-way except for the explicit
 // re-review path: a rejected prospect can be reopened by a human, but nothing
 // automatic ever promotes a prospect back toward callable.
+//
+// TWO HALVES, ONE MACHINE (M8B).
+// The first six states are the ACQUISITION half — how a business became a
+// record we believe in. The states after `review_approved` are the ENGAGEMENT
+// half — what happened when we approached it. They are one machine rather than
+// two because the question "may this business be contacted?" has to be
+// answerable from a single value; a prospect with `lifecycle: review_approved`
+// and a separate `engagement: not_interested` is a record with two answers, and
+// the wrong one eventually wins.
+//
+// The engagement states are named for what is TRUE about the relationship, not
+// for what a dialler did. `attempted` is a fact about us; `connected` is a fact
+// about the call; `interested` / `not_interested` are facts about them.
 const PROSPECT_STATES = Object.freeze([
   "discovered", // exists, nothing verified
   "evidence_captured", // has evidence attached, not yet reviewed
   "review_pending", // queued for a human
   "review_approved", // a human accepted the identity + source
   "review_rejected", // a human refused it
+  // ── engagement (M8B) — nothing here places a call ──
+  "queued", // selected into an approved calling batch; dormant
+  "attempted", // a call was attempted and did not reach a person
+  "connected", // a person answered
+  "callback_requested", // they asked us to try again at a stated time
+  "interested", // they want to hear more
+  "not_interested", // they declined — re-approach needs remediation
+  "customer", // they became an AIDA client
+  "disqualified", // we decided not to pursue (not their decision)
   "suppressed", // permanently excluded (opt-out, blacklist, …)
 ]);
 
@@ -141,8 +163,29 @@ const PROSPECT_STATE_LABELS = Object.freeze({
   review_pending: "Waiting for a human to review",
   review_approved: "Reviewed and accepted",
   review_rejected: "Reviewed and rejected",
+  queued: "Waiting in an approved calling queue",
+  attempted: "We tried to call and did not reach anyone",
+  connected: "We spoke to someone",
+  callback_requested: "They asked us to call back",
+  interested: "Interested — wants to hear more",
+  not_interested: "Not interested",
+  customer: "Became an AIDA client",
+  disqualified: "We decided not to pursue this business",
   suppressed: "Permanently excluded",
 });
+
+// States in the engagement half. Useful to the read model and to the queue,
+// which must never re-queue a business that has already reached an answer.
+const ENGAGEMENT_STATES = Object.freeze([
+  "queued",
+  "attempted",
+  "connected",
+  "callback_requested",
+  "interested",
+  "not_interested",
+  "customer",
+  "disqualified",
+]);
 
 // Legal transitions. Everything not listed is refused — the state machine is a
 // whitelist, because "how did this become callable?" must have exactly one
@@ -151,12 +194,54 @@ const PROSPECT_TRANSITIONS = Object.freeze({
   discovered: Object.freeze(["evidence_captured", "suppressed"]),
   evidence_captured: Object.freeze(["review_pending", "suppressed"]),
   review_pending: Object.freeze(["review_approved", "review_rejected", "suppressed"]),
-  // A human may reopen their own decision; nothing else may.
-  review_approved: Object.freeze(["review_pending", "suppressed"]),
+  // A human may reopen their own decision; nothing else may. `queued` is the
+  // ONLY forward step, and reaching it requires an approved batch and a passing
+  // eligibility decision — see acquisition-queue.js.
+  review_approved: Object.freeze(["review_pending", "queued", "disqualified", "suppressed"]),
   review_rejected: Object.freeze(["review_pending", "suppressed"]),
+
+  // ── engagement ──
+  // A queued prospect can be released back to the approved pool (the batch was
+  // revoked, the lease expired, eligibility flipped) — releasing must always be
+  // possible, or a queue bug strands records forever.
+  queued: Object.freeze(["attempted", "review_approved", "disqualified", "suppressed"]),
+  // An attempt that reached nobody. Re-queueing is normal here and is still
+  // subject to the attempt policy's caps and spacing at selection time.
+  attempted: Object.freeze(["connected", "queued", "callback_requested", "not_interested", "disqualified", "suppressed"]),
+  connected: Object.freeze(["interested", "not_interested", "callback_requested", "customer", "disqualified", "suppressed"]),
+  callback_requested: Object.freeze(["queued", "connected", "not_interested", "disqualified", "suppressed"]),
+  interested: Object.freeze(["customer", "not_interested", "callback_requested", "disqualified", "suppressed"]),
+  // "No" is not a temporary state. Re-approaching someone who declined is
+  // permitted only through the remediation path below.
+  not_interested: Object.freeze(["queued", "customer", "disqualified", "suppressed"]),
+  // A customer is not a prospect any more. The only way out is suppression
+  // (they left and asked not to be contacted) — never back into a calling queue.
+  customer: Object.freeze(["suppressed"]),
+  disqualified: Object.freeze(["review_pending", "suppressed"]),
+
   // Terminal. Suppression is permanent and cross-campaign by design.
   suppressed: Object.freeze([]),
 });
+
+// TRANSITIONS THAT NEED AN ADMINISTRATIVE DECISION, NOT JUST AN ACTOR.
+//
+// Every transition already records who and why. These few additionally require
+// a named approver and a justification, because they re-approach a business
+// that has already given or received an answer — the class of move that must
+// never happen because a scheduler had a spare slot.
+//
+// `suppressed` is deliberately absent: it is not remediable, it is terminal.
+// A suppression added in error is superseded by a `manual_exclusion` note
+// explaining the error (see acquisition-suppression.js); the business is not
+// resurrected, because the one bug you cannot recover from is un-suppressing
+// somebody who opted out.
+const REMEDIATION_TRANSITIONS = Object.freeze({
+  "not_interested->queued": "Re-approaching a business that already said no.",
+  "not_interested->customer": "Recording a sale to a business that declined — confirm this is not the wrong record.",
+  "disqualified->review_pending": "Reopening a business we previously decided not to pursue.",
+});
+
+const REMEDIATION_KEY = (from, to) => `${from}->${to}`;
 
 // ── Review ──────────────────────────────────────────────────────────
 
@@ -277,6 +362,95 @@ const ELIGIBILITY_DECISION_LABELS = Object.freeze({
   blocked: "Must never be called",
 });
 
+// ── Qualification (M8B) ─────────────────────────────────────────────
+
+// Whether a qualification signal is something we OBSERVED or something we
+// CONCLUDED. This split is the whole reason the qualification module exists in
+// this shape: "their website lists 24-hour callouts" and "they probably take
+// after-hours calls" are different kinds of claim, and a founder ranking
+// prospects is entitled to know which one is holding a business up the list.
+//
+// A fact must be traceable to evidence. An inference must name the facts it was
+// drawn from. Neither may be invented.
+const SIGNAL_KINDS = Object.freeze(["fact", "inference"]);
+
+// The verdict. `qualified` means "worth approaching if compliance permits" —
+// it says nothing about whether we are ALLOWED to call, which is
+// acquisition-eligibility's question and only its question.
+const QUALIFICATION_VERDICTS = Object.freeze([
+  "qualified",
+  "not_qualified",
+  "insufficient_information",
+  "disqualified",
+]);
+
+const QUALIFICATION_VERDICT_LABELS = Object.freeze({
+  qualified: "Worth approaching",
+  not_qualified: "Does not clear the bar",
+  insufficient_information: "We do not know enough to say",
+  disqualified: "Ruled out",
+});
+
+// Bands, not a percentage. A tier is a decision a person can argue with; a
+// score of 0.72 invites tuning until the number says what somebody wanted.
+// The numeric score exists only to ORDER prospects within the same tier, and
+// it is always returned alongside the signals that produced it.
+const QUALIFICATION_TIERS = Object.freeze(["priority", "standard", "marginal", "excluded"]);
+
+const QUALIFICATION_TIER_LABELS = Object.freeze({
+  priority: "Priority — strong fit, approach first",
+  standard: "Standard — a good fit",
+  marginal: "Marginal — approach only when the list is thin",
+  excluded: "Excluded — do not approach",
+});
+
+// Reasons a business is ruled out of the locksmith vertical outright. These are
+// not score penalties: no amount of other merit overturns them, so they are a
+// separate concept from the signal table.
+const DISQUALIFIER_CODES = Object.freeze([
+  "not_a_locksmith", // the trade evidence says it does something else
+  "lead_generation_page", // an SEO funnel that resells calls, not a locksmith
+  "national_call_centre", // a switchboard, not a local operator
+  "outside_target_market", // not in a market we serve
+  "no_callable_number_kind", // premium/short/invalid — never dialable
+  "already_a_client", // ours already
+]);
+
+const DISQUALIFIER_LABELS = Object.freeze({
+  not_a_locksmith: "The evidence does not show a locksmith business",
+  lead_generation_page: "A lead-generation page, not a locksmith",
+  national_call_centre: "A national call centre rather than a local operator",
+  outside_target_market: "Outside the markets we serve",
+  no_callable_number_kind: "No number of a kind we would ever dial",
+  already_a_client: "Already an AIDA client",
+});
+
+// ── Call queue (M8B) ────────────────────────────────────────────────
+
+// Why a prospect was not returned by a queue selection. Distinct from
+// eligibility codes on purpose: these are QUEUE reasons ("somebody else has
+// it", "it is already in flight"), not permission reasons.
+const QUEUE_SKIP_CODES = Object.freeze([
+  "not_eligible", // the eligibility engine said no, re-checked just now
+  "not_qualified", // commercial fit, not legal permission
+  "already_leased", // another worker holds it
+  "already_engaged", // it has moved past `queued` in the lifecycle
+  "lifecycle_not_queueable", // it is not in a state a call can start from
+]);
+
+const QUEUE_SKIP_LABELS = Object.freeze({
+  not_eligible: "Not currently allowed to be called",
+  not_qualified: "Does not meet the qualification bar",
+  already_leased: "Already handed to another worker",
+  already_engaged: "Already being worked",
+  lifecycle_not_queueable: "Not in a state a call can start from",
+});
+
+// The lifecycle states a queue selection may draw from. Deliberately short:
+// only a record a human approved, or one released back after a failed attempt
+// or a requested callback, may be picked up.
+const QUEUEABLE_STATES = Object.freeze(["review_approved", "queued", "attempted", "callback_requested"]);
+
 // ── Campaign batches ────────────────────────────────────────────────
 
 const BATCH_STATES = Object.freeze([
@@ -327,6 +501,21 @@ module.exports = {
   PROSPECT_STATES,
   PROSPECT_STATE_LABELS,
   PROSPECT_TRANSITIONS,
+  ENGAGEMENT_STATES,
+  REMEDIATION_TRANSITIONS,
+  REMEDIATION_KEY,
+
+  SIGNAL_KINDS,
+  QUALIFICATION_VERDICTS,
+  QUALIFICATION_VERDICT_LABELS,
+  QUALIFICATION_TIERS,
+  QUALIFICATION_TIER_LABELS,
+  DISQUALIFIER_CODES,
+  DISQUALIFIER_LABELS,
+
+  QUEUE_SKIP_CODES,
+  QUEUE_SKIP_LABELS,
+  QUEUEABLE_STATES,
 
   REVIEW_DECISIONS,
   REVIEW_REJECTION_REASONS,

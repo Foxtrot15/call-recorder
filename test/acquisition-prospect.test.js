@@ -244,3 +244,103 @@ describe("assessing a prospect", () => {
     assert.strictEqual(assessment.reviewable, false);
   });
 });
+
+// ── M8B: the engagement half of the lifecycle ───────────────────────
+//
+// The acquisition half (discovered → review_approved) was A1's and is asserted
+// above. These cover what M8B added: the states that describe what happened
+// when we approached a business, and the guards that stop a scheduler quietly
+// re-approaching somebody who already answered.
+
+describe("the engagement lifecycle (M8B)", () => {
+  const step = (prospect, to, overrides = {}) => transitionProspect(prospect, to, { actor: "Peter", reason: "because", now, ...overrides });
+
+  /** A prospect parked in an arbitrary lifecycle state, for transition probing. */
+  const at = (lifecycle) => Object.freeze({ ...createProspect(input()).prospect, lifecycle, history: Object.freeze([]) });
+
+  it("an approved prospect can be queued, but nothing skips straight to a call outcome", () => {
+    const approved = at("review_approved");
+    assert.strictEqual(step(approved, "queued").ok, true);
+    for (const to of ["attempted", "connected", "interested", "customer", "not_interested", "callback_requested"]) {
+      assert.strictEqual(step(approved, to).ok, false, `review_approved → ${to} must be refused`);
+    }
+  });
+
+  it("a queued prospect can always be released back to the approved pool", () => {
+    // If releasing were impossible, a revoked batch or an expired lease would
+    // strand the record in `queued` forever and it would never be called again.
+    assert.strictEqual(step(at("queued"), "review_approved").ok, true);
+  });
+
+  it("a customer is not a prospect: the only way out is suppression", () => {
+    const customer = at("customer");
+    assert.deepStrictEqual([...S.PROSPECT_TRANSITIONS.customer], ["suppressed"]);
+    for (const to of S.PROSPECT_STATES.filter((s) => s !== "suppressed")) {
+      assert.strictEqual(step(customer, to).ok, false, `customer → ${to} must be refused`);
+    }
+  });
+
+  it("suppression is still terminal now that there are more states to escape to", () => {
+    const suppressed = step(at("discovered"), "suppressed").prospect;
+    for (const to of S.PROSPECT_STATES) {
+      assert.strictEqual(step(suppressed, to).ok, false, `suppressed → ${to} must be refused`);
+    }
+  });
+
+  it("every engagement state can still reach suppression", () => {
+    for (const from of S.ENGAGEMENT_STATES) {
+      assert.ok(S.PROSPECT_TRANSITIONS[from].includes("suppressed"), `${from} must be able to become suppressed`);
+    }
+  });
+});
+
+describe("remediation-gated transitions (M8B)", () => {
+  const step = (prospect, to, overrides = {}) => transitionProspect(prospect, to, { actor: "Peter", reason: "because", now, ...overrides });
+  const at = (lifecycle) => Object.freeze({ ...createProspect(input()).prospect, lifecycle, history: Object.freeze([]) });
+
+  const remediation = { approvedBy: "Peter Dang", justification: "They asked us to follow up after their new branch opened." };
+
+  it("re-approaching a business that said no is refused without an administrative decision", () => {
+    const result = step(at("not_interested"), "queued");
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.code, "remediation_required");
+    assert.match(result.message, /already said no/);
+  });
+
+  it("…and permitted with one, which is recorded on the history entry", () => {
+    const result = step(at("not_interested"), "queued", { remediation });
+    assert.strictEqual(result.ok, true, result.message);
+    const entry = result.prospect.history[result.prospect.history.length - 1];
+    assert.deepStrictEqual({ ...entry.remediation }, remediation);
+  });
+
+  it("a remediation cannot be signed by the automation that wants it", () => {
+    for (const approvedBy of ["system", "AIDA", "bot", "automation", "auto", "Scheduler"]) {
+      const result = step(at("not_interested"), "queued", { remediation: { ...remediation, approvedBy } });
+      assert.strictEqual(result.ok, false, `"${approvedBy}" must not be able to authorise a re-approach`);
+      assert.strictEqual(result.code, "remediation_actor_invalid");
+    }
+  });
+
+  it("a justification alone is not an approval, and an approver alone is not a reason", () => {
+    assert.strictEqual(step(at("not_interested"), "queued", { remediation: { justification: "we want to" } }).code, "remediation_required");
+    assert.strictEqual(step(at("not_interested"), "queued", { remediation: { approvedBy: "Peter Dang" } }).code, "remediation_required");
+  });
+
+  it("ordinary transitions are unaffected — no remediation is demanded or recorded", () => {
+    const result = step(at("review_approved"), "queued");
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.prospect.history[0].remediation, undefined);
+  });
+
+  it("no remediation can revive a suppressed business", () => {
+    const suppressed = step(at("discovered"), "suppressed").prospect;
+    for (const to of S.PROSPECT_STATES) {
+      assert.strictEqual(step(suppressed, to, { remediation }).ok, false, `suppressed → ${to} must stay refused even with a remediation`);
+    }
+    // And the table must never grow an entry that would permit it.
+    for (const key of Object.keys(S.REMEDIATION_TRANSITIONS)) {
+      assert.ok(!key.startsWith("suppressed->"), `${key} would make suppression revivable`);
+    }
+  });
+});

@@ -154,3 +154,73 @@ describe("domain invariants encoded in the vocabulary", () => {
     }
   });
 });
+
+// ── M8B additions to the vocabulary ─────────────────────────────────
+
+describe("the engagement lifecycle vocabulary (M8B)", () => {
+  it("labels every state and every new enum", () => {
+    assertLabelsMatch(S.PROSPECT_STATES, S.PROSPECT_STATE_LABELS, "PROSPECT_STATE_LABELS");
+    assertLabelsMatch(S.QUALIFICATION_VERDICTS, S.QUALIFICATION_VERDICT_LABELS, "QUALIFICATION_VERDICT_LABELS");
+    assertLabelsMatch(S.QUALIFICATION_TIERS, S.QUALIFICATION_TIER_LABELS, "QUALIFICATION_TIER_LABELS");
+    assertLabelsMatch(S.DISQUALIFIER_CODES, S.DISQUALIFIER_LABELS, "DISQUALIFIER_LABELS");
+    assertLabelsMatch(S.QUEUE_SKIP_CODES, S.QUEUE_SKIP_LABELS, "QUEUE_SKIP_LABELS");
+  });
+
+  it("the transition table still covers exactly the states that exist", () => {
+    assert.deepStrictEqual(Object.keys(S.PROSPECT_TRANSITIONS).sort(), [...S.PROSPECT_STATES].sort());
+  });
+
+  it("engagement states are a subset of the prospect states", () => {
+    for (const s of S.ENGAGEMENT_STATES) assert.ok(S.PROSPECT_STATES.includes(s), `${s} is not a prospect state`);
+  });
+
+  it("every state a queue may draw from is a real, non-terminal state", () => {
+    for (const s of S.QUEUEABLE_STATES) {
+      assert.ok(S.PROSPECT_STATES.includes(s), `${s} is not a prospect state`);
+      assert.ok(S.PROSPECT_TRANSITIONS[s].length > 0, `${s} is terminal and cannot be queued from`);
+    }
+    assert.ok(!S.QUEUEABLE_STATES.includes("suppressed"), "a suppressed business must never be queueable");
+    assert.ok(!S.QUEUEABLE_STATES.includes("not_interested"), "a business that declined must not be queueable without remediation");
+    assert.ok(!S.QUEUEABLE_STATES.includes("customer"), "a client must not be in a prospecting queue");
+  });
+
+  it("every remediation-gated transition is one the whitelist actually permits", () => {
+    // A remediation guard on a transition the table already refuses is dead
+    // code that reads like a control, which is worse than no control at all.
+    for (const key of Object.keys(S.REMEDIATION_TRANSITIONS)) {
+      const [from, to] = key.split("->");
+      assert.ok(S.PROSPECT_STATES.includes(from), `${key}: "${from}" is not a state`);
+      assert.ok(S.PROSPECT_STATES.includes(to), `${key}: "${to}" is not a state`);
+      assert.ok(S.PROSPECT_TRANSITIONS[from].includes(to), `${key} is guarded but not permitted — the guard can never fire`);
+      assert.ok(S.REMEDIATION_TRANSITIONS[key].trim().length > 0, `${key} must explain itself`);
+    }
+  });
+
+  it("nothing can transition out of suppression, with or without remediation", () => {
+    assert.deepStrictEqual([...S.PROSPECT_TRANSITIONS.suppressed], []);
+    for (const key of Object.keys(S.REMEDIATION_TRANSITIONS)) {
+      assert.ok(!key.startsWith("suppressed->"), `${key} would make suppression revivable`);
+    }
+  });
+
+  it("no state is unreachable, so nothing in the table is decoration", () => {
+    const reachable = new Set(["discovered"]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const from of [...reachable]) {
+        for (const to of S.PROSPECT_TRANSITIONS[from]) {
+          if (!reachable.has(to)) {
+            reachable.add(to);
+            grew = true;
+          }
+        }
+      }
+    }
+    for (const s of S.PROSPECT_STATES) assert.ok(reachable.has(s), `${s} cannot be reached from "discovered"`);
+  });
+
+  it("a signal is either something we saw or something we concluded — never both, never neither", () => {
+    assert.deepStrictEqual([...S.SIGNAL_KINDS], ["fact", "inference"]);
+  });
+});
