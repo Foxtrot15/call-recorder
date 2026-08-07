@@ -8,8 +8,9 @@
 --   acquisition_decisions        append-only, hash-chained: what we decided
 --   acquisition_prospect_phones  published numbers, one row each
 --
--- STATUS: NOT APPLIED. This file is written and reviewed; it has not been run
--- against any database. See docs/LOCKSMITH_ACQUISITION_SPEC.md.
+-- STATUS: APPLIED TO DEV on 2026-08-07 (M8D), project ref wvwemitmmsdytyutaqbm.
+-- NOT APPLIED TO PRODUCTION. Verified by supabase/sql/verification/02 and 03.
+-- See docs/ACQUISITION_SQL_RUNBOOK.md and docs/LOCKSMITH_ACQUISITION_SPEC.md.
 --
 -- WHY THE EVIDENCE AND DECISION TABLES ARE SEPARATE
 -- Evidence is about the WORLD and can legitimately be superseded when the world

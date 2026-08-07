@@ -497,7 +497,7 @@ async function main() {
     "No SMS and no email was sent.",
     "No database was written to. Every store above is in memory and is gone when this process exits.",
     "No provider was contacted: not Twilio, not Retell, not Anthropic.",
-    "No SQL was applied. supabase/sql/laq2_*.sql is written and unapplied, like laq1 before it.",
+    "No SQL was applied by this walkthrough. laq1 and laq2 were applied to DEV by hand in M8D, and to no other database; nothing here ran them.",
     "No counsel has approved the calling window, and no one has approved the attempt caps.",
   ]) {
     console.log(`  ✗ ${s}`);

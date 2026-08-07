@@ -251,8 +251,13 @@ describe("the vocabulary in SQL matches the vocabulary in code", () => {
 });
 
 describe("the file says what it is", () => {
-  it("states that it has not been applied", () => {
-    assert.match(LAQ2, /STATUS: NOT APPLIED/);
+  // M8D applied both migrations to DEV. The invariant this guards is not "no
+  // database has ever seen this file" — it is that PRODUCTION has not, and that
+  // the file says which is which. A file whose status line has gone stale is
+  // how somebody applies a migration twice, or assumes production is done.
+  it("states where it has and has not been applied", () => {
+    assert.match(LAQ2, /STATUS: APPLIED TO DEV/);
+    assert.match(LAQ2, /NOT APPLIED TO PRODUCTION/);
   });
 
   it("states that it must be applied after laq1", () => {

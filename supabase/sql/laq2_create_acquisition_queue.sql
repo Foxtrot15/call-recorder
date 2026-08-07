@@ -9,9 +9,10 @@
 --   acquisition_call_queue          reservations — NOT a dialler queue
 --   acquisition_contact_outcomes    what happened when a business was approached
 --
--- STATUS: NOT APPLIED. Written and reviewed; it has not been run against any
--- database, dev or production. Neither has laq1. See
--- docs/LOCKSMITH_ACQUISITION_SPEC.md.
+-- STATUS: APPLIED TO DEV on 2026-08-07 (M8D), project ref wvwemitmmsdytyutaqbm,
+-- after laq1. NOT APPLIED TO PRODUCTION, and neither is laq1. Verified by
+-- supabase/sql/verification/04_laq2_verify.sql and proven behaviourally by
+-- 05_behavioural_probes.sql. See docs/ACQUISITION_SQL_RUNBOOK.md.
 --
 -- ORDERING: this file assumes laq1_create_acquisition_prospects.sql has been
 -- applied first. It ALTERs the lifecycle CHECK that file creates, and will fail

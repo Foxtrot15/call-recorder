@@ -1,7 +1,8 @@
 # AIDA Locksmith Acquisition — the acquisition engine (A1 · A2 · M8B · M8C)
 
-**Status:** built dormant, **not deployed**. All SQL written, **not applied**. No
-website crawled, no external API called, no number washed, no call placed.
+**Status:** built dormant, **not deployed**. SQL **applied to dev** (M8D,
+2026-08-07), **not to production**. No website crawled, no external API called,
+no number washed, no call placed.
 **Scope:** the whole pipeline from sourced lead to a callable queue candidate —
 discovery, source identification, evidence capture, human review, normalisation,
 deduplication, qualification, the compliance gate, permanent suppression, founder
@@ -14,7 +15,8 @@ model, the queue boundary and the outcome model.
 > **Dated update — 2026-08-07 (M8C).** Acquisition state is now durable: see
 > §25 onward. Three defects were found and fixed before any SQL was applied,
 > the most serious being a business-scoped opt-out that recorded the dialled
-> number and never compared it (§26 D3). Both migrations remain **unapplied**;
+> number and never compared it (§26 D3). Both migrations are **applied to dev**
+> as of M8D (2026-08-07) and **not to production**;
 > [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) owns how to apply them.
 >
 > **Dated update — 2026-08-07 (M8B).** Two corrections to what this document
@@ -85,7 +87,7 @@ and the source. Nothing more.
 | `src/services/acquisition-discovery.js` | The discovery adapter contract |
 | `src/services/acquisition-discovery-fixture.js` | The one adapter that ships: a deterministic fixture |
 | `src/services/acquisition-review.js` | Human review of source and context |
-| `supabase/sql/laq1_create_acquisition_prospects.sql` | Four additive tables — **written, not applied** |
+| `supabase/sql/laq1_create_acquisition_prospects.sql` | Four additive tables — **applied to dev in M8D**, not to production |
 | `scripts/acquisition-dry-run.js` | Offline end-to-end walkthrough |
 
 Six test files (`test/acquisition-*.test.js`) cover the above.
@@ -1027,7 +1029,8 @@ The run ends with an explicit list of what did **not** happen.
   hardcoded constant with no environment override.
 - **Does not query the DNC Register.** Results are imported from an attested
   file; there is no live mode.
-- **Does not apply any SQL.** `laq1` and `laq2` are both written and unapplied.
+- **Does not apply any SQL.** `laq1` and `laq2` were written and unapplied at
+  M8B; a human applied them to dev in M8D. No code in this repository runs SQL.
 - **Does not build a dashboard.**
 - **Does not wire qualification into the eligibility engine.** Commercial fit
   and legal permission stay separate questions with separate owners.
@@ -1038,7 +1041,7 @@ Everything in §A2.9 (A-L1 … A-L9) still stands and still blocks. In addition:
 
 | # | Requirement | Why |
 |---|---|---|
-| **M-1** | Apply `laq1`, then `laq2`, and re-verify RLS | Both are unapplied; ordering matters |
+| ~~**M-1**~~ | ~~Apply `laq1`, then `laq2`, and re-verify RLS~~ | **DONE on dev in M8D.** Still outstanding for production |
 | **M-2** | Replace the in-memory stores with the LAQ2 tables | Suppression that lives in a process is not suppression |
 | **M-3** | Build a lease reaper | An expired lease should be released with a row saying so, not evaporate |
 | **M-4** | Re-run eligibility **at the moment of dialling** | The queue's snapshot is for audit, not authorisation — a wash can expire between reservation and call |
@@ -1093,8 +1096,10 @@ passed only because its re-import happened to produce a byte-identical
 fingerprint. A business-scoped entry now matches on the identity **or** its
 recorded number; either is enough, and the number is the more stable key.
 
-Both migrations were amended in place. They have never been applied, so a
-compensating migration would only preserve a history that never happened.
+Both migrations were amended in place. They had never been applied at the time,
+so a compensating migration would only have preserved a history that never
+happened. That window is now closed: they are applied to dev, and any further
+correction must be a new additive migration rather than an edit in place.
 
 ## 27. The architecture: reads sync, writes async
 
@@ -1232,8 +1237,9 @@ proof against the real database, by hand, after the SQL is applied.
 
 ## 33. What M8C deliberately does not do
 
-- **Does not apply any SQL.** Both migrations remain unapplied, and a test
-  asserts nothing in `src/` or `scripts/` opens or executes a `.sql` file.
+- **Does not apply any SQL.** Both migrations were unapplied at M8C, and a test
+  asserts nothing in `src/` or `scripts/` opens or executes a `.sql` file. That
+  test still holds: M8D applied them to dev **by hand**, not by code.
 - **Does not add a scheduler.** The reaper is dormant and has no timer.
 - **Does not build an administrative remediation flow.** Suppression stays
   permanent with no way out; §7 of the runbook shows the deliberate,
@@ -1258,3 +1264,74 @@ M-2 and M-3 in code but not in deployment — the tables do not exist yet.
 | **M-5** | `service_area` / `operating_status` capture path | Open |
 | **M-6** | Authoritative public-holiday source | Open; the fixture expires 2026-12-31 |
 | **M-7** | Cross-process suppression visibility | New in M8C. Single-process today; `rehydrate()` is the seam. |
+
+---
+
+## 35. M8D — the durable layer, proven against real Postgres
+
+M8C built the durable layer and proved it against an in-memory store. M8D
+applied `laq1` and `laq2` to the **dev** Supabase project by hand and re-proved
+the same invariants against real Postgres. **No production access, no dialler,
+no prospect or provider contacted.**
+
+**Owns (source of truth for):** what has been proven against a real database, as
+opposed to against a test double.
+
+### 35.1 What was proven
+
+| Stage | Result |
+|---|---|
+| Pre-flight | Clean: no acquisition objects, no partial prior apply, no name collisions |
+| LAQ1 applied + verified | 13/13 structural checks, plus trigger-**enabled** state, row counts and CHECK bodies |
+| LAQ2 applied + verified | 18/18 structural checks, including the partial unique index and the RESTRICT/CASCADE split |
+| Behavioural probes | **30/30**, each asserting a specific SQLSTATE |
+| Restart proof | **13/13**, across two real processes |
+
+The probes and the restart proof are described in
+[ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §6 and §7. The assets
+are checked in under `supabase/sql/verification/` and
+`scripts/dev/acquisition-restart-proof/`.
+
+### 35.2 The three invariants that mattered most
+
+- **A suppression survives its prospect being deleted** (probe P30, and again in
+  the restart proof). `acquisition_suppressions` holds no foreign key at all, so
+  a deleted prospect cannot erase its own opt-out.
+- **A re-imported business is still suppressed** after a process restart, with
+  its trading name, suburb, source and number formatting all drifted and its
+  prospect identity regenerated. This is the failure this whole design exists to
+  prevent: a business that opted out being re-imported months later and called.
+- **A reaped prospect is re-evaluated, not re-queued.** Releasing an expired
+  lease returns a business to the pool; it does not return it to eligibility.
+
+### 35.3 Two defects found and corrected
+
+- **Runbook §6.3 could not test what it claimed.** A flat
+  `begin; … -- must FAIL; … -- must FAIL; rollback;` block only ever reaches its
+  first expected failure — the first exception aborts the transaction and every
+  later statement returns `25P02`. Fixed by rewriting §6 around nested
+  PL/pgSQL `BEGIN … EXCEPTION` blocks, which Postgres wraps in savepoints.
+- **The first probe harness relied on a temp table surviving a statement
+  boundary.** It does not, in the Supabase SQL editor. Rewritten as a single
+  `DO` block that ends in a deliberate `RAISE EXCEPTION` carrying the report —
+  which also makes the rollback a property of statement atomicity rather than of
+  a trailing `rollback;` being reached.
+
+Neither was a schema defect. `laq1` and `laq2` were applied unmodified.
+
+### 35.4 What M8D deliberately does not do
+
+- **Does not build, enable or prepare a dialler.** There is still no dialler.
+- **Does not touch production.** The restart-proof harness refuses to start
+  unless the Supabase URL carries the dev project ref.
+- **Does not resolve M-7.** Cross-process suppression staleness is unchanged and
+  remains the blocker below.
+- **Does not disable an append-only trigger.** Verification check F8 asserts all
+  four are still enabled.
+
+### 35.5 Dev residue, intentional
+
+Three rows remain on dev by design — one suppression, one contact outcome, and
+the prospect they point at, all `m8d-restart-probe`, describing an invented
+business on an invented number. They cannot be removed without disabling an
+append-only trigger, and that trade was made deliberately: see runbook §7.4.
