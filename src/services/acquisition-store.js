@@ -55,6 +55,7 @@ const TABLES = Object.freeze({
   prospects: "acquisition_prospects",
   prospectPhones: "acquisition_prospect_phones",
   evidence: "acquisition_evidence",
+  decisions: "acquisition_decisions",
 });
 
 // The migration that creates all three.
@@ -103,6 +104,16 @@ const STORE_METHODS = Object.freeze([
   "listProspectPhones",
   "appendEvidence",
   "listEvidence",
+  // ── The decision log (M8H) ──
+  //
+  // Append-only and hash-chained. Nothing persisted decisions before M8H, so
+  // the chain only ever lived inside one process; a durable review queue means
+  // a fresh process must CONTINUE it rather than start a second one. See
+  // createAuditLog initialHead / initialSequence.
+  //
+  // SINGLE WRITER. Two processes appending concurrently would fork the chain.
+  "appendDecision",
+  "listDecisions",
 ]);
 
 /**
@@ -145,6 +156,7 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
   const prospects = seed && Array.isArray(seed.prospects) ? [...seed.prospects] : [];
   const phones = seed && Array.isArray(seed.phones) ? [...seed.phones] : [];
   const evidence = seed && Array.isArray(seed.evidence) ? [...seed.evidence] : [];
+  const decisions = seed && Array.isArray(seed.decisions) ? [...seed.decisions] : [];
   const requests = new Map(seed && seed.requests ? Object.entries(seed.requests) : []);
 
   const store = {
@@ -239,6 +251,18 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
     },
     async listEvidence(prospectId) {
       return evidence.filter((e) => e.prospectId === prospectId).map(frozenCopy);
+    },
+    async appendDecision(row) {
+      const existing = decisions.find((d) => d.auditId === row.auditId);
+      if (existing) return { created: false, decision: frozenCopy(existing) };
+      decisions.push({ ...row });
+      return { created: true, decision: frozenCopy(decisions[decisions.length - 1]) };
+    },
+    async listDecisions({ entityType = null, entityId = null, limit = 1000 } = {}) {
+      let out = decisions;
+      if (entityType !== null) out = out.filter((d) => d.entityType === entityType);
+      if (entityId !== null) out = out.filter((d) => d.entityId === entityId);
+      return out.slice(0, limit).map(frozenCopy);
     },
 
     // ── leases ──
@@ -477,6 +501,58 @@ const fromEvidenceRow = (r) => ({
   authoritative: r.authoritative,
   supersedes: r.supersedes_id,
   contentHash: r.content_hash,
+});
+
+const toDecisionRow = (d) => ({
+  audit_id: d.auditId,
+  schema_version: d.schemaVersion,
+  sequence: d.sequence,
+  entity_type: d.entityType,
+  entity_id: d.entityId,
+  event: d.event,
+  decision: d.decision,
+  actor: d.actor,
+  actor_kind: d.actorKind,
+  reason: d.reason,
+  detail: d.detail || null,
+  correlation_id: d.correlationId || null,
+  prev_hash: d.prevHash,
+  entry_hash: d.entryHash,
+  recorded_at: d.recordedAt,
+});
+
+/**
+ * Read one decision back so that it RE-HASHES to the value it was stored with.
+ *
+ * THE ROUND TRIP HAS TO BE EXACT, and two columns do not survive it naively.
+ *
+ * `recorded_at` is a timestamptz. It goes in as `2026-08-08T03:00:00.000Z` and
+ * comes back as `2026-08-08T03:00:00+00:00` — the same instant, a different
+ * string, and therefore a different sha256. `sequence` is a bigint and comes
+ * back as a string for the same reason. Either one silently breaks
+ * verifyChain(), which then reports an untampered log as altered — the worst
+ * possible failure for an integrity control, because it destroys trust in the
+ * one thing that was supposed to be trustworthy.
+ *
+ * So both are canonicalised to the exact forms the hash was computed over.
+ * A test asserts a stored row still verifies.
+ */
+const fromDecisionRow = (r) => ({
+  auditId: r.audit_id,
+  schemaVersion: r.schema_version,
+  sequence: Number(r.sequence),
+  entityType: r.entity_type,
+  entityId: r.entity_id,
+  event: r.event,
+  decision: r.decision,
+  actor: r.actor,
+  actorKind: r.actor_kind,
+  reason: r.reason,
+  detail: r.detail,
+  correlationId: r.correlation_id,
+  prevHash: r.prev_hash,
+  entryHash: r.entry_hash,
+  recordedAt: new Date(r.recorded_at).toISOString(),
 });
 
 const toLeaseRow = (l) => ({
@@ -763,6 +839,48 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
       const { data, error } = await db().from(TABLES.evidence).select("*").eq("prospect_id", prospectId).order("sequence", { ascending: true });
       if (error) fail(TABLES.evidence, "read", error);
       return (data || []).map(fromEvidenceRow);
+    },
+
+    /**
+     * Append one decision to the hash-chained log (M8H).
+     *
+     * IDEMPOTENT ON auditId, which IS the entry hash. Re-appending a row whose
+     * hash already exists is a no-op rather than a unique-violation, because
+     * the same decision written twice is the same decision — and the chain
+     * would refuse the duplicate anyway.
+     *
+     * SINGLE WRITER. Two processes that hydrated the same head and both append
+     * will each write a row claiming the same prev_hash. Neither is lost and
+     * nothing is silently overwritten, but verifyRows() will correctly report
+     * the combined log as forked. M8H does not serialise concurrent appends.
+     */
+    async appendDecision(row) {
+      const before = await db().from(TABLES.decisions).select("*").eq("audit_id", row.auditId).maybeSingle();
+      if (before.error) fail(TABLES.decisions, "read", before.error);
+      if (before.data) return { created: false, decision: fromDecisionRow(before.data) };
+
+      const { data, error } = await db().from(TABLES.decisions).insert(toDecisionRow(row)).select().single();
+      if (error) {
+        if (uniqueViolation(error)) return { created: false, decision: { ...row } };
+        fail(TABLES.decisions, "insert", error);
+      }
+      return { created: true, decision: fromDecisionRow(data) };
+    },
+
+    /**
+     * Read the chain, oldest first.
+     *
+     * Ordered by `sequence` because that is the chain's own order; ordering by
+     * a timestamp would reorder two rows written in the same millisecond and
+     * make a valid chain look broken.
+     */
+    async listDecisions({ entityType = null, entityId = null, limit = 1000 } = {}) {
+      let query = db().from(TABLES.decisions).select("*").order("sequence", { ascending: true }).limit(limit);
+      if (entityType !== null) query = query.eq("entity_type", entityType);
+      if (entityId !== null) query = query.eq("entity_id", entityId);
+      const { data, error } = await query;
+      if (error) fail(TABLES.decisions, "read", error);
+      return (data || []).map(fromDecisionRow);
     },
 
     async listLiveLeases() {

@@ -104,17 +104,59 @@ function verifyRows(rows) {
  * @param {function} now      injected clock, () => Date
  * @param {function} [sink]   durable store; if it throws, the write is refused
  */
-function createAuditLog({ now, sink = null } = {}) {
+/**
+ * @param {function} now
+ * @param {function} [sink]           durable store; if it throws, the write is refused
+ * @param {string}   [initialHead]    the entryHash of the last PERSISTED row (M8H)
+ * @param {number}   [initialSequence] that row's sequence (M8H)
+ *
+ * ── CONTINUING A CHAIN ACROSS A RESTART (M8H) ───────────────────────
+ * Until M8H nothing persisted decisions, so the chain only ever lived inside
+ * one process and starting from genesis every time was correct. A durable
+ * review queue changes that: a fresh process appending a resolution must
+ * continue the chain it finds rather than begin a second one, or verifyRows()
+ * would correctly report the combined log as altered.
+ *
+ * So `initialHead` and `initialSequence` are read from the last stored row.
+ * verifyRows() is unchanged and still validates the whole sequence — hydration
+ * makes a restart continuous, it does not make verification more forgiving.
+ *
+ * ── THIS IS NOT CONCURRENCY SAFETY, AND MUST NOT BE READ AS IT ──────
+ * A fresh SEQUENTIAL process can safely continue the chain. Two processes
+ * hydrating the same head and both appending would fork it, and the second
+ * write would be reported as a break rather than lost quietly.
+ *
+ * M8H does not solve distributed append serialisation and does not claim to.
+ * The pilot is single-writer for acquisition_decisions, the same assumption
+ * M8C made explicit for suppression. Before multiple acquisition workers may
+ * write decisions concurrently this needs a database-level serialisation
+ * mechanism — an advisory lock, a serialisable transaction, or moving the
+ * chain head into a row that is updated under a constraint. None of those is
+ * built here.
+ */
+function createAuditLog({ now, sink = null, initialHead = null, initialSequence = 0 } = {}) {
   if (typeof now !== "function") {
     throw new Error("createAuditLog requires an injected now() — audit timestamps must be deterministic in tests.");
   }
   if (sink !== null && typeof sink !== "function") {
     throw new Error("createAuditLog sink must be a function when provided.");
   }
+  if (initialHead !== null && (typeof initialHead !== "string" || !/^[0-9a-f]{64}$/.test(initialHead))) {
+    throw new Error("createAuditLog initialHead must be a 64-character hash from the last persisted row.");
+  }
+  if (!Number.isInteger(initialSequence) || initialSequence < 0) {
+    throw new Error("createAuditLog initialSequence must be the last persisted row's sequence.");
+  }
+  if (initialHead !== null && initialSequence === 0) {
+    // A hydrated chain that claims to start at sequence zero is describing a
+    // head that cannot exist. Refused rather than written and discovered by a
+    // verifier later.
+    throw new Error("createAuditLog was given an initialHead but sequence 0 — a continued chain has a non-zero sequence.");
+  }
 
   const rows = [];
-  let sequence = 0;
-  let lastHash = GENESIS_HASH;
+  let sequence = initialSequence;
+  let lastHash = initialHead === null ? GENESIS_HASH : initialHead;
 
   function record(entry) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
