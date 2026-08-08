@@ -1,15 +1,16 @@
-# Acquisition SQL Runbook — applying LAQ1 and LAQ2 to dev
+# Acquisition SQL Runbook — applying LAQ1, LAQ2 and LAQ3 to dev
 
-**Status:** **APPLIED TO DEV** on 2026-08-07 (M8D), against project ref
+**Status:** **APPLIED TO DEV** — LAQ1 + LAQ2 on 2026-08-07 (M8D) and LAQ3 on
+2026-08-08 (M8I), against project ref
 `wvwemitmmsdytyutaqbm`. **NOT applied to production.** Nothing in this
 repository applies SQL, and a test asserts that — every step below is something
 a human runs by hand, and every step below was run by hand.
 
-**Owns (source of truth for):** the order LAQ1 and LAQ2 are applied in, how each
-is verified, and what can and cannot be rolled back.
+**Owns (source of truth for):** the order LAQ1, LAQ2 and LAQ3 are applied in, how
+each is verified, and what can and cannot be rolled back.
 
 > **Apply to the dev Supabase project only.** Production is out of scope for
-> this runbook, for M8C and for M8D.
+> this runbook, for M8C, for M8D and for M8I.
 
 **The verification assets referenced below are checked in**, under
 `supabase/sql/verification/`. They are read-only or self-rolling-back, ASCII
@@ -24,6 +25,8 @@ only, and were run in this order against dev:
 | `05_behavioural_probes.sql` | 30 behavioural probes (§6) |
 | `06_probe_cleanup_check.sql` | Proves §6 left nothing behind |
 | `07_restart_proof_verify.sql` | Proves §7 left exactly its three intentional rows |
+| `08_laq3_preflight.sql` | LAQ3 pre-flight: no duplicate `prev_hash`, the index name is free, the chain state recorded (§10) |
+| `09_laq3_verify.sql` | LAQ3 structure: the index exists, is UNIQUE, covers exactly `(prev_hash)`, and nothing else moved |
 
 ---
 
@@ -470,9 +473,9 @@ expensive to reverse afterwards.
 
 ### What dev holds now
 
-Eighteen rows across four milestones. Every one describes an invented business
-on an invented number; they are the only acquisition data on dev, and none is to
-be removed — see §7.4.
+Twenty rows across five milestones. Every one describes an invented business on
+an invented number; they are the only acquisition data on dev, and none is to be
+removed — see §7.4.
 
 | Table | Rows | From |
 |---|---|---|
@@ -484,6 +487,7 @@ be removed — see §7.4.
 | `acquisition_prospect_phones` | **1** | M8G |
 | `acquisition_evidence` | **9** | M8G |
 | `acquisition_decisions` | **2** — one review_opened, one review_resolved for `rv_pr_m8h_review_probe_0001` | M8H |
+| `acquisition_decisions` | **2** — `m8i_concurrency_probe_a` (seq 3) and `_b` (seq 4) for `pr_m8i_race_probe_0001` | M8I |
 
 The M8E row cost **one** row rather than three, and the reason is the property
 M8E exists to defend: suppressions carry no foreign key, so proving one needs no
@@ -527,3 +531,101 @@ empty when LAQ1 ran and production will not be. Re-read §1 and §8 with that in
 mind, and do not assume a clean `01_preflight.sql` — on production the expected
 answer to "does anything acquisition-shaped exist" may legitimately change over
 time.
+
+---
+
+## 10. LAQ3 — one successor per chain head (M8I)
+
+**Applied to dev 2026-08-08. Not applied to production.**
+
+`supabase/sql/laq3_serialise_decision_chain.sql`. One additive unique index:
+
+```sql
+create unique index uq_acq_decisions_prev_hash
+  on public.acquisition_decisions (prev_hash);
+```
+
+No table altered, no column added, no data rewritten, no trigger touched, no
+foreign key changed, no policy created. A fork in the hash chain *is* two rows
+sharing a predecessor, so uniqueness on `prev_hash` makes that state
+structurally impossible — including for a future caller who bypasses the Node
+helper entirely, which is the property a lock or an RPC cannot offer. See §40
+of [LOCKSMITH_ACQUISITION_SPEC.md](LOCKSMITH_ACQUISITION_SPEC.md).
+
+### 10.1 Order
+
+1. **Pre-flight** — `supabase/sql/verification/08_laq3_preflight.sql`. Read-only,
+   one statement, every arm a bare `SELECT`. Confirms no duplicate `prev_hash`
+   exists (the index cannot build over a chain that has already forked), the
+   index name is free, no *other* index already covers exactly `(prev_hash)`,
+   and records the row count and head for comparison afterwards.
+   **Any `STOP` means do not apply.** A duplicate `prev_hash` is a data question
+   to answer before it becomes a schema question.
+2. **Chain verifier** — `NODE_PATH=../call-recorder/node_modules node
+   scripts/dev/acquisition-chain-verify.js`. Read-only; re-hashes every row.
+   Run it *before* the schema changes so a later failure cannot be blamed on the
+   migration. This is the one check the pre-flight SQL cannot do: verifying a
+   hash chain means recomputing sha256 over each row's body with the writer's
+   own `stableStringify`.
+3. **Apply** the migration. Expect
+   `NOTICE: laq3: created uq_acq_decisions_prev_hash.`
+4. **Verify** — `supabase/sql/verification/09_laq3_verify.sql`. V5 and V6 must
+   **match** the pre-flight values: an additive index changes no data, and if the
+   head moved between the two runs something else wrote to the log.
+5. **Re-run the chain verifier.**
+
+### 10.2 Why the guard is not `create unique index if not exists`
+
+`IF NOT EXISTS` is idempotent in the shallowest sense: it succeeds whenever an
+index of that **name** exists, no matter what that index actually does. An
+earlier hand-made `uq_acq_decisions_prev_hash` over the wrong column, or a
+non-unique one, would be silently accepted and the invariant would not exist
+while every report said it did.
+
+The migration instead reads `pg_get_indexdef` and refuses loudly if what it
+finds is not a unique btree on exactly `(prev_hash)`. Re-running is safe because
+the guard checks the **definition**, not the name.
+
+### 10.3 Rollback
+
+```sql
+drop index if exists public.uq_acq_decisions_prev_hash;
+```
+
+Destroys no data. It also removes the guarantee and returns the table to the M8H
+single-writer limitation, so it is a decision, not a tidy-up.
+
+### 10.4 The concurrency proof, and its one honest gap
+
+`scripts/dev/acquisition-concurrency-proof/run.js` starts two separate OS
+processes released by a shared wall-clock barrier and checks what the database
+did to them. It is gated on an **attestation, not a check**:
+
+```
+NODE_PATH=../call-recorder/node_modules \
+M8I_LAQ3_INDEXDEF="CREATE UNIQUE INDEX uq_acq_decisions_prev_hash ON public.acquisition_decisions USING btree (prev_hash)" \
+node scripts/dev/acquisition-concurrency-proof/run.js
+```
+
+PostgREST exposes `public`, not the catalog, so the script cannot confirm the
+index for itself — and every behavioural probe for "is uniqueness enforced"
+requires attempting the very insert that would cause the damage if it is not.
+Running it before laq3 would not race: both processes would succeed and fork the
+dev chain permanently. So the operator pastes the **definition** printed by V3
+rather than ticking a box, because a checkbox can be ticked without looking.
+
+Result, 2026-08-08: both processes read head `seq 2 c27ba5a6…`, both minted a
+successor to it, both INSERTs fired in the same millisecond, A won, B was refused
+`head_taken`, re-read, re-minted and appended `seq 4` on its first retry. 15/15.
+
+### 10.5 A verifier defect worth remembering
+
+V12 first shipped asserting "16 columns" on `acquisition_decisions`. The table
+has **17**, and has had 17 in every commit since the one that created it. The
+schema was never wrong; the count was.
+
+A verifier that cries wolf is worse than no verifier, because the next false
+alarm gets waved through. V12 now compares the column **set** against laq1's,
+and `test/acquisition-decision-log.test.js` parses that list out of the migration
+and fails if the verifier disagrees with it. A number in a SQL file cannot be
+kept honest by review.

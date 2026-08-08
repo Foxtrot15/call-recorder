@@ -1,8 +1,8 @@
 # AIDA Locksmith Acquisition — the acquisition engine (A1 · A2 · M8B · M8C)
 
-**Status:** built dormant, **not deployed**. SQL **applied to dev** (M8D,
-2026-08-07), **not to production**. No website crawled, no external API called,
-no number washed, no call placed.
+**Status:** built dormant, **not deployed**. SQL **applied to dev** — `laq1` +
+`laq2` (M8D, 2026-08-07) and `laq3` (M8I, 2026-08-08) — **none to production**.
+No website crawled, no external API called, no number washed, no call placed.
 **Scope:** the whole pipeline from sourced lead to a callable queue candidate —
 discovery, source identification, evidence capture, human review, normalisation,
 deduplication, qualification, the compliance gate, permanent suppression, founder
@@ -12,6 +12,14 @@ boundary, the discovery adapter contract, the evidence ledger, the append-only
 decision log, the prospect lifecycle, the human review step, the qualification
 model, the queue boundary and the outcome model.
 
+> **Dated update — 2026-08-08 (M8I).** The decision chain is safe for concurrent
+> writers, and the safety is in Postgres rather than in Node: `laq3` adds
+> `unique (prev_hash)` to `acquisition_decisions`, applied to dev and proven with
+> two genuinely overlapping processes. **§39.6's SINGLE WRITER limitation is
+> closed** — see §40, which also records why a lock, a serialisable transaction
+> and an RPC were each rejected, and what would have to change if the chain is
+> ever partitioned.
+>
 > **Dated update — 2026-08-07 (M8C).** Acquisition state is now durable: see
 > §25 onward. Three defects were found and fixed before any SQL was applied,
 > the most serious being a business-scoped opt-out that recorded the dialled
@@ -1895,15 +1903,24 @@ that: a fresh process must **continue** the chain it finds.
 row. `verifyRows()` is **unchanged** — hydration makes a restart continuous, it
 does not make verification more forgiving.
 
-> **SINGLE WRITER. This is not concurrency safety and must not be read as it.**
+> **SUPERSEDED BY §40 (M8I, 2026-08-08).** `laq3` puts
+> `unique (prev_hash)` on `acquisition_decisions` and the limitation below no
+> longer holds. It is kept because the reasoning is still the reasoning, and a
+> constraint that is quietly deleted teaches the next reader nothing.
 >
-> - A fresh **sequential** process can safely continue the chain.
-> - **Two concurrent writers could still fork it** from the same head.
-> - M8H does **not** solve distributed or concurrent append serialisation.
-> - Before multiple acquisition workers may write decisions concurrently, this
+> ~~**SINGLE WRITER. This is not concurrency safety and must not be read as
+> it.**~~
+>
+> - ~~A fresh **sequential** process can safely continue the chain.~~
+> - ~~**Two concurrent writers could still fork it** from the same head.~~
+> - ~~M8H does **not** solve distributed or concurrent append serialisation.~~
+> - ~~Before multiple acquisition workers may write decisions concurrently, this
 >   must be replaced or protected by a **database-level serialisation
 >   mechanism** — an advisory lock, a serialisable transaction, or a chain head
->   held in a row updated under a constraint. None of those is built.
+>   held in a row updated under a constraint. None of those is built.~~
+>
+> M8I chose none of those three. All of them assume a client that can hold a
+> transaction open, and this one cannot; §40.2 has the comparison.
 
 ### 39.7 One defect the real proof found
 
@@ -1933,10 +1950,208 @@ against the store contract; neither was worth new permanent residue.
 
 ### 39.9 Known limitations
 
-- **Single writer**, as above. The binding one.
+- ~~**Single writer**, as above. The binding one.~~ **Closed by M8I** — see
+  §40. Concurrent appends are refused by the database, and the refusal is
+  recovered from rather than swallowed.
 - `listReviewItems` folds the whole decision log in memory. Fine at pilot
-  volume; a queue of tens of thousands would want the fold materialised.
+  volume; a queue of tens of thousands would want the fold materialised. Still
+  open, and now the largest unbounded read left (§40.10).
 - A rejection is not reconsidered when *materially changed* evidence arrives —
   the same candidate id is simply not re-asked. Distinguishing "same question"
   from "new information about the same business" needs a comparison the
   architecture does not currently express.
+
+
+---
+
+## 40. M8I — the decision chain is safe for concurrent writers
+
+**Owns (source of truth for):** how two processes append to
+`acquisition_decisions` at the same time, and why the protection is in Postgres
+rather than in Node.
+
+**This section supersedes §39.6's SINGLE WRITER limitation.** That warning was
+accurate when it was written and is no longer the state of the system; §39.6 is
+left in place and marked, because a limitation that is quietly deleted teaches
+the next reader nothing.
+
+### 40.1 A fork is exactly two rows sharing a predecessor
+
+Every decision row names its parent in `prev_hash`. M8H made a fresh process
+*continue* the chain across a restart. Two processes reading the same head `H`
+could still both mint a successor to it:
+
+```
+H --> A     two valid-looking rows, one broken history, and verifyChain()
+ \          reporting a fork forever, in a table where nothing can be deleted.
+  --> B
+```
+
+So the invariant is not something to coordinate around. It is something to make
+**unrepresentable**:
+
+```sql
+create unique index uq_acq_decisions_prev_hash
+  on public.acquisition_decisions (prev_hash);
+```
+
+That is the whole of `laq3_serialise_decision_chain.sql`. One additive index; no
+table altered, no column added, no data rewritten, no trigger touched.
+
+### 40.2 Why an index, and not a lock, a transaction or an RPC
+
+This system reaches Postgres only through PostgREST. Every client call is one
+statement in its own implicit transaction and Node cannot hold a transaction
+open across calls, which rules out the usual three:
+
+| mechanism | why not |
+|---|---|
+| `pg_advisory_xact_lock` | transaction-scoped — released before the INSERT is issued. A session-level lock is worse: PostgREST pools connections, so it may be held on a different backend. |
+| `SELECT … FOR UPDATE` | same problem; the row lock dies at statement end. |
+| `SERIALIZABLE` + retry | needs client-controlled isolation. Not available. |
+
+A database function *would* work, and this system already has that pattern
+(`claim_recording`). It was still not chosen, for one reason: **a function is a
+path, and a path can be gone around.** Any future caller with an INSERT grant
+could write a forking row without touching it. An index constrains the *table*,
+so there is no route past it — including for the caller who has not read this
+document.
+
+It also settles genesis for free. The first row carries `prev_hash` = 64 zeroes,
+so uniqueness permits exactly one genesis row, ever. A process that lost its way
+and restarted the log from scratch is refused by the database rather than
+quietly beginning a second history alongside the real one.
+
+### 40.3 One global chain — and what would break the invariant
+
+`acquisition_decisions` is today a **single global chain**: the head is read with
+no entity filter and every event links to the one before it. `unique (prev_hash)`
+is correct precisely because of that.
+
+> **If the chain is ever partitioned** — per tenant, per client, per run — this
+> index becomes wrong. Two partitions would legitimately each have a first row
+> and legitimately each extend their own head. The invariant would have to
+> become `unique (chain_key, prev_hash)`, and the partitioning change and the
+> index change **must land together**. Do not introduce chain partitioning
+> quietly.
+
+### 40.4 Two unique violations that mean opposite things
+
+Once the table carries two uniqueness rules, `23505` is ambiguous, and M8H's
+"any unique violation means it is already there" became actively dangerous:
+
+| constraint | meaning | response |
+|---|---|---|
+| `audit_id` | the **same** decision written twice — a retried request, a replayed job | idempotent; return the row that is already there |
+| `prev_hash` | a **different** decision claiming a head somebody else has already extended | the writer **lost the race**; re-read, re-mint, retry |
+
+Reporting the second as success would drop a decision on the floor while telling
+the caller it was stored. An unrecognised `23505` is treated as a lost race, not
+as success: refusing to append is recoverable, claiming to have appended is not.
+
+### 40.5 The head is read on its own
+
+M8H derived the head from the last element of `listDecisions()`. That was right
+for eighteen rows and silently wrong from the thousand-and-first: the list is
+capped, so at the cap the "last element" is the 1000th row, every later append
+would hydrate a long-dead head, and with laq3 applied the first one is refused
+as a fork attempt. Without laq3 it would simply have forked.
+
+`readChainHead()` is now part of the store contract — `order(sequence desc)
+limit 1`, **no entity filter**, one indexed row. A test drives a synthetic
+history of 1200 rows and asserts the page truncates while the head does not.
+
+### 40.6 The retry, and what it is not
+
+`appendDecisionSerialised({ store, now, mint })` re-reads the head, re-mints and
+re-tries. Three things about it are deliberate:
+
+- **`mint` is a callback, not a row.** A row's `entry_hash` covers its own
+  `prev_hash` and `sequence`, and its `audit_id` derives from that hash, so a
+  row minted against `H` cannot be appended after `H+1`. Handing this function a
+  pre-built row would make retrying impossible.
+- **`mint` may return `null` to abort**, which is how a caller re-checks a
+  precondition the winner may have just invalidated. `resolveReviewItem` re-runs
+  its stale-resolution check on every retry — otherwise a lost race could append
+  a second human decision to an item already decided.
+- **Retries are bounded** (5; `maxAttempts` outside 1–20 is refused) and
+  exhaustion **throws** rather than returning a falsy result. The failure being
+  defended against is a caller who reports success for a decision that was never
+  stored.
+
+**Nothing in Node is trusted.** There is no mutex, no queue, no "one writer at a
+time" flag — a lock inside one process says nothing about the second process,
+and a guard that is only sometimes right invites people to rely on it. The
+protection is the index; the helper only makes losing survivable. A ratchet
+fails the build if a process-local lock is introduced here.
+
+**A losing row is never cleaned up, because there is nothing to clean up.** A
+lost race is a rejected INSERT. No decision row is deleted or rewritten to
+resolve contention.
+
+### 40.7 The real proof: two processes, one head, zero drift
+
+Two **separate OS processes**, released by a shared wall-clock barrier. Each did
+all its slow work first — construct the client, read the head, mint the row —
+then spun to the instant and issued the INSERT with nothing in the way. Starting
+B after A finished would have proven nothing; that is the M8H restart case.
+
+```
+[A] head: seq 2  c27ba5a6...    [B] head: seq 2  c27ba5a6...
+[A] minted seq 3 -> c27ba5a6    [B] minted seq 3 -> c27ba5a6
+[A] fired 1786171313232 (drift 0ms), answered in 627ms
+[B] fired 1786171313232 (drift 0ms), answered in 969ms
+[A] WON the head.
+[B] LOST (head_taken). Re-read, re-minted, RECOVERED on attempt 1 -> seq 4.
+```
+
+Both INSERTs left in the same millisecond and their request windows overlapped.
+15/15 assertions passed: same head observed, same `prev_hash` claimed, genuine
+overlap, exactly one first-attempt survivor, the other refused as `head_taken`
+and not as a duplicate, the loser following the winner's `entry_hash`, sequence
+gapless 1..4, no `prev_hash` with two successors, and the whole chain verifying.
+
+### 40.8 Dev residue
+
+**2 new rows in `acquisition_decisions`**, both fictional, for the invented
+`pr_m8i_race_probe_0001`:
+
+| seq | audit_id | event | actor |
+|---|---|---|---|
+| 3 | `au_18efdf46da3b4697dc82` | `m8i_concurrency_probe_a` | `m8i-proof-a` |
+| 4 | `au_07638d6d007eee7e08f9` | `m8i_concurrency_probe_b` | `m8i-proof-b` |
+
+Decision rows 2 → 4; total fictional dev residue 18 → 20. No prospect, phone,
+evidence, suppression, outcome, queue or qualification row was created, and no
+existing M8D/M8E/M8G/M8H row was modified — rows 1 and 2 still re-hash to their
+stored `entry_hash`, which is what "untouched" means for this table.
+
+### 40.9 One defect this milestone found in its own verification
+
+`09_laq3_verify.sql` V12 originally asserted "16 columns" on
+`acquisition_decisions`. The table has **17**, and has had 17 in every commit
+since the one that created it. The count was a miscount; the schema was never
+wrong.
+
+A verifier that cries wolf is worse than no verifier, because the next false
+alarm gets waved through. V12 now compares the **column set** against laq1's,
+alphabetically — a count cannot distinguish "one added" from "one added and one
+dropped" — and a test parses the list out of the migration and fails if the
+verifier's literal disagrees with it. A number in a SQL file cannot be kept
+honest by review.
+
+### 40.10 Known limitations
+
+- **`listReviewItems` folds the decision log in memory** with a 5000-row cap.
+  Fine at pilot volume, and now the largest unbounded read left: a queue of tens
+  of thousands would want the fold materialised. Carried forward from §39.9.
+- **The concurrency proof's laq3 gate is an attestation, not a check.** PostgREST
+  exposes `public`, not the catalog, so the proof cannot confirm the index for
+  itself, and every behavioural probe for "is uniqueness enforced" requires
+  attempting the insert that causes the damage if it is not. The operator pastes
+  the index *definition* from V3 rather than ticking a box.
+- **Retry starvation is bounded but not impossible.** Five writers contending on
+  one head could exhaust an unlucky one's attempts. It fails closed and says so;
+  it does not queue. At pilot volume there is one writer.
+- **A rejection is not reconsidered** when materially changed evidence arrives.
+  Unchanged from §39.9.
