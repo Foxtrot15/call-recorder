@@ -1,0 +1,421 @@
+// LOCKSMITH ACQUISITION M8J — durable contact history (E-1), and A-L7.
+//
+// Two things are being held apart here, and the separation is the whole point.
+//
+// FACTS. acquisition-history.js reads acquisition_contact_outcomes and returns
+// what happened, in order. It computes no `attempts` count, because counting
+// requires deciding whether an unanswered call is an attempt, and that is A-L7,
+// which nobody has answered.
+//
+// POLICY. acquisition-attempt-policy.js does the counting, from a table whose
+// entries carry their own `approved` flags — so the open question stays visible
+// in `describeGap()` and in the eligibility block, instead of disappearing into
+// `outcomes.length` inside a row reader.
+//
+// The last describe block is a ratchet against exactly that disappearing.
+
+const { describe, it } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const ROOT = path.join(__dirname, "..");
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
+
+const { createInMemoryAcquisitionStore } = require("../src/services/acquisition-store");
+const { readContactHistory, loadHistoryIndex, unavailableHistory, isDurableHistory, HISTORY_SOURCES } = require("../src/services/acquisition-history");
+const { createAttemptPolicy, ATTEMPT_CONSUMPTION, CALL_OUTCOMES } = require("../src/services/acquisition-attempt-policy");
+const { createEligibilityEngine, ELIGIBILITY_CODES } = require("../src/services/acquisition-eligibility");
+const { createDialAuthoriser } = require("../src/services/acquisition-authorisation");
+const { createSuppressionList } = require("../src/services/acquisition-suppression");
+const { createWashStore } = require("../src/services/acquisition-dncr");
+const { createFixtureHolidayProvider } = require("../src/services/acquisition-holidays");
+const { resolveDuplicates } = require("../src/services/acquisition-dedupe");
+const { createEvidenceLedger } = require("../src/services/acquisition-evidence");
+const { createProspect, transitionProspect } = require("../src/services/acquisition-prospect");
+
+const PROSPECT_ID = "pr_history_0001";
+const NUMBER = "+61355507401";
+const now = () => new Date("2026-08-05T04:00:00.000Z"); // Wed 14:00 Melbourne
+
+const outcome = (over = {}) => ({
+  prospectId: PROSPECT_ID,
+  outcome: "no_answer",
+  reachedTheBusiness: false,
+  e164: NUMBER,
+  lifecycleFrom: "queued",
+  lifecycleTo: "attempted",
+  hops: [],
+  effect: "counts_as_attempt",
+  effectApproved: false,
+  suppressionApplied: false,
+  actor: "tester",
+  actorKind: "system",
+  note: "fixture",
+  recordedAt: "2026-08-01T00:00:00.000Z",
+  createdAt: "2026-08-01T00:00:00.000Z",
+  id: "o1",
+  ...over,
+});
+
+async function storeWith(rows) {
+  const store = createInMemoryAcquisitionStore();
+  for (const r of rows) await store.appendOutcome(r);
+  return store;
+}
+
+// ---------------------------------------------------------------------------
+
+describe("the fold reports facts", () => {
+  it("orders outcomes oldest first and names the latest", async () => {
+    const store = await storeWith([
+      outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-03T00:00:00.000Z", createdAt: "2026-08-03T00:00:00.000Z" }),
+      outcome({ id: "o1", outcome: "no_answer", recordedAt: "2026-08-01T00:00:00.000Z", createdAt: "2026-08-01T00:00:00.000Z" }),
+      outcome({ id: "o3", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-04T00:00:00.000Z", createdAt: "2026-08-04T00:00:00.000Z" }),
+    ]);
+    const h = await readContactHistory({ store, prospectId: PROSPECT_ID });
+
+    assert.equal(h.available, true);
+    assert.deepEqual(h.outcomes.map((o) => o.outcome), ["no_answer", "voicemail", "not_interested"]);
+    assert.equal(h.latestOutcome, "not_interested");
+    assert.equal(h.totalOutcomes, 3);
+  });
+
+  it("breaks a same-millisecond tie deterministically rather than by query order", async () => {
+    const same = "2026-08-01T00:00:00.000Z";
+    const rows = [
+      outcome({ id: "b", outcome: "voicemail", recordedAt: same, createdAt: "2026-08-01T00:00:02.000Z" }),
+      outcome({ id: "a", outcome: "no_answer", recordedAt: same, createdAt: "2026-08-01T00:00:01.000Z" }),
+    ];
+    const forwards = await readContactHistory({ store: await storeWith(rows), prospectId: PROSPECT_ID });
+    const backwards = await readContactHistory({ store: await storeWith([...rows].reverse()), prospectId: PROSPECT_ID });
+
+    assert.deepEqual(forwards.outcomes.map((o) => o.outcome), ["no_answer", "voicemail"]);
+    assert.deepEqual(backwards.outcomes.map((o) => o.outcome), forwards.outcomes.map((o) => o.outcome), "the answer must not depend on the order rows came back in");
+    assert.equal(forwards.latestOutcome, "voicemail");
+  });
+
+  it("lastEventAt is the last thing that happened, reached or not", async () => {
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-01T00:00:00.000Z" }),
+      outcome({ id: "o2", outcome: "no_answer", reachedTheBusiness: false, recordedAt: "2026-08-04T00:00:00.000Z" }),
+    ]);
+    const h = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.equal(h.lastEventAt, "2026-08-04T00:00:00.000Z");
+  });
+
+  it("lastReachedAt counts ONLY rows where we spoke to the business", async () => {
+    // Three unanswered rings are not a conversation, and a "recent contact"
+    // cooldown that treated them as one would silence a business nobody spoke to.
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-01T00:00:00.000Z" }),
+      outcome({ id: "o2", outcome: "no_answer", reachedTheBusiness: false, recordedAt: "2026-08-03T00:00:00.000Z" }),
+      outcome({ id: "o3", outcome: "wrong_person", reachedTheBusiness: false, recordedAt: "2026-08-04T00:00:00.000Z" }),
+    ]);
+    const h = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.equal(h.lastReachedAt, "2026-08-01T00:00:00.000Z", "wrong_person answered the phone but was not this business");
+    assert.equal(h.reachedCount, 1);
+  });
+
+  it("counts by outcome, and never by 'attempts'", async () => {
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "no_answer" }),
+      outcome({ id: "o2", outcome: "no_answer", recordedAt: "2026-08-02T00:00:00.000Z" }),
+      outcome({ id: "o3", outcome: "voicemail", recordedAt: "2026-08-03T00:00:00.000Z" }),
+    ]);
+    const h = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.deepEqual(h.countsByOutcome, { no_answer: 2, voicemail: 1 });
+    assert.equal(h.attempts, undefined, "an attempts count here would decide A-L7 inside a row reader");
+  });
+
+  it("never attributes another business's outcomes", async () => {
+    const store = await storeWith([outcome({ id: "o1" }), outcome({ id: "o2", prospectId: "pr_someone_else", outcome: "opt_out", reachedTheBusiness: true })]);
+    const h = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.equal(h.totalOutcomes, 1);
+    assert.equal(h.latestOutcome, "no_answer");
+  });
+
+  it("a business never called has an EMPTY history, which is available", async () => {
+    const h = await readContactHistory({ store: createInMemoryAcquisitionStore(), prospectId: PROSPECT_ID });
+    assert.equal(h.available, true);
+    assert.equal(h.totalOutcomes, 0);
+    assert.equal(h.latestOutcome, null);
+  });
+
+  it("survives a restart: the same store gives the same history to a fresh reader", async () => {
+    const store = await storeWith([outcome({ id: "o1" }), outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" })]);
+    const first = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    const second = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.deepEqual(second.outcomes, first.outcomes);
+    assert.equal(second.lastEventAt, first.lastEventAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("unreadable is not empty", () => {
+  it("a throwing store yields unavailable, not zero", async () => {
+    const store = createInMemoryAcquisitionStore();
+    store.listOutcomes = async () => { throw new Error("connection reset"); };
+    const h = await readContactHistory({ store, prospectId: PROSPECT_ID });
+
+    assert.equal(h.available, false);
+    assert.equal(h.source, HISTORY_SOURCES.UNAVAILABLE);
+    assert.match(h.reason, /connection reset/);
+    assert.equal(h.totalOutcomes, 0, "the shape is empty, and `available:false` is what stops it being read as empty");
+  });
+
+  it("the attempt policy REFUSES on an unavailable history", () => {
+    const policy = createAttemptPolicy({ approved: true, approvedBy: "Peter" });
+    const r = policy.assess({ history: unavailableHistory("the database was unreachable", PROSPECT_ID) }, { now });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "history_unavailable");
+    assert.match(r.message, /"unknown" is not "never"/);
+  });
+
+  it("an index returns unavailable for an id it was never given", async () => {
+    const index = await loadHistoryIndex({ store: createInMemoryAcquisitionStore(), prospectIds: ["pr_a"] });
+    assert.equal(index.for("pr_b").available, false);
+    assert.match(index.for("pr_b").reason, /unknown rather than empty/);
+  });
+
+  it("only this module can mint a durable history", () => {
+    assert.equal(isDurableHistory({ available: true, outcomes: [], source: "durable" }), false, "a hand-made lookalike is not evidence");
+    assert.equal(isDurableHistory(unavailableHistory("x")), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the policy counts, and durable history wins", () => {
+  const approved = () => createAttemptPolicy({ approved: true, approvedBy: "Peter" });
+
+  it("counts attempts from the outcome list under its own rules", async () => {
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "no_answer" }),
+      outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
+    ]);
+    const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.equal(approved().countAttempts(history), 2);
+  });
+
+  it("an unrecognised outcome is counted, not silently free", () => {
+    const policy = approved();
+    const fabricated = { available: true, outcomes: [{ outcome: "something_new", reachedTheBusiness: false, recordedAt: "2026-08-01T00:00:00.000Z" }] };
+    assert.equal(policy.countAttempts(fabricated), 1);
+  });
+
+  it("a stale caller-supplied attempts count cannot override the durable history", async () => {
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "no_answer" }),
+      outcome({ id: "o2", outcome: "no_answer", recordedAt: "2026-08-02T00:00:00.000Z" }),
+      outcome({ id: "o3", outcome: "no_answer", recordedAt: "2026-08-03T00:00:00.000Z" }),
+    ]);
+    const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
+
+    // The caller insists nothing has happened. The database says three.
+    const r = approved().assess({ attempts: 0, lastAttemptAt: null, history }, { now });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "attempt_cap_reached", "the cap is 3; the durable count reached it whatever the caller passed");
+  });
+
+  it("last-contact cooldown uses lastReachedAt, not the last event", async () => {
+    // A conversation long ago, unanswered rings since. The recent-contact
+    // cooldown must key off the conversation.
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-04T00:00:00.000Z" }),
+    ]);
+    const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    const r = approved().assess({ history }, { now });
+    assert.equal(r.ok, false);
+    assert.ok(["outcome_cooldown", "recent_contact_cooldown", "retry_spacing"].includes(r.code), `unexpected ${r.code}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("every real authorisation path uses durable history", () => {
+  const SOURCE = { url: "https://historytest.example.com.au/contact" };
+
+  function goodProspect() {
+    let p = createProspect({
+      businessName: "History Test Locksmiths",
+      tradeCategory: "Locksmith",
+      suburb: "Coburg",
+      state: "VIC",
+      postcode: "3058",
+      region: "Melbourne",
+      timezone: "Australia/Melbourne",
+      phones: [{ raw: "(03) 5550 7401" }],
+      sourceRefs: [SOURCE],
+      origin: "fixture",
+      discoveredAt: "2026-07-15T02:00:00.000Z",
+    }).prospect;
+    for (const to of ["evidence_captured", "review_pending", "review_approved"]) {
+      p = transitionProspect(p, to, { actor: "Peter", reason: "test", now }).prospect;
+    }
+    return p;
+  }
+
+  function evidenceFor(prospect) {
+    const ledger = createEvidenceLedger({ now });
+    for (const [kind, value] of [["business_name", prospect.businessName], ["trade_category", "Locksmith"], ["phone", "(03) 5550 7401"]]) {
+      ledger.record({ prospectId: prospect.prospectId, kind, captureMode: "fixture", value, observedAt: "2026-07-15T02:00:00.000Z", capturedBy: "test", source: SOURCE });
+    }
+    return ledger.forProspect(prospect.prospectId);
+  }
+
+  function ctx(p, extra = {}) {
+    const evidenceRows = evidenceFor(p);
+    return {
+      evidenceRows,
+      duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }], evidenceCount: evidenceRows.length, hasOfficialSource: true }]),
+      batch: { approved: true, batchHash: "x", approvedBy: "P" },
+      ...extra,
+    };
+  }
+  function engineOptions(clock) {
+    const wash = createWashStore({ now: clock, mode: "fixture" });
+    wash.wash(NUMBER);
+    return { washStore: wash, holidays: createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }), counselApproved: true };
+  }
+
+  it("the authoriser blocks when the contact history cannot be read", async () => {
+    const store = createInMemoryAcquisitionStore();
+    store.listOutcomes = async () => { throw new Error("outcomes table unreachable"); };
+
+    const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
+    const p = goodProspect();
+    const d = await authoriser.authorise(p, ctx(p));
+
+    assert.equal(d.authorised, false);
+    assert.equal(d.code, ELIGIBILITY_CODES.HISTORY_UNAVAILABLE);
+    assert.equal(d.dial, null, "no permission slip is minted on an unknown history");
+  });
+
+  it("the authoriser reports historySource: durable on a real decision", async () => {
+    const store = createInMemoryAcquisitionStore();
+    const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
+    const p = goodProspect();
+    const d = await authoriser.authorise(p, ctx(p));
+    assert.equal(d.historySource, "durable");
+  });
+
+  it("a caller-supplied history cannot reach the authoriser's engine", async () => {
+    // Three no-answers are durable, against THIS prospect's real id. The caller
+    // passes a clean history hoping to wash them away.
+    const subject = goodProspect();
+    const store = await storeWith([
+      outcome({ id: "o1", prospectId: subject.prospectId }),
+      outcome({ id: "o2", prospectId: subject.prospectId, recordedAt: "2026-08-02T00:00:00.000Z" }),
+      outcome({ id: "o3", prospectId: subject.prospectId, recordedAt: "2026-08-03T00:00:00.000Z" }),
+    ]);
+    const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
+    const d = await authoriser.authorise(subject, ctx(subject, { history: { attempts: 0, lastAttemptAt: null, lastContactAt: null, lastOutcome: null } }));
+
+    assert.equal(d.authorised, false, "the durable three reached the cap; the caller's zero was ignored");
+    assert.equal(d.historySource, "durable", "the gate's own read wins");
+    assert.equal(d.dial, null);
+  });
+
+  it("an engine that REQUIRES durable history refuses a hand-made one", () => {
+    const engine = createEligibilityEngine({ now, historyRequired: true, ...engineOptions(now), suppression: createSuppressionList({ now }) });
+    const p = goodProspect();
+    const d = engine.evaluate(p, ctx(p, { history: { attempts: 0 } }));
+    const blocked = d.failedChecks.find((f) => f.check === "attempts");
+    assert.equal(blocked.code, ELIGIBILITY_CODES.HISTORY_UNAVAILABLE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ── The A-L7 ratchet ────────────────────────────────────────────────
+
+describe("ratchets: M8J did not decide A-L7", () => {
+  it("no_answer and voicemail are still UNAPPROVED as attempt-consuming", () => {
+    for (const outcomeName of ["no_answer", "voicemail"]) {
+      assert.equal(
+        ATTEMPT_CONSUMPTION[outcomeName].approved,
+        false,
+        `A-L7 asks whether ${outcomeName} consumes an attempt. M8J built the machinery to count it either way and answered nothing. Flipping this to true is a POLICY APPROVAL and needs a recorded decision, not a code change.`
+      );
+    }
+  });
+
+  it("an unapproved consumption rule keeps the whole policy unapproved and named", () => {
+    const policy = createAttemptPolicy();
+    assert.equal(policy.approved, false);
+    assert.match(policy.describeGap(), /A-L7/);
+    assert.ok(policy.unapprovedConsumption.some((r) => r.outcome === "no_answer"));
+    assert.ok(policy.unapprovedConsumption.some((r) => r.outcome === "voicemail"));
+  });
+
+  it("the eligibility block names the open question a founder has to answer", () => {
+    const engine = createEligibilityEngine({ now, counselApproved: true });
+    const d = engine.evaluate({ ...{ prospectId: "p", businessName: "B", timezone: "Australia/Melbourne", lifecycle: "review_approved", phones: [{ raw: "(03) 5550 7401" }], sourceRefs: [], history: [] } }, {});
+    const policyCheck = d.failedChecks.find((f) => f.check === "policy_approval");
+    assert.ok(policyCheck, "the unapproved policy must still block");
+    assert.match(policyCheck.message, /A-L7/);
+  });
+
+  it("the history fold contains no attempt counting at all", () => {
+    // The one-line implementation the A-L audit suggested would have decided
+    // A-L7 by accident. This is the ratchet against it coming back.
+    const src = read("src/services/acquisition-history.js")
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("//") && !l.trimStart().startsWith("*") && !l.trimStart().startsWith("/*"))
+      .join("\n");
+    for (const forbidden of [/attempts\s*[:=]/, /outcomes\.length\s*[,;)]/, /countAttempts/]) {
+      assert.doesNotMatch(src, forbidden, `counting belongs to the attempt policy, not to the row reader (${forbidden})`);
+    }
+  });
+
+  it("the durable facts answer BOTH possible A-L7 answers without a data change", async () => {
+    const store = await storeWith([
+      outcome({ id: "o1", outcome: "no_answer" }),
+      outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
+      outcome({ id: "o3", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-03T00:00:00.000Z" }),
+    ]);
+    const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
+
+    // As proposed today: everything counts.
+    assert.equal(createAttemptPolicy().countAttempts(history), 3);
+
+    // And if A-L7 is answered the other way, the SAME stored rows give the
+    // other answer. No backfill, no migration, no recount of history.
+    const counted = history.outcomes.filter((o) => !["no_answer", "voicemail"].includes(o.outcome)).length;
+    assert.equal(counted, 1);
+  });
+
+  it("every call outcome has a consumption rule, and every rule is a real outcome", () => {
+    for (const o of CALL_OUTCOMES) assert.ok(ATTEMPT_CONSUMPTION[o], `${o} has no attempt-consumption rule`);
+    for (const o of Object.keys(ATTEMPT_CONSUMPTION)) assert.ok(CALL_OUTCOMES.includes(o), `${o} is not a call outcome`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("ratchets: nothing bypasses the durable history provider", () => {
+  it("the authoriser reads it and makes it mandatory", () => {
+    const src = read("src/services/acquisition-authorisation.js");
+    assert.match(src, /readContactHistory/, "the final gate must do its own durable read");
+    assert.match(src, /historyRequired:\s*true/, "and must refuse a caller-built one");
+  });
+
+  it("no acquisition module derives an attempts count outside the attempt policy", () => {
+    const dir = path.join(ROOT, "src/services");
+    for (const f of fs.readdirSync(dir).filter((n) => n.startsWith("acquisition-") && n.endsWith(".js"))) {
+      if (f === "acquisition-attempt-policy.js") continue;
+      const code = fs
+        .readFileSync(path.join(dir, f), "utf8")
+        .split("\n")
+        .filter((l) => !l.trimStart().startsWith("//") && !l.trimStart().startsWith("*") && !l.trimStart().startsWith("/*"))
+        .join("\n");
+      assert.doesNotMatch(code, /attempts\s*=\s*[\w.]*outcomes[\w.]*\.length/, `${f} counts attempts itself — that is A-L7's question and it belongs to the policy`);
+    }
+  });
+
+  it("the read model reports where its history came from rather than implying zero", () => {
+    const src = read("src/services/acquisition-readmodel.js");
+    assert.match(src, /historySource/, "a preview may run without durable history, but it may not hide that");
+  });
+});
