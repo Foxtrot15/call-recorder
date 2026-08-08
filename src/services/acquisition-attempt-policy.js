@@ -101,6 +101,52 @@ const PROPOSED_RULES = Object.freeze({
 });
 
 /**
+ * WHICH OUTCOMES CONSUME AN ATTEMPT — i.e. A-L7, still unanswered (M8J).
+ *
+ * ── WHY THIS TABLE EXISTS AND WHY IT LIVES HERE ─────────────────────
+ * E-1 gave this module a durable contact history: the ordered list of what
+ * actually happened to a business, read from acquisition_contact_outcomes.
+ * Turning that list into a NUMBER requires deciding whether an unanswered call
+ * and a voicemail count, and that is A-L7 — a policy question nobody has
+ * answered.
+ *
+ * The obvious implementation, `attempts = outcomes.length`, would answer it by
+ * accident inside a row reader. So the count is computed HERE, from a table
+ * where each entry carries its own `approved` flag, alongside every other
+ * unapproved rule. `describeGap()` names them, the eligibility engine blocks
+ * while any is unapproved, and a ratchet fails the build if these flip to true
+ * without an approval recorded.
+ *
+ * Whichever way A-L7 is decided, the stored data is already correct: the answer
+ * changes a predicate over the outcome list, not a persisted number. No
+ * backfill, no migration, no recount of history.
+ */
+const ATTEMPT_CONSUMPTION = Object.freeze({
+  // Reached nobody. The proposal is that trying still counts — otherwise a
+  // business that never answers could be rung indefinitely — but "proposal" is
+  // the operative word.
+  no_answer: Object.freeze({ countsTowardCap: true, approved: false, source: "A-L7 open — whether an unanswered call consumes an attempt is undecided" }),
+  voicemail: Object.freeze({ countsTowardCap: true, approved: false, source: "A-L7 open; §16 Q6 leaves cold voicemail itself undecided" }),
+
+  // Somebody answered and it was not this business. Proposed as an attempt
+  // because the call was placed, though the number is separately suppressed.
+  wrong_person: Object.freeze({ countsTowardCap: true, approved: false, source: "No source. Proposed — the call was made even though it reached the wrong party" }),
+
+  // We spoke to them. Nobody disputes that this is an attempt; what follows it
+  // is governed by the cooldown rules above, not by the cap.
+  not_interested: Object.freeze({ countsTowardCap: true, approved: true, source: "A conversation happened; that it was an attempt is not in question" }),
+  declined: Object.freeze({ countsTowardCap: true, approved: true, source: "A conversation happened" }),
+  callback: Object.freeze({ countsTowardCap: true, approved: true, source: "A conversation happened" }),
+  booked: Object.freeze({ countsTowardCap: true, approved: true, source: "A conversation happened" }),
+  qualified: Object.freeze({ countsTowardCap: true, approved: true, source: "A conversation happened" }),
+
+  // An opt-out ends the relationship permanently. Whether it also consumed an
+  // attempt is moot — suppression outranks the cap at a higher precedence — but
+  // it is listed rather than omitted so every outcome has an entry.
+  opt_out: Object.freeze({ countsTowardCap: true, approved: true, source: "Moot: suppression outranks the cap" }),
+});
+
+/**
  * What each outcome does to the record. The two entries marked approved are the
  * ones §9 states outright; the rest are proposals about DURATION, even where
  * the DIRECTION is obvious.
@@ -155,6 +201,11 @@ function createAttemptPolicy({ approved = false, approvedBy = null, rules = {}, 
     .filter(([, r]) => !r.approved)
     .map(([outcome, r]) => ({ outcome, effect: r.effect, source: r.source }));
 
+  // A-L7, surfaced the same way every other open question is (M8J).
+  const unapprovedConsumption = Object.entries(ATTEMPT_CONSUMPTION)
+    .filter(([, r]) => !r.approved)
+    .map(([outcome, r]) => ({ outcome, countsTowardCap: r.countsTowardCap, source: r.source }));
+
   // The whole policy is usable only when a human has approved it AND said who
   // they are. `approved: true` with no name is not an approval.
   const effectivelyApproved = approved === true && typeof approvedBy === "string" && approvedBy.trim().length > 0;
@@ -162,13 +213,60 @@ function createAttemptPolicy({ approved = false, approvedBy = null, rules = {}, 
   const value = (key) => merged[key].value;
 
   /**
+   * Count the attempts a durable history represents, under THIS policy.
+   *
+   * The whole point of the E-1 seam: the history is a list of facts and this is
+   * the interpretation of it. An outcome with no entry in ATTEMPT_CONSUMPTION
+   * is counted — an unrecognised outcome must not silently be free.
+   */
+  function countAttempts(history) {
+    if (!history || !history.available || !Array.isArray(history.outcomes)) return 0;
+    return history.outcomes.filter((o) => {
+      const rule = ATTEMPT_CONSUMPTION[o.outcome];
+      return rule ? rule.countsTowardCap === true : true;
+    }).length;
+  }
+
+  /**
    * Assess attempt/wash restrictions for one prospect.
+   *
+   * ── DURABLE HISTORY WINS (M8J / E-1) ────────────────────────────────
+   * When `history` is a durable history from acquisition-history.js it is the
+   * ONLY source: `attempts`, `lastAttemptAt`, `lastContactAt` and `lastOutcome`
+   * are derived from it and any values the caller also passed are ignored. A
+   * caller holding a stale snapshot must not be able to talk this module out of
+   * what the database says.
+   *
+   * An UNAVAILABLE history is refused outright — `history_unavailable`. Not
+   * knowing how many times a business has been called is not the same as
+   * knowing it has never been called, and only one of those permits a call.
+   *
+   * The loose parameters remain for the walkthrough, the dry runs and the unit
+   * tests that construct a scenario directly. They are not a production path,
+   * and a ratchet asserts that every real authorisation supplies a durable one.
+   *
    * Returns { ok, code, message, temporary, readyAt } — readyAt is the instant
    * the restriction lifts, where that is calculable.
    */
-  function assess({ attempts = 0, lastAttemptAt = null, lastContactAt = null, lastOutcome = null } = {}, { now } = {}) {
+  function assess({ attempts = 0, lastAttemptAt = null, lastContactAt = null, lastOutcome = null, history = null } = {}, { now } = {}) {
     if (typeof now !== "function") throw new Error("attemptPolicy.assess requires an injected now().");
     const instant = now();
+
+    if (history) {
+      if (history.available !== true) {
+        return {
+          ok: false,
+          code: "history_unavailable",
+          temporary: true,
+          readyAt: null,
+          message: `We cannot tell how many times this business has already been called. ${history.reason || ""} No call is made on an unknown attempt history — "unknown" is not "never".`.trim(),
+        };
+      }
+      attempts = countAttempts(history);
+      lastAttemptAt = history.lastEventAt;
+      lastContactAt = history.lastReachedAt;
+      lastOutcome = history.latestOutcome;
+    }
 
     // A terminal outcome stops calling regardless of counts.
     if (lastOutcome && OUTCOME_RULES[lastOutcome] && OUTCOME_RULES[lastOutcome].effect === "stop_calling") {
@@ -223,8 +321,11 @@ function createAttemptPolicy({ approved = false, approvedBy = null, rules = {}, 
     approvedBy: effectivelyApproved ? approvedBy.trim() : null,
     rules: Object.freeze(merged),
     outcomeRules: OUTCOME_RULES,
+    attemptConsumption: ATTEMPT_CONSUMPTION,
     unapprovedRules: Object.freeze(unapprovedRules),
     unapprovedOutcomes: Object.freeze(unapprovedOutcomes),
+    unapprovedConsumption: Object.freeze(unapprovedConsumption),
+    countAttempts,
     value,
     assess,
     /** One sentence naming exactly what is still undecided. */
@@ -232,7 +333,11 @@ function createAttemptPolicy({ approved = false, approvedBy = null, rules = {}, 
       if (effectivelyApproved) return `Attempt and wash policy "${version}" was approved by ${approvedBy.trim()}.`;
       if (approved === true) return "The attempt and wash policy was marked approved but nobody was named as approving it, so it is not in force.";
       const keys = unapprovedRules.map((r) => r.key).join(", ");
-      return `The attempt and wash policy has not been approved. These values are proposals nobody has agreed to: ${keys}.`;
+      const consumption = unapprovedConsumption.map((r) => r.outcome).join(", ");
+      return (
+        `The attempt and wash policy has not been approved. These values are proposals nobody has agreed to: ${keys}.` +
+        (consumption ? ` And it is still undecided whether these outcomes consume an attempt (A-L7): ${consumption}.` : "")
+      );
     },
   });
 }
@@ -241,5 +346,6 @@ module.exports = {
   createAttemptPolicy,
   PROPOSED_RULES,
   OUTCOME_RULES,
+  ATTEMPT_CONSUMPTION,
   CALL_OUTCOMES,
 };

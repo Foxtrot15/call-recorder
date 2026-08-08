@@ -54,6 +54,7 @@ const { normaliseProspectPhones } = require("./acquisition-phone");
 const { duplicateStatusFor } = require("./acquisition-dedupe");
 const { createCallingPolicy } = require("./acquisition-calling-policy");
 const { createAttemptPolicy } = require("./acquisition-attempt-policy");
+const { isDurableHistory } = require("./acquisition-history");
 
 // Ordered. The index IS the precedence.
 const CHECK_ORDER = Object.freeze([
@@ -86,6 +87,10 @@ const ELIGIBILITY_CODES = Object.freeze({
   COUNSEL_UNAPPROVED: "counsel_approval_missing",
   BATCH_UNAPPROVED: "founder_batch_approval_missing",
   ATTEMPTS_BLOCKED: "attempt_or_wash_restriction",
+  // M8J / E-1. Distinct from ATTEMPTS_BLOCKED on purpose: that says "we know,
+  // and the answer is no". This says "we could not find out", which is a fact
+  // about the system and must never be reported as a fact about the business.
+  HISTORY_UNAVAILABLE: "contact_history_unavailable",
   WINDOW_BLOCKED: "outside_calling_policy",
 });
 
@@ -120,6 +125,12 @@ function createEligibilityEngine({
   callingPolicy = null,
   counselApproved = false,
   policyVersion = "acq-a2-eligibility-v1",
+  // M8J / E-1. A pre-loaded durable contact history index, and whether a
+  // durable one is MANDATORY. The authoriser sets both; preview paths may run
+  // without, and their decisions carry historySource so nothing reads a
+  // missing history as "never called".
+  historyIndex = null,
+  historyRequired = false,
 } = {}) {
   if (typeof now !== "function") {
     throw new Error("createEligibilityEngine requires an injected now().");
@@ -321,17 +332,60 @@ function createEligibilityEngine({
     }
 
     // ── 9. Attempts and washes ─────────────────────────────────────
-    const attemptResult = attempts.assess(history || {}, { now: () => instant });
-    if (!attemptResult.ok) {
+    //
+    // ── WHERE THE ATTEMPT HISTORY COMES FROM (M8J / E-1) ────────────
+    // Three sources, in descending order of authority:
+    //
+    //   historyIndex   a durable index pre-loaded from
+    //                  acquisition_contact_outcomes at the async boundary.
+    //                  THE PRODUCTION SOURCE. The engine is synchronous by
+    //                  design, so the read happens before it is called and the
+    //                  answer is handed in — the same shape M8E used for the
+    //                  durable suppression read.
+    //   history        a durable history for this one prospect, handed in
+    //                  directly. Equivalent authority; convenient for the
+    //                  authoriser, which handles exactly one prospect.
+    //   loose fields   { attempts, lastAttemptAt, ... } constructed by a
+    //                  caller. Retained for the walkthrough, the dry runs and
+    //                  unit tests. NOT a production path.
+    //
+    // `historyRequired` makes the third one a refusal rather than a fallback.
+    // The authoriser sets it, so the final pre-dial decision cannot be reached
+    // with a hand-made history or with none at all.
+    const suppliedHistory = context.history || null;
+    const indexedHistory = historyIndex && prospect.prospectId ? historyIndex.for(prospect.prospectId) : null;
+    const durable = isDurableHistory(indexedHistory) ? indexedHistory : isDurableHistory(suppliedHistory) ? suppliedHistory : null;
+
+    const historySource = durable ? (durable.available ? "durable" : "unavailable") : suppliedHistory ? "caller" : "absent";
+
+    if (historyRequired && !durable) {
+      // Neither a durable index nor a durable history reached a path that
+      // demands one. Refused as the system's own failure — a caller-built
+      // object is not evidence of what this business has already been through.
       add(
-        fail("attempts", ELIGIBILITY_CODES.ATTEMPTS_BLOCKED, attemptResult.message, {
-          temporary: attemptResult.temporary,
-          nextEligibleAt: attemptResult.readyAt ? attemptResult.readyAt.toISOString() : null,
-          detail: { reason: attemptResult.code },
+        fail("attempts", ELIGIBILITY_CODES.HISTORY_UNAVAILABLE, "No durable contact history was supplied, so we cannot tell how many times this business has already been called. Nothing is authorised on an unknown attempt history.", {
+          temporary: true,
+          requiredFounderAction: "Load the durable contact history before authorising a call.",
+          detail: { historySource },
         })
       );
     } else {
-      add(pass("attempts", attemptResult.message));
+      // A durable history, when present, is the ONLY source: assess() derives
+      // attempts, last-attempt and last-contact from it and ignores anything
+      // the caller also passed. See acquisition-attempt-policy.assess.
+      const attemptInput = durable ? { history: durable } : history || {};
+      const attemptResult = attempts.assess(attemptInput, { now: () => instant });
+      if (!attemptResult.ok) {
+        add(
+          fail("attempts", attemptResult.code === "history_unavailable" ? ELIGIBILITY_CODES.HISTORY_UNAVAILABLE : ELIGIBILITY_CODES.ATTEMPTS_BLOCKED, attemptResult.message, {
+            temporary: attemptResult.temporary,
+            nextEligibleAt: attemptResult.readyAt ? attemptResult.readyAt.toISOString() : null,
+            detail: { reason: attemptResult.code, historySource },
+          })
+        );
+      } else {
+        add(pass("attempts", attemptResult.message, { historySource }));
+      }
     }
 
     // ── 10. Timezone, holidays, calling window ─────────────────────
@@ -375,10 +429,11 @@ function createEligibilityEngine({
       policyVersion,
       attemptPolicyVersion: attempts.version,
       counselApproved,
+      historySource,
     });
   }
 
-  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved }) {
+  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved, historySource = "absent" }) {
     const failures = results.filter((r) => r.ok === false);
     const passed = results.filter((r) => r.ok === true).map((r) => r.check);
 
@@ -424,6 +479,8 @@ function createEligibilityEngine({
       policyVersion: pv,
       attemptPolicyVersion,
       counselApproved: ca,
+      /** Where the attempt history came from: durable | caller | unavailable | absent. */
+      historySource,
       evaluatedAt: instant.toISOString(),
       localTime,
       provenance: provenance ? Object.freeze(provenance) : null,

@@ -137,6 +137,8 @@ function summarisePipeline({
         blockedBy: decision && !decision.eligible ? decision.code : null,
         blockedCategory: category,
         blockedMessage: decision && !decision.eligible ? decision.message : null,
+        /** durable | caller | unavailable | absent. See acquisition-history.js. */
+        historySource: decision ? decision.historySource || "absent" : null,
       })
     );
   }
@@ -194,6 +196,17 @@ function summarisePipeline({
     outcomes,
 
     rows: Object.freeze(rows),
+
+    /**
+     * Where the attempt history behind these decisions came from (M8J / E-1).
+     *
+     * A preview may legitimately run without one — this screen is not a dial
+     * authorisation. What it may NOT do is let a missing history read as "never
+     * called", so the source is reported and the note says so in words.
+     */
+    historySource: Object.freeze(
+      [...new Set(rows.map((r) => r.historySource || "absent"))].sort()
+    ),
 
     // Said explicitly, because "callable now" is the number most likely to be
     // misread as "we are calling these people".

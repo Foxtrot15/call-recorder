@@ -51,6 +51,7 @@ const { createEligibilityEngine, ELIGIBILITY_CODES, assessmentFingerprint } = re
 const { createSuppressionList } = require("./acquisition-suppression");
 const { assertStoreContract } = require("./acquisition-store");
 const { normaliseProspectPhones } = require("./acquisition-phone");
+const { readContactHistory } = require("./acquisition-history");
 
 /**
  * The one code the existing vocabulary did not already have.
@@ -158,6 +159,8 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
       authorisedAt: instant.toISOString(),
       /** Where the suppression answer came from. Always "durable" on any real decision. */
       suppressionSource,
+      /** And where the attempt history came from. Always "durable" on any authorised one. */
+      historySource: eligibility ? eligibility.historySource || null : null,
       eligibilityCode: eligibility ? eligibility.code : null,
       failedChecks: Object.freeze(failedChecks || []),
       note: "This is a decision about permission. Nothing here places, schedules or prepares a call.",
@@ -278,6 +281,31 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
      */
     const authoritative = createSuppressionList({ now, initialEntries: rows });
 
+    // ── 2b. THE DURABLE CONTACT HISTORY (M8J / E-1) ───────────────────
+    //
+    // The second authoritative read, for the same reason as the first. Until
+    // M8J no production path supplied an attempt history at all, so every
+    // prospect evaluated as though it had never been called — and approving
+    // A-L6 would have enforced caps against zero.
+    //
+    // readContactHistory never throws: an unreadable store comes back
+    // `available: false`, the engine is built with historyRequired and refuses,
+    // and the refusal is `contact_history_unavailable` — the gate's own
+    // failure, not a claim about the business.
+    const contactHistory = await readContactHistory({ store, prospectId: prospect.prospectId });
+    if (!contactHistory.available && audit) {
+      audit.record({
+        entityType: "prospect",
+        entityId: prospect.prospectId || "unknown",
+        event: "authorisation_blocked",
+        decision: "veto",
+        actor: "dial-authoriser",
+        actorKind: "system",
+        reason: `The contact history could not be read, so authorisation was refused: ${contactHistory.reason}`,
+        detail: { code: ELIGIBILITY_CODES.HISTORY_UNAVAILABLE },
+      });
+    }
+
     // ── 3. RE-RUN ELIGIBILITY AGAINST IT ──────────────────────────────
     //
     // Every other rule — DNCR and its freshness, duplicates, campaign and
@@ -289,10 +317,15 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
     // `suppression` is destructured off and discarded before spreading, so a
     // caller who supplies one cannot reach the engine with it. The authoritative
     // list is bound last and unconditionally.
-    const { suppression: _ignored, ...collaborators } = engineOptions || {};
-    const active = createEligibilityEngine({ ...collaborators, now, suppression: authoritative });
+    // Both authoritative reads are bound LAST and unconditionally, so a caller
+    // who supplies either cannot reach the engine with it. historyRequired is
+    // set here and nowhere else: this is the one path where a caller-built
+    // history must be refused outright rather than merely labelled.
+    const { suppression: _ignoredSuppression, historyIndex: _ignoredIndex, historyRequired: _ignoredFlag, ...collaborators } = engineOptions || {};
+    const active = createEligibilityEngine({ ...collaborators, now, suppression: authoritative, historyRequired: true });
 
-    const eligibility = active.evaluate(prospect, { ...context, at: instant });
+    //  is spread AFTER the caller's context for the same reason.
+    const eligibility = active.evaluate(prospect, { ...context, at: instant, history: contactHistory });
 
     const failedChecks = (eligibility.failedChecks || []).map((f) => Object.freeze({ check: f.check, code: f.code, message: f.message }));
 
