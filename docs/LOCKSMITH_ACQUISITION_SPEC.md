@@ -12,6 +12,17 @@ boundary, the discovery adapter contract, the evidence ledger, the append-only
 decision log, the prospect lifecycle, the human review step, the qualification
 model, the queue boundary and the outcome model.
 
+> **Dated update — 2026-08-08 (M8J).** Two undocumented first-call blockers are
+> closed. **E-2**: a persisted prospect can now durably reach review_approved
+> through a compare-and-set projection of the durable review decision — before
+> this, nothing wrote the lifecycle column at all and every persisted prospect
+> was permanently `discovered`. **E-1**: attempt history is now derived from
+> `acquisition_contact_outcomes` by one authoritative path, and the final gate
+> refuses to authorise when it cannot be read. **A-L7 remains open and M8J
+> deliberately did not answer it** — see §41.5. There is now ONE live blocker
+> list, [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md); the tables in §A2.9, §24 and §34 are milestone snapshots and
+> are labelled as such.
+>
 > **Dated update — 2026-08-08 (M8I).** The decision chain is safe for concurrent
 > writers, and the safety is in Postgres rather than in Node: `laq3` adds
 > `unique (prev_hash)` to `acquisition_decisions`, applied to dev and proven with
@@ -660,6 +671,10 @@ Stated plainly, and enforced rather than promised:
 
 ## A2.9 Founder / legal decisions still required
 
+> **SNAPSHOT — what A2 knew. Not current truth.** The live list is [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md),
+> which is recomputed each milestone. Several rows below have moved since; this
+> table is kept because the REASONING in it is still the reasoning.
+
 | # | Decision | Blocks | Current behaviour |
 |---|---|---|---|
 | **A-L1** | **Counsel sign-off on the permitted calling window** (Phase 0). | Any dialling | Window applied with `counselApproved: false` on every decision |
@@ -1045,6 +1060,10 @@ The run ends with an explicit list of what did **not** happen.
 
 ## 24. What a future milestone must do before anything dials
 
+> **SNAPSHOT — what M8B knew, with one row struck through in M8D.** The live
+> list is [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md). M-1, M-2 and M-3 are now done on dev and M-4's mechanism
+> exists; see the register rather than this table.
+
 Everything in §A2.9 (A-L1 … A-L9) still stands and still blocks. In addition:
 
 | # | Requirement | Why |
@@ -1256,12 +1275,24 @@ proof against the real database, by hand, after the SQL is applied.
 - **Does not connect to Supabase.** The adapter exists, is contract-tested with
   a fake client, and has never been pointed at a project.
 
-## 34. Remaining blockers before any dialler can exist
+## 34. Remaining blockers as at M8C — SNAPSHOT, superseded
 
-Everything in §A2.9 (A-L1 … A-L9) and §24 (M-1 … M-6) still stands. M8C closes
-M-2 and M-3 in code but not in deployment — the tables do not exist yet.
+> **DO NOT READ THIS AS CURRENT.** It records what was true on 2026-08-07, when
+> M8C was written and no SQL had been applied to anything. The live list is
+> [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md).
+>
+> Four rows below are now wrong, and were corrected in M8J rather than quietly
+> edited here:
+>
+> - **M-1** says "not applied". LAQ1 + LAQ2 were applied to dev in **M8D**
+>   (2026-08-07) and LAQ3 in **M8I** (2026-08-08). Production: still none.
+> - the sentence "the tables do not exist yet" was true for about a day.
+> - **M-2** "needs M-1" — M-1 is done on dev.
+> - **M-4** "still required" UNDERSTATES M8E: the mechanism is built and
+>   re-runs the whole engine at the authorisation instant. What it lacks is a
+>   caller, because there is no dialler.
 
-| # | Blocker | Status after M8C |
+| # | Blocker | Status after M8C (HISTORICAL) |
 |---|---|---|
 | **A-L1** | Counsel sign-off on the calling window | Open. Blocks every prospect. |
 | **A-L6** | Attempt caps, retry spacing, cooldowns | Open. Blocks every prospect. |
@@ -1846,7 +1877,7 @@ node scripts/acquisition-review.js resolve <review-id> --decision <d> --by "<nam
 
 | Decision | Effect |
 |---|---|
-| `approve_as_new` | Persists through the **same M8G path**; no second implementation |
+| `approve_as_new` | Persists through the **same M8G path**, then projects the lifecycle to `review_approved`. **This was aspirational until M8J** — the command printed it and did not do it; see §41.1 |
 | `merge_into_existing` | Attaches via the same enrichment path; `--target` required |
 | `reject_not_locksmith` | Recorded; no prospect created |
 | `reject_duplicate` | Recorded; no prospect created |
@@ -2155,3 +2186,191 @@ honest by review.
   it does not queue. At pilot volume there is one writer.
 - **A rejection is not reconsidered** when materially changed evidence arrives.
   Unchanged from §39.9.
+
+
+---
+
+## 41. M8J — the two blockers nobody had written down
+
+**Owns (source of truth for):** how a review decision reaches the prospect
+lifecycle, and where attempt history comes from.
+
+The A-L policy audit found that A-L1 and A-L6 were described everywhere as *the*
+binding blockers, and that this was incomplete. Two capability gaps sat
+underneath them, both undocumented, and either would have made an approval
+worthless on the day it arrived.
+
+### 41.1 E-2 — a reviewed prospect could not stay reviewed
+
+`recordReviewDecision` (A1) moved an in-memory prospect object to
+`review_approved`. Nothing persisted it. `upsertProspect` deliberately never
+sends `lifecycle` — correctly, because a re-run CSV must not drag a reviewed
+business back to `discovered` — and **nothing else sent it either**. A persisted
+prospect was permanently `discovered`, so the eligibility engine's
+`review_approved` check could never be satisfied by anything in the database.
+
+Counsel could have signed off A-L1 and not one prospect would have become
+eligible.
+
+Two smaller defects were found in the same place and fixed:
+
+- `approve_as_new` **persisted nothing**. The CLI printed *"will create a new
+  prospect"*, §39 claimed it *"persists through the same M8G path"*, and the code
+  only handled `merge_into_existing`. It now uses that path, as advertised.
+- the domain state machine and the column CHECK are **two independent
+  constraints**, and the narrower one has to win. A transition can be legal in
+  the domain and impossible in the database, and that is now refused by name
+  rather than surfacing as a raw 23514. Writing this correctly took two
+  attempts: the first mirrored **laq1's** CHECK, which laq2 drops and re-adds
+  with all fourteen states — so the code would have refused
+  `review_approved -> queued`, which dev has permitted since M8D, and the
+  ratchet guarding it would have passed while being wrong. The ratchet now
+  parses the LAST definition across the applied migrations and asserts the
+  domain, the store's list and the effective CHECK all three agree.
+
+### 41.2 The lifecycle projection is a compare-and-set
+
+`store.transitionProspectLifecycle({ prospectId, expectedFrom, to, actor, reason })`
+is the ONLY way the column moves. In Postgres it is one statement:
+
+```sql
+update acquisition_prospects set lifecycle = $to, history = $journal
+ where prospect_id = $id and lifecycle = $expectedFrom
+```
+
+Two `.eq()` filters on one `.update()`, so predicate and write see the same row
+version. `.select()` returns what was actually touched, and **zero rows is the
+interesting answer** — the row is re-read to distinguish "somebody else moved
+it" from "it is already where we wanted it". Both need different responses and
+neither is success.
+
+The journal append reads `history` first, which is not a race: it rides on the
+same CAS, so a lost entry and a lost transition are the same event.
+
+There is deliberately **no `setLifecycle(anything)`**. A test asserts it, and
+asserts that `toProspectRow` still carries neither `lifecycle` nor `history`.
+
+### 41.3 Decision first, projection second — the order IS the design
+
+There is no multi-statement transaction over PostgREST. The append to
+`acquisition_decisions` and the update to `acquisition_prospects` are two
+writes, and either can be the last to succeed. One order is recoverable:
+
+| order | failure leaves |
+|---|---|
+| **decision → projection** | a durable, attributable record of what was decided, and a lifecycle that has not caught up. Repairable by anyone, later. Eligibility stays **blocked** meanwhile. |
+| projection → decision | a business marked APPROVED with **no record of who approved it or why**. Unattributable, and it fails **open**. |
+
+So the decision is the truth and the column is a projection of it.
+`projectReviewResolution` walks the prospect one legal hop at a time, journalling
+each; `reconcileReviewProjections` sweeps for lags and repairs them.
+
+**Repair appends nothing.** It reads the existing resolution. A repeated
+resolution goes through `resolveReviewItem`, which already refuses with
+`already_resolved` and names who decided it, so neither path can produce a second
+human decision. A ratchet fails the build if the projection module learns to
+write to the log.
+
+A half-walked path is left where it stopped rather than rolled back — it is
+closer to the truth than `discovered`, and the next run continues from there.
+
+### 41.4 E-1 — attempt history was never read
+
+`evaluate(prospect, { history })` took a caller-supplied object, and **no
+production call site supplied one**: not the authoriser, the queue, the batch
+assembler, the read model or the importer. Every prospect evaluated as though it
+had never been called. Approving A-L6 would have enforced caps against zero.
+
+`acquisition-history.js` is now the one derivation, from
+`acquisition_contact_outcomes`, which has held the data since laq2 and needed no
+schema change.
+
+Outcomes are **totally ordered** — `recorded_at`, then `created_at`, then `id` —
+because two outcomes can share a millisecond and "the latest outcome" must not
+be whichever row the query returned last. `lastReachedAt` uses only rows where
+`reached_the_business` is true: three unanswered rings are not a conversation,
+and a recent-contact cooldown that counted them would silence a business nobody
+spoke to.
+
+### 41.5 Facts here, policy there — and why A-L7 is still open
+
+**The history contains no `attempts` count.**
+
+`attempts = outcomes.length` is one line, and the audit suggested it. It would
+also have answered **A-L7** — does an unanswered call or a voicemail consume an
+attempt? — by accident, inside a row reader, invisibly to every review that
+followed.
+
+So the counting lives in `acquisition-attempt-policy.js`, in
+`ATTEMPT_CONSUMPTION`, where each outcome carries its own `approved` flag beside
+every other unapproved rule. `no_answer`, `voicemail` and `wrong_person` are
+`countsTowardCap: true, approved: false`. `describeGap()` names them, the
+eligibility block quotes them, and a ratchet fails the build if they flip to true
+without a recorded approval.
+
+**Whichever way A-L7 is decided, the stored data is already right.** The answer
+changes a predicate over the outcome list, not a persisted number: no backfill,
+no migration, no recount. A test asserts both answers can be computed from the
+same rows.
+
+**M8J decided nothing.** It made the decision possible to implement in one place
+and impossible to make by accident.
+
+### 41.6 Unknown is not never
+
+An unreadable history returns `available: false`, never `{ outcomes: [] }`.
+Those are opposite claims — *we could not find out* versus *we checked and there
+was nothing* — and only the second authorises a call.
+
+- `assess()` refuses an unavailable history with `history_unavailable`.
+- The eligibility engine reports `contact_history_unavailable`, distinct from
+  `attempt_or_wash_restriction`: that one says "we know, and the answer is no".
+- The **authoriser sets `historyRequired: true`**, so the final pre-dial decision
+  cannot be reached with a caller-built history or none at all. A caller who
+  supplies one is ignored; the gate's own read wins. Proven by a test that
+  passes a clean history over three durable no-answers and is still refused.
+- Every decision carries `historySource`: `durable` | `caller` | `unavailable` |
+  `absent`. The read model surfaces it per row, so a preview may run without one
+  and still cannot let it read as "never called".
+
+### 41.7 No new SQL
+
+The lifecycle column, its CHECK (widened by laq2 to all fourteen states), the
+`history` journal and the outcomes table all already existed. `acquisition_prospects` carries **no append-only trigger** —
+the four triggers guard evidence, decisions, suppressions and outcomes — so it
+is legitimately updatable, which is exactly why the guard had to be a CAS rather
+than a hope.
+
+### 41.8 Proof, and dev residue
+
+**E-1 was proven against real dev Postgres, read-only, 16/16, ZERO RESIDUE.** It
+folds the fictional outcome row M8D already left behind and asserts the
+round-trip: `timestamptz` back to a parseable instant, `reached_the_business`
+back as a real boolean, `lastReachedAt` derived only from reached rows, the same
+answer twice, an unreadable store refusing, and A-L7 still open. That last class
+of defect — a value that survives the in-memory store and not the database — is
+what M8H hit and why the read proof was worth running at all.
+
+**E-2's proof is written and NOT RUN**, pending approval, because it is the
+first thing in this system that would UPDATE a row rather than append one.
+`scripts/dev/acquisition-lifecycle-proof/` performs a round trip
+`review_approved → review_pending → review_approved` on `pr_3740207ebbc0a379910f`
+— already fictional, already on dev since M8D, and already at `review_approved`,
+which is what lets the trip end where it began. It creates no row in any table
+and touches no append-only table; what would remain is **two entries in that one
+row's `history` journal and a bumped `updated_at`**. It refuses to run without
+`M8J_LIFECYCLE_PROOF_WRITE=yes`.
+
+### 41.9 Known limitations
+
+- **E-5 — durable batch approval** is still open. `context.batch` is
+  caller-supplied and there is no batch table. Not a hard blocker for one
+  attended founder-approved call; a blocker for anything unattended or repeated.
+  See the register §5.
+- **E-3 — durable DNCR wash storage** is still open. The wash store is an
+  in-process `Map`; a wash does not survive a restart.
+- **Duplicate resolution** is still caller-supplied, the same shape of gap E-1
+  just closed for history.
+- `listOutcomes` has no explicit limit and inherits PostgREST's page cap. Scoped
+  per prospect it is small; the unfiltered call is the one to watch.
+- `listReviewItems` still folds the log in memory with a 5000-row cap (§40.10).
