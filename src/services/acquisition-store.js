@@ -111,9 +111,16 @@ const STORE_METHODS = Object.freeze([
   // a fresh process must CONTINUE it rather than start a second one. See
   // createAuditLog initialHead / initialSequence.
   //
-  // SINGLE WRITER. Two processes appending concurrently would fork the chain.
+  // CONCURRENT WRITERS ARE SAFE SINCE M8I, and the safety is in Postgres, not
+  // here: laq3 puts `unique (prev_hash)` on the table, so two processes that
+  // hydrated the same head cannot both append. The loser gets a 23505 and must
+  // re-read and re-mint. Nothing in Node is trusted to prevent a fork.
   "appendDecision",
   "listDecisions",
+  // THE HEAD IS READ ON ITS OWN (M8I). Never off the end of a listDecisions
+  // page: that call is limited, so at the limit the "last element" is the
+  // limit-th row and every later append would hydrate a stale head and fork.
+  "readChainHead",
 ]);
 
 /**
@@ -252,11 +259,30 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
     async listEvidence(prospectId) {
       return evidence.filter((e) => e.prospectId === prospectId).map(frozenCopy);
     },
+    /**
+     * The reference implementation of the laq3 invariant (M8I).
+     *
+     * This store is not a mock, so it enforces what Postgres enforces: an
+     * audit_id that already exists is an idempotent replay, and a prev_hash
+     * that already has a successor is a LOST RACE, not a success. Without the
+     * second rule every offline test would pass against a store that permits
+     * precisely the fork the durable one refuses, and the tests would be
+     * proving nothing about the code that ships.
+     */
     async appendDecision(row) {
       const existing = decisions.find((d) => d.auditId === row.auditId);
-      if (existing) return { created: false, decision: frozenCopy(existing) };
+      if (existing) return { created: false, reason: "duplicate_entry", decision: frozenCopy(existing) };
+      if (decisions.some((d) => d.prevHash === row.prevHash)) {
+        return { created: false, conflict: "head_taken", reason: "head_taken", decision: null };
+      }
       decisions.push({ ...row });
-      return { created: true, decision: frozenCopy(decisions[decisions.length - 1]) };
+      return { created: true, reason: "appended", decision: frozenCopy(decisions[decisions.length - 1]) };
+    },
+    async readChainHead() {
+      if (decisions.length === 0) return null;
+      let head = decisions[0];
+      for (const d of decisions) if (d.sequence > head.sequence) head = d;
+      return frozenCopy(head);
     },
     async listDecisions({ entityType = null, entityId = null, limit = 1000 } = {}) {
       let out = decisions;
@@ -364,6 +390,18 @@ function uniqueViolation(error) {
   if (!error) return false;
   return error.code === "23505" || /duplicate key value/i.test(error.message || "");
 }
+
+/**
+ * Which uniqueness rule fired (M8I).
+ *
+ * Postgres names the constraint in the error, and on this table the two
+ * possible names mean opposite things — a replay versus a lost race. Matched on
+ * the index name laq3 creates and on the column, because PostgREST surfaces the
+ * detail in `message` or `details` depending on the path.
+ */
+const errorText = (error) => `${(error && error.message) || ""} ${(error && error.details) || ""} ${(error && error.hint) || ""}`;
+const headTakenViolation = (error) => /uq_acq_decisions_prev_hash|\bprev_hash\b/i.test(errorText(error));
+const auditIdViolation = (error) => /audit_id/i.test(errorText(error));
 
 function fail(table, verb, error) {
   if (tableMissing(error)) throw provisioningError(table);
@@ -842,29 +880,81 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
     },
 
     /**
-     * Append one decision to the hash-chained log (M8H).
+     * Append one decision to the hash-chained log.
      *
-     * IDEMPOTENT ON auditId, which IS the entry hash. Re-appending a row whose
-     * hash already exists is a no-op rather than a unique-violation, because
-     * the same decision written twice is the same decision — and the chain
-     * would refuse the duplicate anyway.
+     * ── TWO UNIQUE VIOLATIONS THAT MEAN OPPOSITE THINGS (M8I) ─────────
+     * M8H treated every 23505 as "already there, nothing to do". Once laq3
+     * added `unique (prev_hash)` that became actively dangerous, because the
+     * two collisions this table can now raise are opposites:
      *
-     * SINGLE WRITER. Two processes that hydrated the same head and both append
-     * will each write a row claiming the same prev_hash. Neither is lost and
-     * nothing is silently overwritten, but verifyRows() will correctly report
-     * the combined log as forked. M8H does not serialise concurrent appends.
+     *   audit_id    the SAME decision, written twice. Genuinely idempotent —
+     *               a retried request, a replayed job. Report created:false
+     *               and hand back the row that is already there.
+     *
+     *   prev_hash   a DIFFERENT decision claiming a head somebody else has
+     *               already extended. This writer lost the race. Reporting
+     *               success would drop the decision on the floor while telling
+     *               the caller it was stored, which is the exact failure the
+     *               milestone exists to prevent.
+     *
+     * So the second returns `conflict: "head_taken"` and never `created: true`.
+     * The caller must re-read the head, re-mint and try again — the row cannot
+     * simply be re-inserted, because its own hash covers the head it named.
+     * See appendDecisionSerialised in acquisition-decision-log.js.
+     *
+     * Nothing is deleted or rewritten to resolve a conflict. A losing row was
+     * never durably inserted; there is nothing to clean up.
      */
     async appendDecision(row) {
       const before = await db().from(TABLES.decisions).select("*").eq("audit_id", row.auditId).maybeSingle();
       if (before.error) fail(TABLES.decisions, "read", before.error);
-      if (before.data) return { created: false, decision: fromDecisionRow(before.data) };
+      if (before.data) return { created: false, reason: "duplicate_entry", decision: fromDecisionRow(before.data) };
 
       const { data, error } = await db().from(TABLES.decisions).insert(toDecisionRow(row)).select().single();
       if (error) {
-        if (uniqueViolation(error)) return { created: false, decision: { ...row } };
+        if (uniqueViolation(error)) {
+          // Which constraint? Postgres names it, and the two mean opposite
+          // things. An unrecognised unique violation is treated as a lost race
+          // rather than as success: refusing to append something that may be a
+          // fork is recoverable, and claiming to have stored it is not.
+          if (headTakenViolation(error)) {
+            return { created: false, conflict: "head_taken", reason: "head_taken", decision: null };
+          }
+          if (auditIdViolation(error)) {
+            const again = await db().from(TABLES.decisions).select("*").eq("audit_id", row.auditId).maybeSingle();
+            if (!again.error && again.data) return { created: false, reason: "duplicate_entry", decision: fromDecisionRow(again.data) };
+          }
+          return { created: false, conflict: "head_taken", reason: "unique_violation_unrecognised", decision: null };
+        }
         fail(TABLES.decisions, "insert", error);
       }
-      return { created: true, decision: fromDecisionRow(data) };
+      return { created: true, reason: "appended", decision: fromDecisionRow(data) };
+    },
+
+    /**
+     * The AUTHORITATIVE head: highest sequence, one row, no filter (M8I).
+     *
+     * M8H derived the head from the last element of listDecisions(). That was
+     * correct for eighteen rows and silently wrong from the thousand-and-first:
+     * the list is capped, so at the cap the "last element" is the 1000th row,
+     * every append would then hydrate a two-year-old head, and the first one
+     * would be refused by laq3 as a fork attempt. This asks the database for
+     * the head instead of inferring it from a page.
+     *
+     * NO ENTITY FILTER, deliberately. The chain is global: a review decision
+     * links to whatever came before it, review or not. Filtering here would
+     * return the head of a subsequence and mint a row pointing into the middle
+     * of the log.
+     */
+    async readChainHead() {
+      const { data, error } = await db()
+        .from(TABLES.decisions)
+        .select("*")
+        .order("sequence", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) fail(TABLES.decisions, "read", error);
+      return data ? fromDecisionRow(data) : null;
     },
 
     /**
@@ -873,6 +963,10 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
      * Ordered by `sequence` because that is the chain's own order; ordering by
      * a timestamp would reorder two rows written in the same millisecond and
      * make a valid chain look broken.
+     *
+     * NOT A HEAD READ. `limit` caps the page, so the last element of the result
+     * is the last element OF THE PAGE and not necessarily of the chain. Use
+     * readChainHead() for that. See acquisition-decision-log.js.
      */
     async listDecisions({ entityType = null, entityId = null, limit = 1000 } = {}) {
       let query = db().from(TABLES.decisions).select("*").order("sequence", { ascending: true }).limit(limit);
@@ -971,4 +1065,9 @@ module.exports = {
   tableMissing,
   uniqueViolation,
   provisioningError,
+  // Exported for the read-only chain verifier (M8I) so it re-hashes the same
+  // shapes the application does. A verifier with its own row mapper would drift
+  // from this one, and the drift is exactly the class of defect it exists to
+  // catch — M8H's timestamptz round trip was found that way.
+  fromDecisionRow,
 };

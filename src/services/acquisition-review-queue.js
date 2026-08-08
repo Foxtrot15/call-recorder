@@ -34,19 +34,24 @@
 // creates exactly the duplicate row M8G removed. The review queue exists to
 // hold candidates that must NOT become prospects until a human says so.
 //
-// ── SINGLE WRITER ───────────────────────────────────────────────────
-// The chain is continued across restarts by hydrating from the last stored row.
-// A fresh SEQUENTIAL process is safe. Two processes appending concurrently
-// would fork the chain and verifyRows() would report it. M8H does not solve
-// distributed append serialisation. See acquisition-audit.js.
+// ── CONCURRENT WRITERS (M8I supersedes M8H's single-writer note) ────
+// M8H continued the chain across a restart and said plainly that two processes
+// appending at once would fork it. They no longer can: laq3 puts
+// `unique (prev_hash)` on acquisition_decisions, so the database itself permits
+// exactly one successor per head and the loser of a race gets a 23505.
+//
+// Every append here goes through appendDecisionSerialised, which re-reads the
+// head, re-mints and re-tries on that refusal — bounded, and throwing rather
+// than reporting a decision as recorded when it was not. The protection is the
+// index, not the helper; the helper only makes losing survivable.
 //
 // Nothing here contacts anybody, and resolving a review does not make a
 // business callable.
 //
-// See test/acquisition-review-queue.test.js.
+// See test/acquisition-review-queue.test.js and test/acquisition-decision-log.test.js.
 
-const { createAuditLog } = require("./acquisition-audit");
 const { assertStoreContract } = require("./acquisition-store");
+const { appendDecisionSerialised, hydrateLog, ChainContentionError } = require("./acquisition-decision-log");
 const S = require("./acquisition-schema");
 
 const ENTITY_TYPE = "prospect";
@@ -90,22 +95,13 @@ const STATUS = Object.freeze({ OPEN: "open", RESOLVED: "resolved" });
 /**
  * Build a log that continues the persisted chain rather than starting a new one.
  *
- * Reads the last stored row and hands its hash and sequence to createAuditLog.
- * Without this a fresh process would begin a second chain from genesis and the
- * combined log would verify as altered — correctly, because it would have been.
+ * KEPT AS A NAME, NOT AS AN IMPLEMENTATION (M8I). M8H derived the head from the
+ * last element of listDecisions(), which is the last element of a PAGE — right
+ * for eighteen rows and silently wrong past the limit, where it would hydrate a
+ * long-dead head and mint a fork. It now delegates to the authoritative
+ * single-row head read.
  */
-async function hydratedLog({ store, now }) {
-  const all = await store.listDecisions({});
-  const last = all[all.length - 1];
-  return {
-    log: createAuditLog({
-      now,
-      initialHead: last ? last.entryHash : null,
-      initialSequence: last ? last.sequence : 0,
-    }),
-    priorRows: all,
-  };
-}
+const hydratedLog = hydrateLog;
 
 /** A review item id is derived from the candidate, so the same one is stable. */
 const reviewIdFor = (candidate) => `rv_${candidate.prospectId}`;
@@ -117,6 +113,11 @@ const reviewIdFor = (candidate) => `rv_${candidate.prospectId}`;
  * and returns it rather than opening a second one — otherwise a founder who ran
  * the same file twice would be asked the same question twice, and a nightly
  * import would build a queue nobody could face.
+ *
+ * THROWS ChainContentionError if the log could not be appended to. Deliberately
+ * not softened into a returned object: every other path here returns something
+ * truthy, so a "failed" object would be counted as an opened review by any
+ * caller that did not check, and the candidate would be dropped silently.
  */
 async function openReviewItem({ candidate, reason, signals = [], possibleMatches = [], evidence = [], store, now, actor = "acquisition-import", importContext = null } = {}) {
   if (typeof now !== "function") throw new Error("openReviewItem requires an injected now().");
@@ -136,38 +137,58 @@ async function openReviewItem({ candidate, reason, signals = [], possibleMatches
     return Object.freeze({ ...existing, created: false, message: `Already decided on ${existing.resolvedAt}: ${existing.decision}. Not reopened.` });
   }
 
-  const { log } = await hydratedLog({ store, now });
-  const row = log.record({
-    entityType: ENTITY_TYPE,
-    entityId: candidate.prospectId,
-    event: EVENT_OPENED,
-    decision: "defer",
-    actor,
-    actorKind: "system",
-    reason: reason || "This candidate needs a human decision before it can become a prospect.",
-    detail: {
-      reviewId,
-      candidate: {
-        prospectId: candidate.prospectId,
-        businessName: candidate.businessName,
-        tradeCategory: candidate.tradeCategory,
-        suburb: candidate.suburb,
-        state: candidate.state,
-        postcode: candidate.postcode,
-        timezone: candidate.timezone,
-        phones: (candidate.phones || []).map((p) => ({ raw: p.raw, label: p.label || null })),
-        origin: candidate.origin,
-      },
-      possibleMatches,
-      signals,
-      // Kept so a reviewer can see what the row claimed without re-reading the
-      // file, and so the evidence can be written if they approve it.
-      evidenceCount: evidence.length,
-      importContext,
+  // Minted per attempt. If another process opened this same review while we
+  // were reading, the re-check inside the callback finds it and aborts rather
+  // than opening a second one — which is the idempotency guard above, applied
+  // again at the point where it can actually be relied upon.
+  const outcome = await appendDecisionSerialised({
+    store,
+    now,
+    mint: async ({ log, attempt }) => {
+      if (attempt > 1) {
+        const raced = await loadReviewItem({ store, reviewId });
+        if (raced) return null;
+      }
+      return log.record({
+        entityType: ENTITY_TYPE,
+        entityId: candidate.prospectId,
+        event: EVENT_OPENED,
+        decision: "defer",
+        actor,
+        actorKind: "system",
+        reason: reason || "This candidate needs a human decision before it can become a prospect.",
+        detail: {
+          reviewId,
+          candidate: {
+            prospectId: candidate.prospectId,
+            businessName: candidate.businessName,
+            tradeCategory: candidate.tradeCategory,
+            suburb: candidate.suburb,
+            state: candidate.state,
+            postcode: candidate.postcode,
+            timezone: candidate.timezone,
+            phones: (candidate.phones || []).map((p) => ({ raw: p.raw, label: p.label || null })),
+            origin: candidate.origin,
+          },
+          possibleMatches,
+          signals,
+          // Kept so a reviewer can see what the row claimed without re-reading
+          // the file, and so the evidence can be written if they approve it.
+          evidenceCount: evidence.length,
+          importContext,
+        },
+      });
     },
   });
 
-  await store.appendDecision(row);
+  if (outcome.aborted || outcome.replayed) {
+    // Aborted: another process opened it while we were reading. Replayed: two
+    // processes minted a byte-identical row in the same millisecond and the
+    // second was recognised as the same decision. Either way this call did not
+    // create it, and saying it did would make an idempotency test pass twice.
+    const raced = await loadReviewItem({ store, reviewId });
+    return Object.freeze({ ...raced, created: false, message: `Another process opened this for review first; it is waiting since ${raced.openedAt}.` });
+  }
   return Object.freeze({ ...(await loadReviewItem({ store, reviewId })), created: true, message: `Opened for review.` });
 }
 
@@ -264,22 +285,56 @@ async function resolveReviewItem({ store, reviewId, decision, actor, reason, mer
     return { ok: false, code: "merge_target_required", message: "A merge has to name the prospect it merges into." };
   }
 
-  const { log } = await hydratedLog({ store, now });
-  const row = log.record({
-    entityType: ENTITY_TYPE,
-    entityId: item.prospectId,
-    event: EVENT_RESOLVED,
-    decision: LOG_DECISION[decision],
-    actor: who,
-    // A REVIEW DECISION IS A HUMAN ONE. The whole point of this queue is that
-    // the ambiguous cases are not decided by the classifier.
-    actorKind: "human",
-    reason: why,
-    detail: { reviewId: item.reviewId, reviewDecision: decision, mergeTarget, ...(detail || {}) },
-  });
+  // ── THE STALE-RESOLUTION CHECK, RE-RUN AFTER LOSING A RACE ────────
+  // The check above ran before the append. If another operator's resolution
+  // landed in between, appending ours would record a second human decision on
+  // an item that was already decided — the exact thing `already_resolved`
+  // exists to prevent, arriving through the door the pre-check does not cover.
+  // So it is asked again on every retry, against the state that beat us.
+  let raced = null;
+  let recorded = null;
 
-  await store.appendDecision(row);
-  return { ok: true, item: await loadReviewItem({ store, reviewId }), recorded: row };
+  let outcome;
+  try {
+    outcome = await appendDecisionSerialised({
+      store,
+      now,
+      mint: async ({ log, attempt }) => {
+        if (attempt > 1) {
+          const fresh = await loadReviewItem({ store, reviewId });
+          if (fresh && fresh.status === STATUS.RESOLVED) {
+            raced = fresh;
+            return null;
+          }
+        }
+        recorded = log.record({
+          entityType: ENTITY_TYPE,
+          entityId: item.prospectId,
+          event: EVENT_RESOLVED,
+          decision: LOG_DECISION[decision],
+          actor: who,
+          // A REVIEW DECISION IS A HUMAN ONE. The whole point of this queue is
+          // that the ambiguous cases are not decided by the classifier.
+          actorKind: "human",
+          reason: why,
+          detail: { reviewId: item.reviewId, reviewDecision: decision, mergeTarget, ...(detail || {}) },
+        });
+        return recorded;
+      },
+    });
+  } catch (err) {
+    if (err instanceof ChainContentionError) {
+      // Reported as a failure, never as a resolution. Nothing was written.
+      return { ok: false, code: "chain_contention", message: `The decision log was too busy to record this after ${err.attempts} attempts. Nothing was changed and the item is still open. Try again.` };
+    }
+    throw err;
+  }
+
+  if (outcome.aborted) {
+    return { ok: false, code: "already_resolved", message: `"${reviewId}" was decided by ${raced.decidedBy} on ${raced.resolvedAt}: ${raced.decision}, while this decision was being recorded. Nothing was changed.` };
+  }
+
+  return { ok: true, item: await loadReviewItem({ store, reviewId }), recorded: outcome.decision || recorded };
 }
 
 module.exports = {

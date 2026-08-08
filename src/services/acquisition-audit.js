@@ -121,18 +121,24 @@ function verifyRows(rows) {
  * verifyRows() is unchanged and still validates the whole sequence — hydration
  * makes a restart continuous, it does not make verification more forgiving.
  *
- * ── THIS IS NOT CONCURRENCY SAFETY, AND MUST NOT BE READ AS IT ──────
- * A fresh SEQUENTIAL process can safely continue the chain. Two processes
- * hydrating the same head and both appending would fork it, and the second
- * write would be reported as a break rather than lost quietly.
+ * ── HYDRATION IS STILL NOT, BY ITSELF, CONCURRENCY SAFETY (M8I) ─────
+ * This function will happily mint a successor to whatever head it was handed.
+ * Two callers handed the same head both produce a row claiming the same
+ * prev_hash, and nothing here can tell that apart from ordinary use — which is
+ * correct, because the log is not the right place to arbitrate.
  *
- * M8H does not solve distributed append serialisation and does not claim to.
- * The pilot is single-writer for acquisition_decisions, the same assumption
- * M8C made explicit for suppression. Before multiple acquisition workers may
- * write decisions concurrently this needs a database-level serialisation
- * mechanism — an advisory lock, a serialisable transaction, or moving the
- * chain head into a row that is updated under a constraint. None of those is
- * built here.
+ * The arbitration is one line of SQL: `unique (prev_hash)` on
+ * acquisition_decisions (laq3, applied to dev in M8I). The database permits
+ * exactly one successor per head and the loser gets a 23505; the retry that
+ * turns that refusal into a correct outcome lives in
+ * acquisition-decision-log.js. Read the head with store.readChainHead(), never
+ * off the end of a listDecisions() page — that call is capped, and at the cap
+ * the last element is the last of the PAGE, not of the chain.
+ *
+ * M8H's SINGLE WRITER limitation is closed. Note that an advisory lock, a
+ * serialisable transaction and a chain-head row were each considered and
+ * rejected: all three assume a client that can hold a transaction open across
+ * calls, and PostgREST cannot. See spec §40.2.
  */
 function createAuditLog({ now, sink = null, initialHead = null, initialSequence = 0 } = {}) {
   if (typeof now !== "function") {
