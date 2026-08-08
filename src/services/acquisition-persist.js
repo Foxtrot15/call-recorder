@@ -247,6 +247,102 @@ async function loadExistingForImport({ store, text, profileName, limit = 500 } =
 }
 
 /**
+ * Attach what a merged listing genuinely adds, to the business we already have.
+ *
+ * ── WHAT M8G DROPPED, AND WHY THIS IS NOT JUST "ALSO WRITE IT" ──────
+ * When dedupe concluded a listing was a business already stored, M8G reported
+ * the merge and discarded everything the listing carried — including a phone
+ * number the business had started publishing. Safe, and lossy.
+ *
+ * The reason it could not simply be written is that the candidate's evidence
+ * rows name the CANDIDATE's prospect id. Re-pointing them by editing the field
+ * would leave a content hash computed against a row that no longer exists, so
+ * the same fact would append again on the next import, forever, into an
+ * append-only table.
+ *
+ * So the claims are RE-RECORDED against the canonical prospect. The hash is
+ * then computed over the row it will actually live on, which makes it
+ * deterministic: every re-run produces the same hash and appends nothing.
+ *
+ * ── ADDITIVE ONLY. NOTHING CANONICAL IS OVERWRITTEN. ────────────────
+ * A merge never touches the canonical prospect's own fields. A directory row
+ * that spells the suburb differently, or carries a shorter trading name, is not
+ * evidence that the stored record is wrong — it is evidence that two sources
+ * disagree, and the append-only ledger is where a disagreement belongs. The
+ * canonical row keeps what a human last accepted.
+ *
+ * ── AND IT CANNOT UPGRADE SOURCE AUTHORITY ──────────────────────────
+ * The re-recorded claims keep the MERGED listing's own source, which is a
+ * directory. A weaker source cannot overwrite a stronger one because it does
+ * not overwrite anything at all: both rows remain, and assessEvidence still
+ * reads the strongest. This is the M8G defect's mirror image and the reason it
+ * is called out here.
+ */
+async function attachMergedListing({ canonicalProspectId, candidate, evidence = [], store, now, ledger = null } = {}) {
+  if (typeof now !== "function") throw new Error("attachMergedListing requires an injected now().");
+  assertStoreContract(store, "merge store");
+
+  const canonical = await store.loadProspect(canonicalProspectId);
+  if (!canonical) {
+    return Object.freeze({ ok: false, code: "canonical_missing", message: `There is no stored prospect "${canonicalProspectId}" to merge into.`, phonesAdded: 0, evidenceAdded: 0 });
+  }
+
+  const result = { canonicalProspectId, phonesAdded: 0, phonesAlreadyPresent: 0, evidenceAdded: 0, evidenceAlreadyPresent: 0 };
+
+  // ── Phones. Raw value preserved: laq1 stores the number as published,
+  // because that is the thing a reviewer checks against the source.
+  for (const phone of candidate.phones || []) {
+    const normalised = normalisePhone(phone.raw);
+    if (!normalised.ok || !normalised.callable) continue;
+    const written = await store.upsertProspectPhone({
+      prospectId: canonicalProspectId,
+      raw: phone.raw,
+      label: phone.label || null,
+      evidenceId: null,
+    });
+    if (written.created) result.phonesAdded += 1;
+    else result.phonesAlreadyPresent += 1;
+  }
+
+  // ── Evidence, re-recorded under the canonical id so the hash is right.
+  const { createEvidenceLedger } = require("./acquisition-evidence");
+  const rebuilt = ledger || createEvidenceLedger({ now });
+  for (const row of evidence) {
+    let recorded;
+    try {
+      recorded = rebuilt.record({
+        prospectId: canonicalProspectId,
+        kind: row.kind,
+        captureMode: row.captureMode,
+        value: row.value,
+        note: row.note || null,
+        excerpt: row.excerpt || null,
+        observedAt: row.observedAt,
+        capturedBy: row.capturedBy,
+        source: row.source ? { url: row.source.url, sourceType: row.source.sourceType, label: row.source.label, identifier: row.source.identifier, register: row.source.register } : null,
+      });
+    } catch {
+      // A claim the ledger refuses is a claim that should not be stored. It is
+      // skipped rather than forced through, and the merge continues.
+      continue;
+    }
+    const written = await store.appendEvidence(recorded);
+    if (written.created) result.evidenceAdded += 1;
+    else result.evidenceAlreadyPresent += 1;
+  }
+
+  const changed = result.phonesAdded > 0 || result.evidenceAdded > 0;
+  return Object.freeze({
+    ok: true,
+    ...result,
+    outcome: changed ? PERSIST_OUTCOMES.UPDATED : PERSIST_OUTCOMES.UNCHANGED,
+    message: changed
+      ? `Merged into "${canonical.businessName}": ${result.phonesAdded} new number(s), ${result.evidenceAdded} new evidence row(s). Nothing about the stored business was overwritten.`
+      : `"${canonical.businessName}" already held everything this listing carried.`,
+  });
+}
+
+/**
  * Persist a whole import result.
  *
  * Takes what importBusinessCsv returned plus the ledger it wrote into, and
@@ -286,10 +382,70 @@ async function persistImportResult({ result, ledger, store, now } = {}) {
       .filter(Boolean)
   );
 
+  // ── Merged listings: attach what is genuinely new (M8H) ───────────
+  const merges = [];
+  for (const o of result.outcomes || []) {
+    if (o.status !== "merged" || !o.mergedInto || !o.mergedCandidate) continue;
+    merges.push(
+      await attachMergedListing({
+        canonicalProspectId: o.mergedInto,
+        candidate: o.mergedCandidate,
+        evidence: o.mergedEvidence || [],
+        store,
+        now,
+      })
+    );
+  }
+
   const persisted = [];
   for (const prospect of result.prospects) {
     if (heldForReview.has(prospect.prospectId)) {
       const outcome = result.outcomes.find((o) => o.prospectId === prospect.prospectId);
+
+      /**
+       * HELD, AND NOW DURABLE (M8H).
+       *
+       * Until M8H this returned a message and stored nothing, so the ambiguous
+       * candidates — the ones actually needing a person — were the only part of
+       * an import that did not survive the process. A founder could be told
+       * about them exactly once.
+       *
+       * They now open a review item in the decision log. The candidate is still
+       * NOT written as a prospect, which is the whole point: a possible
+       * duplicate must not become the duplicate row while nobody has decided.
+       */
+      let review = null;
+      try {
+        const { openReviewItem } = require("./acquisition-review-queue");
+        review = await openReviewItem({
+          candidate: prospect,
+          reason: outcome ? outcome.message : "This candidate may be a business already known.",
+          signals: outcome && outcome.signals ? outcome.signals : [],
+          possibleMatches: outcome && outcome.possibleDuplicateOf ? [outcome.possibleDuplicateOf] : [],
+          evidence: ledger.forProspect(prospect.prospectId),
+          store,
+          now,
+          importContext: outcome ? { line: outcome.line, classification: outcome.classification ? outcome.classification.verdict : null } : null,
+        });
+      } catch (err) {
+        // A review item that could not be opened must be loud. Silently
+        // dropping it would put us back where M8G was, but with a message
+        // saying otherwise.
+        persisted.push(
+          Object.freeze({
+            prospectId: prospect.prospectId,
+            businessName: prospect.businessName,
+            outcome: PERSIST_OUTCOMES.FAILED,
+            stage: "review",
+            created: false,
+            phonesAdded: 0,
+            evidenceAdded: 0,
+            message: `This candidate needs review and the review item could not be opened: ${err.message}. It has NOT been stored and is not queued.`,
+          })
+        );
+        continue;
+      }
+
       persisted.push(
         Object.freeze({
           prospectId: prospect.prospectId,
@@ -300,7 +456,9 @@ async function persistImportResult({ result, ledger, store, now } = {}) {
           phonesAdded: 0,
           evidenceAdded: 0,
           possibleDuplicateOf: outcome ? outcome.possibleDuplicateOf : null,
-          message: `Not stored: this may be the same business as one already known. ${outcome ? outcome.message : ""} A human decides whether it is a second business or the same one spelled differently.`,
+          reviewId: review ? review.reviewId : null,
+          reviewCreated: review ? review.created === true : false,
+          message: `Not stored as a prospect: this may be the same business as one already known. ${review && review.created ? `Queued for review as ${review.reviewId}.` : `Already queued as ${review ? review.reviewId : "an earlier review item"}.`}`,
         })
       );
       continue;
@@ -318,6 +476,7 @@ async function persistImportResult({ result, ledger, store, now } = {}) {
   const by = (outcome) => persisted.filter((p) => p.outcome === outcome).length;
   return Object.freeze({
     persisted: Object.freeze(persisted),
+    merges: Object.freeze(merges),
     summary: Object.freeze({
       attempted: persisted.length,
       created: by(PERSIST_OUTCOMES.CREATED),
@@ -326,10 +485,13 @@ async function persistImportResult({ result, ledger, store, now } = {}) {
       partial: by(PERSIST_OUTCOMES.PARTIAL),
       failed: by(PERSIST_OUTCOMES.FAILED),
       heldForReview: by(PERSIST_OUTCOMES.REVIEW_REQUIRED),
+      mergesEnriched: merges.filter((m) => m.ok && m.outcome === PERSIST_OUTCOMES.UPDATED).length,
+      mergePhonesAdded: merges.reduce((n, m) => n + (m.phonesAdded || 0), 0),
+      mergeEvidenceAdded: merges.reduce((n, m) => n + (m.evidenceAdded || 0), 0),
       phonesAdded: persisted.reduce((n, p) => n + (p.phonesAdded || 0), 0),
       evidenceAdded: persisted.reduce((n, p) => n + (p.evidenceAdded || 0), 0),
     }),
   });
 }
 
-module.exports = { persistImportedProspect, persistImportResult, loadExistingForImport, PERSIST_OUTCOMES };
+module.exports = { persistImportedProspect, persistImportResult, loadExistingForImport, attachMergedListing, PERSIST_OUTCOMES };

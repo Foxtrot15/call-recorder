@@ -258,11 +258,19 @@ function importBusinessCsv({ text, profileName, now, ledger, existing = [], qual
       const conclusive = comparisons.find((c) => c.decision.autoConsolidationSafe === true);
       if (conclusive) {
         outcomes.push(
-          outcome(record, IMPORT_OUTCOMES.MERGED, `Already known as "${conclusive.other.businessName}" (${conclusive.decision.label}): ${conclusive.decision.reasons.join(" ")} Evidence was recorded against the existing business rather than creating a second one.`, {
+          outcome(record, IMPORT_OUTCOMES.MERGED, `Already known as "${conclusive.other.businessName}" (${conclusive.decision.label}): ${conclusive.decision.reasons.join(" ")} Anything genuinely new about it is attached to the existing business rather than creating a second one.`, {
             mergedInto: conclusive.other.prospectId,
             duplicateDecision: conclusive.decision.decision,
             signals: conclusive.decision.signals,
             classification,
+            // CARRIED, NOT DISCARDED (M8H). Until now a merge threw the
+            // listing away, including a number the business had started
+            // publishing. The candidate and its claims ride along so the
+            // persistence layer can attach what is genuinely new to the
+            // canonical business. Nothing here decides to; it only makes it
+            // possible.
+            mergedCandidate: Object.freeze({ ...prospect }),
+            mergedEvidence: Object.freeze([...built.evidence]),
           })
         );
         continue;
@@ -328,11 +336,25 @@ function reviewMessage(possible, classification, record) {
   return `Imported, but a human should look: ${reasons.join("; ")}.`;
 }
 
-/** The shape acquisition-dedupe compares. */
+/**
+ * The shape acquisition-dedupe compares.
+ *
+ * `numbers` is taken from the prospect when it already carries them, which is
+ * the case for candidates loaded FROM THE STORE (M8G's loadExistingForImport
+ * attaches the stored phone rows, normalised). An earlier version always used
+ * the in-run `usable` list, which is empty for a stored prospect — so a
+ * business already in the database looked like a business with no phone, the
+ * strongest dedupe signal never fired, and a listing that should have merged
+ * conclusively came back as "possible duplicate" instead.
+ */
 function shapeForDedupe(prospect, usable) {
+  const numbers =
+    Array.isArray(prospect.numbers) && prospect.numbers.length > 0
+      ? prospect.numbers
+      : (usable || []).map((p) => ({ e164: p.e164 }));
   return {
     ...prospect,
-    numbers: (usable || []).map((p) => ({ e164: p.e164 })),
+    numbers,
     evidenceCount: 3,
     hasOfficialSource: false,
   };
