@@ -595,49 +595,17 @@ describe("the import path cannot contact anybody", () => {
 
 // ---------------------------------------------------------------------------
 
-describe("the founder-facing command is dry-run by construction", () => {
-  const CLI = path.join(__dirname, "..", "scripts", "acquisition-import.js");
-  const WALK = path.join(__dirname, "..", "scripts", "acquisition-m8f-walkthrough.js");
-  const cliSrc = fs.readFileSync(CLI, "utf8");
-  const walkSrc = fs.readFileSync(WALK, "utf8");
+/**
+ * The M8F dry-run-only ratchets lived here and have been REPLACED, not deleted.
+ *
+ * They asserted that no --write, --commit or --apply mode existed, which was
+ * true and load-bearing while there was nowhere to write to. M8G gave the
+ * command a real write mode, so those assertions became false statements about
+ * the system rather than guards on it.
+ *
+ * Their successors are in test/acquisition-persist.test.js under "the CLI's
+ * write mode is explicit and dev-only": dry run remains the default, --write is
+ * the only way to persist, the ambiguous alternatives are still refused, and it
+ * refuses any project that is not dev.
+ */
 
-  /**
-   * NOT "the write flag defaults to off" — there is no write flag. A default
-   * can be overridden by whoever is in a hurry; an absent capability cannot.
-   */
-  it("has no write, commit or apply mode", () => {
-    for (const flag of ["--write", "--commit", "--apply", "--live", "--execute"]) {
-      assert.ok(!new RegExp(`["']${flag}["']`).test(cliSrc), `the CLI must not accept ${flag}`);
-    }
-  });
-
-  it("cannot persist anything", () => {
-    for (const pattern of [/writeFileSync|appendFileSync|createWriteStream/, /require\(["']@supabase/, /acquisition-store/, /acquisition-durable/]) {
-      assert.ok(!pattern.test(cliSrc), `the CLI must not be able to persist: ${pattern}`);
-    }
-  });
-
-  it("cannot reach a network or a provider", () => {
-    for (const src of [cliSrc, walkSrc]) {
-      for (const pattern of [/require\(["'](https?|node:https?|axios|node-fetch|twilio|retell-sdk|nodemailer)["']\)/, /\bfetch\s*\(/, /messages\.create/, /calls\.create/]) {
-        assert.ok(!pattern.test(src), `no network or provider: ${pattern}`);
-      }
-    }
-  });
-
-  it("reads a file and nothing else", () => {
-    assert.ok(/readFileSync/.test(cliSrc), "reading the CSV is the only I/O it needs");
-    assert.ok(!/process\.env\.[A-Z_]*(KEY|SECRET|TOKEN|PASSWORD)/.test(cliSrc), "it should never touch a credential");
-  });
-
-  it("names the profiles explicitly rather than guessing", () => {
-    assert.ok(/--source/.test(cliSrc));
-    assert.ok(/listImportProfiles/.test(cliSrc), "the choice must come from the profile registry");
-  });
-
-  it("the walkthrough imports no store and writes nothing", () => {
-    for (const pattern of [/acquisition-store/, /acquisition-durable/, /writeFileSync|appendFileSync/]) {
-      assert.ok(!pattern.test(walkSrc), `the walkthrough must stay in memory: ${pattern}`);
-    }
-  });
-});
