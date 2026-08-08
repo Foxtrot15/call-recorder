@@ -470,20 +470,51 @@ expensive to reverse afterwards.
 
 ### What dev holds now
 
-Four rows, deliberately — three from §7 (M8D) and one from M8E. They describe
-two invented businesses on invented numbers, they are the only acquisition data
-on dev, and they are not to be removed — see §7.4.
+Sixteen rows across three milestones. Every one describes an invented business
+on an invented number; they are the only acquisition data on dev, and none is to
+be removed — see §7.4.
 
-| Table | Row | From |
+| Table | Rows | From |
 |---|---|---|
 | `acquisition_suppressions` | one `opt_out`, actor `m8d-restart-probe` | M8D |
 | `acquisition_contact_outcomes` | one `opt_out`, actor `m8d-restart-probe` | M8D |
 | `acquisition_prospects` | `M8D Restart Probe Locksmiths` | M8D |
 | `acquisition_suppressions` | one `opt_out`, actor `m8e-crossprocess-probe` | M8E |
+| `acquisition_prospects` | **2** — `pr_0b9f51cfe79018067bf1`, `pr_f546eb7194421d554527` | M8G |
+| `acquisition_prospect_phones` | **1** | M8G |
+| `acquisition_evidence` | **9** | M8G |
 
 The M8E row cost **one** row rather than three, and the reason is the property
 M8E exists to defend: suppressions carry no foreign key, so proving one needs no
 prospect and no outcome to hang it on.
+
+### The M8G rows that were not planned
+
+M8G was approved for **one** invented business. It left **two** prospect rows
+and nine evidence rows, and that overrun is recorded here rather than rounded
+off.
+
+The first real run of the drifted re-import returned `review_required`, and the
+pre-fix code persisted it — giving the same invented business a second prospect
+row (`…Pty Ltd`) and five further evidence rows. That is precisely the duplicate
+explosion M8G exists to prevent, and running the proof against real Postgres is
+what found it.
+
+**Cleanup was attempted and correctly refused:**
+
+```
+delete acquisition_evidence   → Table acquisition_evidence is append-only:
+                                 DELETE is not permitted.
+delete acquisition_prospects  → violates foreign key constraint
+                                 "acquisition_evidence_prospect_id_fkey"
+```
+
+Two phone rows *were* removable and were removed. **No trigger was disabled and
+no foreign key weakened** — the refusals above are the controls working, and
+bypassing them to tidy a fictional row would cost more than the row is worth.
+
+The fix is committed and re-verified: a drifted re-import now creates nothing
+and is held for a human.
 
 `supabase/sql/verification/07_restart_proof_verify.sql` asserts exactly this,
 and asserts that all four append-only triggers are still enabled.

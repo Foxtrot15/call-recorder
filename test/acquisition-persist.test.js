@@ -477,3 +477,51 @@ describe("the CLI's write mode is explicit and dev-only", () => {
     assert.ok(!/console\.log\([^)]*process\.env/.test(src));
   });
 });
+
+// ---------------------------------------------------------------------------
+
+/**
+ * DOCUMENTATION STATUS (M8G-CLOSE).
+ *
+ * This project has twice shipped a document that described a state the system
+ * had left — "both migrations are unapplied" after they were applied, and "dry
+ * run is the only mode" after a write mode existed. Both were caught by reading
+ * rather than by a test. These are the cheap assertions that would have caught
+ * them, aimed at the claims most likely to rot next.
+ */
+describe("the docs describe the system that exists", () => {
+  const read = (f) => fs.readFileSync(path.join(__dirname, "..", "docs", f), "utf8");
+  const spec = read("LOCKSMITH_ACQUISITION_SPEC.md");
+  const runbook = read("ACQUISITION_SQL_RUNBOOK.md");
+
+  it("does not still claim the importer has no write mode", () => {
+    const claim = /Dry run is not a flag; it is the only mode/;
+    if (claim.test(spec)) {
+      assert.ok(/Superseded in part by M8G/.test(spec), "the superseded claim must be marked as superseded, not left standing");
+    }
+    assert.ok(/`--write`/.test(spec), "the write mode must be documented somewhere");
+  });
+
+  it("records the M8G residue truthfully, including what was not planned", () => {
+    for (const id of ["pr_0b9f51cfe79018067bf1", "pr_f546eb7194421d554527"]) {
+      assert.ok(spec.includes(id), `${id} must appear in the spec's residue table`);
+      assert.ok(runbook.includes(id), `${id} must appear in the runbook's residue table`);
+    }
+    assert.ok(/not planned|unplanned|were not planned/i.test(spec), "the overrun must be named as an overrun");
+    assert.ok(/append-only/.test(runbook) && /RESTRICT/.test(runbook), "and the reason it remains must be stated");
+  });
+
+  it("does not claim the append-only controls were bypassed", () => {
+    assert.ok(/no trigger was disabled/i.test(runbook), "the runbook must state enforcement was never disabled");
+    assert.ok(!/disable trigger/i.test(spec), "nothing should read as an instruction to disable enforcement");
+  });
+
+  it("keeps merge enrichment open rather than implying it is done", () => {
+    assert.ok(/Known limitation/i.test(spec), "the limitation must be labelled");
+    assert.ok(/M8H/.test(spec), "and carried forward to the next milestone");
+  });
+
+  it("still says production is untouched", () => {
+    assert.ok(/[Pp]roduction is untouched|not to production|NOT applied to production/.test(spec));
+  });
+});

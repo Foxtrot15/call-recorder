@@ -1601,20 +1601,19 @@ to withhold.
 
 Live website verification remains **out of scope and unbuilt**.
 
-### 37.9 The dry-run command
+### 37.9 The import command
+
+> **Superseded in part by M8G (§38).** At M8F this command had no write mode,
+> because there was nowhere to write to. It now has one. The paragraph that
+> said "dry run is the only mode" was true when written and is no longer;
+> §38.4 is the current description.
 
 ```
 node scripts/acquisition-import.js --file <csv> --source outscraper-google-maps
 ```
 
-**Dry run is not a flag; it is the only mode.** There is no `--write`,
-`--commit` or `--apply`, and the CLI rejects them by name. This is not "the
-write flag defaults to off" — a default can be overridden by whoever is in a
-hurry; an absent capability cannot. Adding one would be a reviewable change, and
-would have to invent a prospect-writing path that does not currently exist.
-
-The command reads a file and prints a report. It imports no store, no provider
-and no network client, and a test asserts each.
+Without `--write` the command reads a file and prints a report. It stores
+nothing, reads no credential, and imports no provider or network client.
 
 ### 37.10 What importing does NOT do
 
@@ -1626,3 +1625,159 @@ An imported prospect is **not callable**, and tests pin every part of this:
   that opted out**;
 - there is no dialler, and the M8E authorisation gate still stands between any
   prospect and a call.
+
+---
+
+## 38. M8G — persisted prospects, and what a re-import may and may not do
+
+**Owns (source of truth for):** how an imported prospect reaches the database,
+what a second import of the same business does, and what persistence does not
+authorise.
+
+M8F could turn a CSV into clean, deduplicated, explainable prospects. They
+evaporated when the process exited. M8G writes them into the `laq1` tables,
+which had been applied to dev since M8D with nothing writing to them.
+
+**No new SQL.** Every field M8F produces maps onto columns already applied.
+`acquisition_prospects.timezone` is `NOT NULL` and `createProspect` already
+refuses a prospect without one, so the strictest column matches the domain
+rather than fighting it.
+
+### 38.1 The two modes
+
+| | **DRY RUN** (default) | **WRITE** (`--write`) |
+|---|---|---|
+| Persists | nothing | prospect, phones, evidence |
+| Credentials | **none read** | `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` |
+| Project | n/a | **dev only**, refuses any other ref |
+| Contacts anyone | no | no |
+| Approves compliance | no | **no** |
+
+**`--write`, and nothing else.** Not `--live`, which reads like "go live" and
+would one day be typed by somebody who meant "use real data"; not `--commit`,
+which is a git verb here. Omitting it can only produce a report, and no
+environment variable or default can turn a dry run into a write. A dry run never
+reaches the credential branch, so it never reads one.
+
+**Writing does not make a business callable.** It lands `discovered`,
+unreviewed and unwashed, and still faces review, qualification, DNCR,
+suppression, the calling policy and the M8E authorisation gate.
+
+### 38.2 Persistence order, because there is no transaction
+
+The Supabase adapter issues one statement per call and cannot wrap three tables
+in a transaction. Pretending otherwise would be worse than not having one, so
+the order is chosen to make every partial state safe:
+
+1. **Prospect first.** Both other tables key to it; a crash here leaves nothing.
+2. **Phones second.** A prospect with no numbers is a state review already
+   refuses to approve.
+3. **Evidence last** — the deliberate one. Evidence is append-only and can never
+   be corrected. Writing it last means a crash leaves *fewer* claims than we
+   hold, rather than permanent claims about a business whose row never appeared.
+
+**Retry is the repair.** Re-running adds exactly what is missing. There is no
+reconciliation job because there is nothing for one to do.
+
+### 38.3 Idempotency keys
+
+| Table | Key | Effect |
+|---|---|---|
+| `acquisition_prospects` | deterministic `prospect_id` | upsert; the same business is one row |
+| `acquisition_prospect_phones` | `unique(prospect_id, raw)` (laq1) | a re-published number is not stored twice |
+| `acquisition_evidence` | **`content_hash`** | identical claims never multiply |
+
+**Evidence deduplicates on content, not on id.** The ledger's `evidenceId` folds
+in a sequence number and a timestamp, so the same fact re-imported carries a
+**new id and the same hash**. Deduplicating on the id would have appended a row
+per import forever, into a table that cannot be cleaned up.
+
+### 38.4 What a second import does
+
+| Case | Result |
+|---|---|
+| Exact same file | Recognised and merged; nothing written |
+| Drifted name / suburb / number formatting | Recognised from the store, **no new prospect** |
+| Genuinely new phone on a new business | Stored once |
+| A genuine branch (different suburb + number) | Stays a **separate** prospect |
+| **Possible duplicate** | **Held for a human. Not persisted.** |
+
+`loadExistingForImport` closes a gap M8F could not see: in-run, the importer
+compares a row against the rows above it; across runs it had nothing. Ids are
+deterministic, so the same file twice is safe — but a **drifting name** produces
+a different id, and "…Locksmiths" and "…Locksmiths Pty Ltd" would have become
+two prospects a week apart. The store is now asked which businesses a file might
+already be about, narrowed by source id and normalised number.
+
+**A possible duplicate is reported, not stored.** Dedupe has three answers and
+the middle one means the evidence does not decide. Persisting it anyway is
+exactly what happened on the first real run — see §38.7. Storing it would be
+deciding by default, in the direction that cannot be undone.
+
+### 38.5 The provenance fix (`bc008e9`)
+
+Found by this milestone's audit, before anything was written.
+
+`acquisition-source` reads a declared type from **`sourceType`**. The importer
+passed `type`, which nothing reads, so listings were classified by hostname
+alone — and **an unrecognised host falls through to `official_website`**, the
+most authoritative classification there is. Every imported directory phone was
+stored as officially sourced with `official: true`, and
+`assessEvidence.phoneFromOfficialSource` reported a directory number as
+officially sourced. Source authority is the control this pipeline was built
+around, and it was failing **open**.
+
+The fix is in `acquisition-source`, not only the importer: a declared type is
+now honoured **when it is weaker than the host suggests**. Lowering your own
+authority can only add caution; raising it is the unverifiable assertion the
+module already refuses, and still refuses.
+
+**An imported directory phone is not official-site evidence**, and a test
+asserts `phoneFromOfficialSource === false` for one.
+
+### 38.6 Suppression is unaffected by any of this
+
+A re-import cannot weaken it. Proven across two real processes: a business
+carrying the existing M8E fictional opt-out, presented as a freshly imported,
+drifted record, is refused by eligibility and then by the **M8E authorisation
+gate reading authoritative durable state**. Pre-dial permission is still decided
+there and nowhere else.
+
+### 38.7 Dev residue — including what was not planned
+
+**LAQ1/LAQ2 are applied to dev only. Production is untouched.**
+
+| Table | Rows | Planned? |
+|---|---|---|
+| `acquisition_prospects` | **2** — `pr_0b9f51cfe79018067bf1`, `pr_f546eb7194421d554527` | 1 approved, **1 not** |
+| `acquisition_prospect_phones` | **1** | yes |
+| `acquisition_evidence` | **9** | 4 approved, **5 not** |
+| suppressions / outcomes / queue / qualifications created by M8G | **0** | yes |
+
+**The unplanned rows, and why they remain.** The first real run of the drifted
+re-import returned `review_required`, and the pre-fix code persisted it — giving
+the same invented business a second prospect row and five more evidence rows.
+That is the duplicate explosion this milestone exists to prevent, and the real
+proof is what found it.
+
+Cleanup was attempted and correctly refused:
+
+- `acquisition_evidence` is **append-only** — `DELETE is not permitted`;
+- evidence pins the prospect through **`ON DELETE RESTRICT`**;
+- **no trigger was disabled and no foreign key weakened.**
+
+Both rows describe the same invented business on invented numbers. The fix is
+committed and re-verified: the drifted import now creates nothing.
+
+### 38.8 Known limitation — open for M8H
+
+**When an import merges a listing into a business already stored, nothing from
+that listing is persisted — including a genuinely new number it published.** The
+merged row is reported with the signals that produced the merge, and a human
+attaches the number.
+
+This is deliberate and conservative: attaching a callable number on the strength
+of a merge writes something nobody confirmed, and a wrong one cannot be unwritten
+cheaply. **Merge enrichment is not complete**, and automatic attachment on a
+*conclusive* merge is the obvious next step. It is listed as an open item rather
+than described as done.
