@@ -377,7 +377,46 @@ describe("provenance goes to the one ledger that already exists", () => {
     const r = runImport({ ledger });
     const imported = r.outcomes.find((o) => o.status === IMPORT_OUTCOMES.IMPORTED);
     const phone = ledger.forProspect(imported.prospectId).find((e) => e.kind === "phone");
-    assert.notStrictEqual(phone.source.type, "official_website", "the phone came from the map listing, not from the business's site");
+
+    /**
+     * THE DEFECT THIS NOW ACTUALLY CATCHES.
+     *
+     * The previous version read `phone.source.type`. The field is `sourceType`,
+     * so it compared `undefined` against a string, passed, and hid the fact
+     * that every imported map-listing phone was being recorded as
+     * `official_website` with `official: true` and `authoritative: true` —
+     * because an unrecognised hostname falls through to the most authoritative
+     * classification there is.
+     *
+     * `phoneFromOfficialSource` then reported a directory number as officially
+     * sourced, removing a review gap that should exist. Asserted on all three
+     * fields now, by their real names.
+     */
+    assert.strictEqual(phone.source.sourceType, "map_listing", "the phone came from the map listing, not the business's site");
+    assert.strictEqual(phone.source.official, false, "a map listing is not an official source");
+
+    /**
+     * `authoritative` is a different axis and is left alone here. A1 sets it
+     * from captureMode: `operator_import` means an operator supplied the file,
+     * which is true of a CSV a founder exported.
+     *
+     * Worth knowing rather than changing under M8G: bulk-importing 900 rows
+     * marks all 900 `authoritative`, and `assessEvidence.humanVerified` reads
+     * that as "a human verified something". A founder attested to the FILE, not
+     * to each row in it. That distinction is an A1 contract question, not an
+     * import bug, and the safety-critical axis — whether a directory number
+     * counts as officially sourced — is asserted above and below.
+     */
+    assert.strictEqual(phone.captureMode, "operator_import");
+  });
+
+  it("does not let an imported listing satisfy the official-source requirement", () => {
+    const { assessEvidence } = require("../src/services/acquisition-evidence");
+    const ledger = createEvidenceLedger({ now });
+    const r = runImport({ ledger });
+    const imported = r.outcomes.find((o) => o.status === IMPORT_OUTCOMES.IMPORTED);
+    const assessment = assessEvidence(ledger.forProspect(imported.prospectId));
+    assert.strictEqual(assessment.phoneFromOfficialSource, false, "a directory number must never read as officially sourced");
   });
 
   it("creates no second provenance store", () => {

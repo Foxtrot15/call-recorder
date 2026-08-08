@@ -79,10 +79,23 @@ const outcome = (row, status, message, extra = {}) =>
  * did not supply.
  */
 function toCandidate(record, profile) {
+  /**
+   * `sourceType`, not `type` — and this mattered.
+   *
+   * acquisition-source reads `sourceType`. An earlier version of this function
+   * passed `type`, which nothing read, so the listing was classified purely by
+   * its hostname; an unrecognised host falls through to `official_website`, and
+   * every imported directory phone was recorded as officially sourced with
+   * `authoritative: true`.
+   *
+   * The declaration is honoured because it is WEAKER than the hostname alone
+   * would suggest. A profile knows what kind of source its export came from and
+   * the URL cannot say so on its own.
+   */
   const listing = {
     url: record.sourceUrl || null,
     label: profile.sourceLabel,
-    type: profile.sourceType,
+    sourceType: profile.sourceType,
     identifier: record.sourceId || null,
     register: null,
   };
@@ -91,8 +104,13 @@ function toCandidate(record, profile) {
   // It is not visited, and claiming it published anything would be a lie about
   // where the facts came from — so it is cited for nothing, and exists in the
   // record so a later verification step can use it.
+  //
+  // The website is recorded as `unverified_directory` rather than
+  // `official_website` DESPITE almost certainly being the business's own site.
+  // Nothing here has opened it. Classifying it as official would assert a
+  // verification that did not happen, and it is cited for no claim anyway.
   const refs = [listing];
-  if (record.website) refs.push({ url: record.website, label: "Business website (unverified)", type: "official_website" });
+  if (record.website) refs.push({ url: record.website, label: "Business website (not verified by this build)", sourceType: "unverified_directory" });
 
   const evidenceSources = {
     business_name: listing,

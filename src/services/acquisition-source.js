@@ -305,14 +305,46 @@ function classifySource(reference) {
     extraCaveats.push("This link points at the site's front page, not at this business's own listing.");
   }
 
+  /**
+   * A CALLER MAY DECLARE ITSELF LESS AUTHORITATIVE, NEVER MORE (M8G).
+   *
+   * Host classification cannot know everything. A CSV import knows for certain
+   * that its rows came from a map listing, but the listing URLs carry hostnames
+   * this table has never seen — and an unrecognised host falls through to
+   * `official_website`, which is the most authoritative classification there is.
+   *
+   * That is how an imported directory phone number came to be recorded as
+   * having come from the business's own website, with `official: true` and
+   * `authoritative: true`. `phoneFromOfficialSource` then reported a directory
+   * number as officially sourced, which removes a review gap that should exist.
+   * It failed OPEN, which is the wrong direction for a source-authority rule.
+   *
+   * So a declared type is honoured when it is WEAKER than what the host
+   * suggests. The asymmetry is the safety property: lowering your own authority
+   * can only ever add caution, while raising it is the unverifiable assertion
+   * the block above already refuses. An operator saying "this is only a map
+   * listing" is telling us something true that we could not otherwise know.
+   */
+  let effectiveType = sourceType;
+  const declaredWithUrl = typeof reference === "object" && !Array.isArray(reference) ? lower(reference.sourceType) : null;
+  if (declaredWithUrl && S.SOURCE_TYPES.includes(declaredWithUrl)) {
+    const declaredRank = S.SOURCE_AUTHORITY_ORDER.indexOf(declaredWithUrl);
+    const hostRank = S.SOURCE_AUTHORITY_ORDER.indexOf(sourceType);
+    // SOURCE_AUTHORITY_ORDER runs strongest-first, so a HIGHER index is weaker.
+    if (declaredRank > hostRank) {
+      effectiveType = declaredWithUrl;
+      extraCaveats.push(`The importer declared this a ${S.SOURCE_TYPE_LABELS[declaredWithUrl] || declaredWithUrl}, which is weaker than the web address alone would suggest.`);
+    }
+  }
+
   return finalise({
-    sourceType,
+    sourceType: effectiveType,
     host: parsed.host,
     domain,
     url: parsed.url,
     label: domain,
     caveats: extraCaveats,
-    reason: `Classified from the web address ${domain}.`,
+    reason: effectiveType === sourceType ? `Classified from the web address ${domain}.` : `Declared as ${effectiveType} by the importer; the web address ${domain} alone would have suggested ${sourceType}.`,
   });
 }
 
