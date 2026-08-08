@@ -25,7 +25,8 @@
 const DEV_REF = "wvwemitmmsdytyutaqbm";
 
 const { listReviewItems, loadReviewItem, resolveReviewItem, REVIEW_DECISIONS, STATUS } = require("../src/services/acquisition-review-queue");
-const { attachMergedListing } = require("../src/services/acquisition-persist");
+const { attachMergedListing, persistImportedProspect } = require("../src/services/acquisition-persist");
+const { projectReviewResolution } = require("../src/services/acquisition-review-projection");
 
 function parseArgs(argv) {
   // A leading flag is not a command. `--help` on its own must print help
@@ -218,6 +219,38 @@ async function main() {
         now,
       });
       console.log(`  ${attached.message}`);
+    }
+
+    // ── The prospect, and then the lifecycle projection (M8J) ─────────
+    //
+    // Both of these were MISSING before M8J. The command printed "will create a
+    // new prospect" and the spec said approve_as_new "persists through the same
+    // M8G path", and neither was true: the resolution was recorded and nothing
+    // else happened. So an approved candidate never became a prospect, and a
+    // prospect that did exist stayed `discovered` forever.
+    //
+    // Order matters and is the same order the projection module documents: the
+    // durable decision is already written above, so a failure here leaves a
+    // repairable projection lag, not an unattributable approval.
+    if (args.decision === REVIEW_DECISIONS.APPROVE_AS_NEW) {
+      const persisted = await persistImportedProspect({
+        prospect: { ...before.candidate, lifecycle: "discovered", history: [] },
+        evidence: [],
+        store: s,
+        now,
+      });
+      console.log(`  ${persisted.message || `Persisted ${persisted.prospectId}.`}`);
+    }
+
+    const projected = await projectReviewResolution({ store: s, reviewId: args.id, now, actor: "acquisition-review-cli" });
+    if (!projected.ok) {
+      // Reported, never swallowed. The decision stands; the projection can be
+      // repaired by re-running this command or the reconciler, and until it is
+      // the prospect stays un-approved and therefore ineligible.
+      console.error(`  LIFECYCLE NOT UPDATED: ${projected.message}`);
+      console.error(`  The decision is recorded and durable. Re-run to repair; nothing will be decided twice.`);
+    } else if (projected.changed) {
+      console.log(`  ${projected.message}`);
     }
 
     console.log(`  Recorded. ${r.item.reviewId} is now ${r.item.status}.`);

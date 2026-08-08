@@ -61,6 +61,51 @@ const TABLES = Object.freeze({
 // The migration that creates all three.
 const REQUIRED_MIGRATION = "supabase/sql/laq2_create_acquisition_queue.sql";
 
+// ── What the lifecycle COLUMN can hold (M8J) ────────────────────────
+//
+// THE EFFECTIVE CHECK IS LAQ2'S, NOT LAQ1'S. laq1 created the column with the
+// six pre-engagement states; laq2 DROPS that constraint and re-adds it with all
+// fourteen, and laq2 has been applied to dev since M8D. A list mirroring laq1
+// would be describing a constraint that no longer exists — it would refuse
+// `review_approved -> queued`, which the database permits, and a ratchet
+// checking it against laq1 would pass while being wrong.
+//
+// Today this is identical to S.PROSPECT_STATES, and a test asserts all three
+// agree — the domain, this list, and the CHECK parsed out of laq2. It is kept
+// as its own list rather than aliased because the two constraints are
+// independent: the domain could gain a state before a migration adds it, and
+// the narrower one has to win. When they diverge, this refuses by name rather
+// than letting a raw 23514 surface from Postgres.
+const PERSISTABLE_LIFECYCLE_STATES = Object.freeze([
+  // acquisition (laq1)
+  "discovered",
+  "evidence_captured",
+  "review_pending",
+  "review_approved",
+  "review_rejected",
+  "suppressed",
+  // engagement (laq2 widened the CHECK to include these)
+  "queued",
+  "attempted",
+  "connected",
+  "callback_requested",
+  "interested",
+  "not_interested",
+  "customer",
+  "disqualified",
+]);
+
+/** Stable outcomes of a lifecycle projection write. Callers switch on these. */
+const LIFECYCLE_TRANSITION_CODES = Object.freeze({
+  TRANSITIONED: "transitioned",
+  ALREADY_AT_TARGET: "already_at_target",
+  STALE_LIFECYCLE: "stale_lifecycle",
+  PROSPECT_MISSING: "prospect_missing",
+  TRANSITION_ILLEGAL: "transition_illegal",
+  STATE_NOT_PERSISTABLE: "state_not_persistable",
+  INPUT_INVALID: "input_invalid",
+});
+
 // ── The contract ────────────────────────────────────────────────────
 //
 // Every implementation must provide exactly these. Named here so a new adapter
@@ -121,6 +166,14 @@ const STORE_METHODS = Object.freeze([
   // page: that call is limited, so at the limit the "last element" is the
   // limit-th row and every later append would hydrate a stale head and fork.
   "readChainHead",
+  // ── The lifecycle projection (M8J / E-2) ──
+  //
+  // upsertProspect deliberately cannot touch lifecycle, so before M8J a
+  // persisted prospect was permanently "discovered" and could never satisfy the
+  // eligibility engine's review_approved check. This is the ONLY way the column
+  // moves, it is a compare-and-set, and it refuses anything the state machine
+  // or the column's CHECK would refuse.
+  "transitionProspectLifecycle",
 ]);
 
 /**
@@ -144,6 +197,56 @@ function assertStoreContract(store, label = "store") {
 
 function frozenCopy(row) {
   return Object.freeze({ ...row });
+}
+
+// ── The lifecycle projection, shared by both adapters (M8J) ─────────
+//
+// One validator, so the in-memory reference and the durable adapter refuse
+// exactly the same things. A second copy would drift, and the copy that drifted
+// would be the one that wrote a state the database then rejected — or worse,
+// accepted.
+
+/**
+ * Everything that can be decided WITHOUT reading the row.
+ * Returns null when the request is well-formed, or a refusal.
+ */
+function validateLifecycleRequest({ prospectId, expectedFrom, to, actor, reason }) {
+  const S = require("./acquisition-schema");
+  const text = (v) => (typeof v === "string" ? v.trim() : "");
+
+  if (!text(prospectId)) return { ok: false, code: LIFECYCLE_TRANSITION_CODES.INPUT_INVALID, message: "A lifecycle transition needs a prospectId." };
+  // WHO and WHY, on the same terms as transitionProspect. A projection write is
+  // still a state change, and an unattributable one is indistinguishable from a
+  // bug that moved the column.
+  if (!text(actor)) return { ok: false, code: LIFECYCLE_TRANSITION_CODES.INPUT_INVALID, message: "Every change of state has to record who made it." };
+  if (!text(reason)) return { ok: false, code: LIFECYCLE_TRANSITION_CODES.INPUT_INVALID, message: "Every change of state has to record why." };
+
+  if (!S.PROSPECT_STATES.includes(to)) {
+    return { ok: false, code: LIFECYCLE_TRANSITION_CODES.INPUT_INVALID, message: `"${String(to).slice(0, 40)}" is not a prospect state.` };
+  }
+  if (!PERSISTABLE_LIFECYCLE_STATES.includes(to)) {
+    return {
+      ok: false,
+      code: LIFECYCLE_TRANSITION_CODES.STATE_NOT_PERSISTABLE,
+      message: `"${to}" is a real prospect state but the acquisition_prospects.lifecycle CHECK does not allow it, so the write would be refused by Postgres as a 23514. The column accepts: ${PERSISTABLE_LIFECYCLE_STATES.join(", ")}. A migration has to widen the CHECK before the domain can use it.`,
+    };
+  }
+  if (expectedFrom !== null && expectedFrom !== undefined && !S.PROSPECT_STATES.includes(expectedFrom)) {
+    return { ok: false, code: LIFECYCLE_TRANSITION_CODES.INPUT_INVALID, message: `"${String(expectedFrom).slice(0, 40)}" is not a prospect state.` };
+  }
+  return null;
+}
+
+/** Is `from → to` in the domain whitelist? */
+function lifecycleTransitionAllowed(from, to) {
+  const S = require("./acquisition-schema");
+  const allowed = S.PROSPECT_TRANSITIONS[from] || [];
+  return allowed.includes(to);
+}
+
+/** The journal entry appended to acquisition_prospects.history. */
+function lifecycleHistoryEntry({ from, to, actor, reason, at }) {
+  return Object.freeze({ from, to, at, actor: String(actor).trim(), reason: String(reason).trim() });
 }
 
 // ── The in-memory reference implementation ──────────────────────────
@@ -205,6 +308,53 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
       }
       prospects[idx] = merged;
       return { created: false, prospect: frozenCopy(merged) };
+    },
+
+    /**
+     * The lifecycle projection, reference implementation (M8J / E-2).
+     *
+     * COMPARE-AND-SET. `expectedFrom` is the state the caller believes the row
+     * is in, and the write happens only if that is still true. A caller working
+     * from a record it loaded ten minutes ago is told the row moved rather than
+     * overwriting whatever happened in between — which matters most for the one
+     * transition that cannot be undone cheaply, review_approved.
+     *
+     * IDEMPOTENT AT THE TARGET. A row already at `to` reports
+     * `already_at_target`, not a failure. Reconciliation reruns this after a
+     * projection failure and must be safe to run twice.
+     */
+    async transitionProspectLifecycle({ prospectId, expectedFrom = null, to, actor, reason, at = null } = {}) {
+      const bad = validateLifecycleRequest({ prospectId, expectedFrom, to, actor, reason });
+      if (bad) return bad;
+
+      const idx = prospects.findIndex((p) => p.prospectId === prospectId);
+      if (idx === -1) {
+        return { ok: false, code: LIFECYCLE_TRANSITION_CODES.PROSPECT_MISSING, message: `There is no persisted prospect "${String(prospectId).slice(0, 60)}" to transition.` };
+      }
+      const current = prospects[idx];
+      const from = current.lifecycle;
+
+      if (from === to) {
+        return { ok: true, code: LIFECYCLE_TRANSITION_CODES.ALREADY_AT_TARGET, changed: false, from, to, prospect: frozenCopy(current) };
+      }
+      if (expectedFrom !== null && from !== expectedFrom) {
+        return {
+          ok: false,
+          code: LIFECYCLE_TRANSITION_CODES.STALE_LIFECYCLE,
+          from,
+          expectedFrom,
+          to,
+          message: `"${prospectId}" is "${from}", not "${expectedFrom}". Something moved it since this decision was read; nothing was changed.`,
+        };
+      }
+      if (!lifecycleTransitionAllowed(from, to)) {
+        return { ok: false, code: LIFECYCLE_TRANSITION_CODES.TRANSITION_ILLEGAL, from, to, message: `A prospect cannot go from "${from}" to "${to}".` };
+      }
+
+      const entry = lifecycleHistoryEntry({ from, to, actor, reason, at: at || new Date().toISOString() });
+      const moved = { ...current, lifecycle: to, history: [...(current.history || []), entry] };
+      prospects[idx] = moved;
+      return { ok: true, code: LIFECYCLE_TRANSITION_CODES.TRANSITIONED, changed: true, from, to, entry, prospect: frozenCopy(moved) };
     },
     async loadProspect(prospectId) {
       const found = prospects.find((p) => p.prospectId === prospectId);
@@ -637,6 +787,11 @@ const toOutcomeRow = (o) => ({
 });
 
 const fromOutcomeRow = (o) => ({
+  // Carried since M8J so the durable history fold can order two outcomes
+  // recorded in the same millisecond deterministically. Read-only; nothing
+  // writes them and no hash covers them.
+  id: o.id === undefined ? null : o.id,
+  createdAt: o.created_at === undefined ? null : o.created_at,
   prospectId: o.prospect_id,
   outcome: o.outcome,
   reachedTheBusiness: o.reached_the_business,
@@ -758,6 +913,97 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
         .single();
       if (error) fail(TABLES.prospects, existing ? "update" : "insert", error);
       return { created: existing === null, prospect: fromProspectRow(data) };
+    },
+
+    /**
+     * The lifecycle projection (M8J / E-2).
+     *
+     * ── A REAL COMPARE-AND-SET, IN ONE STATEMENT ──────────────────────
+     * The write is
+     *
+     *   update acquisition_prospects set lifecycle = $to, history = $journal
+     *    where prospect_id = $id and lifecycle = $expectedFrom
+     *
+     * which PostgREST expresses as two `.eq()` filters on an `.update()`. That
+     * is a single statement, so the predicate and the write are evaluated
+     * against the same row version by Postgres — the same shape as the lease
+     * acquire, and for the same reason: two processes reconciling the same
+     * review must not both apply a transition.
+     *
+     * `.select()` returns the rows the UPDATE actually touched. **Zero rows is
+     * the interesting answer**, and it is deliberately not treated as success:
+     * either the prospect is gone, or its lifecycle is no longer what the
+     * caller believed. The row is re-read to say which, because "nothing
+     * happened" and "somebody else moved it" need different responses.
+     *
+     * ── WHY history IS READ FIRST, AND WHY THAT IS STILL SAFE ─────────
+     * The journal is a jsonb array and appending to it needs its current value,
+     * so there is a read before the write. That is not a race: the append rides
+     * on the same CAS. A second writer that read the same history loses the
+     * UPDATE outright — its predicate no longer matches — so a lost journal
+     * entry and a lost transition are the same event, and the caller is told.
+     */
+    async transitionProspectLifecycle({ prospectId, expectedFrom = null, to, actor, reason, at = null } = {}) {
+      const bad = validateLifecycleRequest({ prospectId, expectedFrom, to, actor, reason });
+      if (bad) return bad;
+
+      const current = await store.loadProspect(prospectId);
+      if (current === null) {
+        return { ok: false, code: LIFECYCLE_TRANSITION_CODES.PROSPECT_MISSING, message: `There is no persisted prospect "${String(prospectId).slice(0, 60)}" to transition.` };
+      }
+      const from = current.lifecycle;
+
+      if (from === to) {
+        return { ok: true, code: LIFECYCLE_TRANSITION_CODES.ALREADY_AT_TARGET, changed: false, from, to, prospect: current };
+      }
+      if (expectedFrom !== null && from !== expectedFrom) {
+        return {
+          ok: false,
+          code: LIFECYCLE_TRANSITION_CODES.STALE_LIFECYCLE,
+          from,
+          expectedFrom,
+          to,
+          message: `"${prospectId}" is "${from}", not "${expectedFrom}". Something moved it since this decision was read; nothing was changed.`,
+        };
+      }
+      if (!lifecycleTransitionAllowed(from, to)) {
+        return { ok: false, code: LIFECYCLE_TRANSITION_CODES.TRANSITION_ILLEGAL, from, to, message: `A prospect cannot go from "${from}" to "${to}".` };
+      }
+
+      const entry = lifecycleHistoryEntry({ from, to, actor, reason, at: at || new Date().toISOString() });
+      const journal = [...(current.history || []), entry];
+
+      // The CAS. `from` is used rather than `expectedFrom` so an unguarded
+      // caller still gets a guarded write — an optional argument must not be
+      // the difference between a checked update and a blind one.
+      const { data, error } = await db()
+        .from(TABLES.prospects)
+        .update({ lifecycle: to, history: journal, updated_at: entry.at })
+        .eq("prospect_id", prospectId)
+        .eq("lifecycle", from)
+        .select();
+      if (error) fail(TABLES.prospects, "update", error);
+
+      if (!data || data.length === 0) {
+        // The predicate stopped matching between the read and the write.
+        const after = await store.loadProspect(prospectId);
+        if (after === null) {
+          return { ok: false, code: LIFECYCLE_TRANSITION_CODES.PROSPECT_MISSING, message: `"${prospectId}" disappeared while its lifecycle was being changed.` };
+        }
+        if (after.lifecycle === to) {
+          return { ok: true, code: LIFECYCLE_TRANSITION_CODES.ALREADY_AT_TARGET, changed: false, from: after.lifecycle, to, prospect: after };
+        }
+        return {
+          ok: false,
+          code: LIFECYCLE_TRANSITION_CODES.STALE_LIFECYCLE,
+          from: after.lifecycle,
+          expectedFrom: from,
+          to,
+          message: `"${prospectId}" moved to "${after.lifecycle}" while this transition was being applied; nothing was changed.`,
+        };
+      }
+
+      return { ok: true, code: LIFECYCLE_TRANSITION_CODES.TRANSITIONED, changed: true, from, to, entry, prospect: fromProspectRow(data[0]) };
     },
 
     async loadProspect(prospectId) {
@@ -1070,4 +1316,6 @@ module.exports = {
   // from this one, and the drift is exactly the class of defect it exists to
   // catch — M8H's timestamptz round trip was found that way.
   fromDecisionRow,
+  PERSISTABLE_LIFECYCLE_STATES,
+  LIFECYCLE_TRANSITION_CODES,
 };
