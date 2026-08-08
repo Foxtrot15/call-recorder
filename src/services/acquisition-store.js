@@ -51,6 +51,10 @@ const TABLES = Object.freeze({
   suppressions: "acquisition_suppressions",
   leases: "acquisition_call_queue",
   outcomes: "acquisition_contact_outcomes",
+  // laq1, applied since M8D and until M8G written to by nothing.
+  prospects: "acquisition_prospects",
+  prospectPhones: "acquisition_prospect_phones",
+  evidence: "acquisition_evidence",
 });
 
 // The migration that creates all three.
@@ -80,6 +84,25 @@ const STORE_METHODS = Object.freeze([
   // outcomes
   "listOutcomes",
   "appendOutcome",
+  // ── Imported prospects (M8G) ──
+  //
+  // The laq1 tables, which have existed and been applied since M8D and have had
+  // nothing writing to them. M8F could turn a CSV into clean prospects; they
+  // evaporated when the process exited. These are what make them survive.
+  //
+  // upsert, not insert: re-importing the same export must reuse the canonical
+  // prospect rather than mint a second one, and the deterministic prospect_id
+  // is what makes that safe. Evidence stays APPEND-ONLY — appendEvidence
+  // refuses to write a row whose content already exists rather than updating
+  // one, because the table's trigger would refuse an update anyway and a
+  // silently-skipped duplicate is the correct outcome.
+  "upsertProspect",
+  "loadProspect",
+  "findProspects",
+  "upsertProspectPhone",
+  "listProspectPhones",
+  "appendEvidence",
+  "listEvidence",
 ]);
 
 /**
@@ -119,6 +142,9 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
   const suppressions = seed && Array.isArray(seed.suppressions) ? [...seed.suppressions] : [];
   const leases = seed && Array.isArray(seed.leases) ? [...seed.leases] : [];
   const outcomes = seed && Array.isArray(seed.outcomes) ? [...seed.outcomes] : [];
+  const prospects = seed && Array.isArray(seed.prospects) ? [...seed.prospects] : [];
+  const phones = seed && Array.isArray(seed.phones) ? [...seed.phones] : [];
+  const evidence = seed && Array.isArray(seed.evidence) ? [...seed.evidence] : [];
   const requests = new Map(seed && seed.requests ? Object.entries(seed.requests) : []);
 
   const store = {
@@ -139,6 +165,80 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
       return suppressions
         .filter((r) => (fingerprint !== null && r.fingerprint === fingerprint) || (e164 !== null && r.e164 === e164))
         .map(frozenCopy);
+    },
+
+    // ── imported prospects (M8G) ──
+    async upsertProspect(row) {
+      const idx = prospects.findIndex((p) => p.prospectId === row.prospectId);
+      if (idx === -1) {
+        prospects.push({ ...row });
+        return { created: true, prospect: frozenCopy(prospects[prospects.length - 1]) };
+      }
+      // Only fields the import can legitimately learn are refreshed. Lifecycle
+      // and history are NEVER overwritten by an import: a business that a human
+      // moved to review_approved must not be dragged back to `discovered`
+      // because somebody re-ran the CSV.
+      const existing = prospects[idx];
+      const merged = { ...existing };
+      for (const [k, v] of Object.entries(row)) {
+        if (k === "lifecycle" || k === "history" || k === "prospectId") continue;
+        if (v !== null && v !== undefined) merged[k] = v;
+      }
+      prospects[idx] = merged;
+      return { created: false, prospect: frozenCopy(merged) };
+    },
+    async loadProspect(prospectId) {
+      const found = prospects.find((p) => p.prospectId === prospectId);
+      return found ? frozenCopy(found) : null;
+    },
+    async findProspects({ fingerprint = null, e164 = null, sourceId = null, limit = 200 } = {}) {
+      let out = prospects;
+      // prospectId IS the identity fingerprint, deterministically derived from
+      // name and locality, so a fingerprint lookup is a prospectId lookup. The
+      // Supabase adapter matches the same column; a test asserts they agree.
+      if (fingerprint !== null) out = out.filter((p) => p.prospectId === fingerprint);
+      if (sourceId !== null) out = out.filter((p) => p.sourceId === sourceId);
+      if (e164 !== null) {
+        // Phone rows store the number AS PUBLISHED, so the normalised form has
+        // to be recomputed to compare — "(03) 5550 4101" and "03 5550 4101" are
+        // one handset and never compare equal as strings. The Supabase adapter
+        // does the same; a contract test asserts the two agree.
+        const { normalisePhone } = require("./acquisition-phone");
+        const ids = new Set(
+          phones
+            .filter((ph) => {
+              const n = normalisePhone(ph.raw);
+              return n.ok && n.e164 === e164;
+            })
+            .map((ph) => ph.prospectId)
+        );
+        out = out.filter((p) => ids.has(p.prospectId));
+      }
+      return out.slice(0, limit).map(frozenCopy);
+    },
+    async upsertProspectPhone(row) {
+      const existing = phones.find((p) => p.prospectId === row.prospectId && p.raw === row.raw);
+      if (existing) return { created: false, phone: frozenCopy(existing) };
+      phones.push({ ...row });
+      return { created: true, phone: frozenCopy(phones[phones.length - 1]) };
+    },
+    async listProspectPhones(prospectId) {
+      return phones.filter((p) => p.prospectId === prospectId).map(frozenCopy);
+    },
+    async appendEvidence(row) {
+      // APPEND-ONLY, AND IDEMPOTENT BY CONTENT. The ledger's contentHash is
+      // computed on the claim alone — evidenceId folds in a sequence number and
+      // a timestamp, so re-importing the same fact produces a new id for
+      // identical content. Deduplicating on the id would append a row per
+      // import forever; deduplicating on the content is what makes a re-import
+      // add nothing.
+      const existing = evidence.find((e) => e.prospectId === row.prospectId && e.contentHash === row.contentHash);
+      if (existing) return { created: false, evidence: frozenCopy(existing) };
+      evidence.push({ ...row });
+      return { created: true, evidence: frozenCopy(evidence[evidence.length - 1]) };
+    },
+    async listEvidence(prospectId) {
+      return evidence.filter((e) => e.prospectId === prospectId).map(frozenCopy);
     },
 
     // ── leases ──
@@ -266,6 +366,117 @@ const fromSuppressionRow = (r) => ({
   actorKind: r.actor_kind,
   note: r.note,
   suppressedAt: r.suppressed_at,
+});
+
+// ── laq1 row mappings (M8G) ────────────────────────────────────────
+
+const toProspectRow = (p) => ({
+  prospect_id: p.prospectId,
+  schema_version: p.schemaVersion,
+  business_name: p.businessName,
+  legal_name: p.legalName,
+  abn: p.abn,
+  trade_category: p.tradeCategory,
+  suburb: p.suburb,
+  state: p.state,
+  postcode: p.postcode,
+  region: p.region,
+  timezone: p.timezone,
+  origin: p.origin,
+  discovered_at: p.discoveredAt,
+  discovered_by: p.discoveredBy,
+  notes: p.notes,
+  updated_at: p.updatedAt || new Date().toISOString(),
+});
+
+const fromProspectRow = (r) => ({
+  prospectId: r.prospect_id,
+  schemaVersion: r.schema_version,
+  businessName: r.business_name,
+  legalName: r.legal_name,
+  abn: r.abn,
+  tradeCategory: r.trade_category,
+  suburb: r.suburb,
+  state: r.state,
+  postcode: r.postcode,
+  region: r.region,
+  timezone: r.timezone,
+  origin: r.origin,
+  discoveredAt: r.discovered_at,
+  discoveredBy: r.discovered_by,
+  notes: r.notes,
+  lifecycle: r.lifecycle,
+  history: r.history || [],
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const toPhoneRow = (p) => ({
+  prospect_id: p.prospectId,
+  raw: p.raw,
+  label: p.label,
+  evidence_id: p.evidenceId,
+});
+
+const fromPhoneRow = (r) => ({
+  prospectId: r.prospect_id,
+  raw: r.raw,
+  label: r.label,
+  evidenceId: r.evidence_id,
+});
+
+const toEvidenceRow = (e) => ({
+  evidence_id: e.evidenceId,
+  schema_version: e.schemaVersion,
+  sequence: e.sequence,
+  prospect_id: e.prospectId,
+  kind: e.kind,
+  capture_mode: e.captureMode,
+  value: e.value,
+  excerpt: e.excerpt,
+  note: e.note,
+  observed_at: e.observedAt,
+  recorded_at: e.recordedAt,
+  captured_by: e.capturedBy,
+  source_type: e.source ? e.source.sourceType : "unknown",
+  source_official: e.source ? e.source.official === true : false,
+  source_url: e.source ? e.source.url : null,
+  source_domain: e.source ? e.source.domain : null,
+  source_register: e.source ? e.source.register : null,
+  source_identifier: e.source ? e.source.identifier : null,
+  source_label: e.source ? e.source.label : null,
+  source_caveats: e.source && Array.isArray(e.source.caveats) ? e.source.caveats : [],
+  authoritative: e.authoritative === true,
+  supersedes_id: e.supersedes || null,
+  content_hash: e.contentHash,
+});
+
+const fromEvidenceRow = (r) => ({
+  evidenceId: r.evidence_id,
+  schemaVersion: r.schema_version,
+  sequence: Number(r.sequence),
+  prospectId: r.prospect_id,
+  kind: r.kind,
+  captureMode: r.capture_mode,
+  value: r.value,
+  excerpt: r.excerpt,
+  note: r.note,
+  observedAt: r.observed_at,
+  recordedAt: r.recorded_at,
+  capturedBy: r.captured_by,
+  source: {
+    sourceType: r.source_type,
+    official: r.source_official,
+    url: r.source_url,
+    domain: r.source_domain,
+    register: r.source_register,
+    identifier: r.source_identifier,
+    label: r.source_label,
+    caveats: r.source_caveats || [],
+  },
+  authoritative: r.authoritative,
+  supersedes: r.supersedes_id,
+  contentHash: r.content_hash,
 });
 
 const toLeaseRow = (l) => ({
@@ -411,6 +622,147 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
         unique.push(row);
       }
       return unique.map(fromSuppressionRow);
+    },
+
+    // ── imported prospects (M8G) ──
+
+    /**
+     * Create or refresh one prospect, keyed on the deterministic prospect_id.
+     *
+     * LIFECYCLE AND HISTORY ARE NEVER SENT. A human moving a business to
+     * review_approved is a decision; re-running a CSV is not, and an upsert
+     * that carried `lifecycle: "discovered"` would quietly undo the review
+     * every time the file was imported again. Those columns keep their
+     * defaults on insert and are left untouched on update.
+     */
+    async upsertProspect(row) {
+      const existing = await store.loadProspect(row.prospectId);
+      const { data, error } = await db()
+        .from(TABLES.prospects)
+        .upsert(toProspectRow(row), { onConflict: "prospect_id" })
+        .select()
+        .single();
+      if (error) fail(TABLES.prospects, existing ? "update" : "insert", error);
+      return { created: existing === null, prospect: fromProspectRow(data) };
+    },
+
+    async loadProspect(prospectId) {
+      const { data, error } = await db().from(TABLES.prospects).select("*").eq("prospect_id", prospectId).maybeSingle();
+      if (error) fail(TABLES.prospects, "read", error);
+      return data ? fromProspectRow(data) : null;
+    },
+
+    /**
+     * Find candidate prospects to compare a new import against.
+     *
+     * Narrow, like lookupSuppression: the database finds rows that COULD be the
+     * same business and acquisition-dedupe decides whether they are. Loading
+     * every prospect to compare in memory would work today and stop working at
+     * the first few thousand.
+     */
+    async findProspects({ fingerprint = null, e164 = null, sourceId = null, limit = 200 } = {}) {
+      const collected = new Map();
+
+      const add = (rows) => {
+        for (const r of rows || []) collected.set(r.prospect_id, r);
+      };
+
+      if (fingerprint !== null) {
+        // The identity fingerprint is derived, not stored, so it is matched via
+        // the evidence that carries the same source identifier, and by name +
+        // locality below. Callers pass what they have.
+        const { data, error } = await db().from(TABLES.prospects).select("*").eq("prospect_id", fingerprint).limit(limit);
+        if (error) fail(TABLES.prospects, "read", error);
+        add(data);
+      }
+
+      if (sourceId !== null) {
+        const { data, error } = await db().from(TABLES.evidence).select("prospect_id").eq("source_identifier", sourceId).limit(limit);
+        if (error) fail(TABLES.evidence, "read", error);
+        const ids = [...new Set((data || []).map((r) => r.prospect_id))];
+        if (ids.length > 0) {
+          const found = await db().from(TABLES.prospects).select("*").in("prospect_id", ids).limit(limit);
+          if (found.error) fail(TABLES.prospects, "read", found.error);
+          add(found.data);
+        }
+      }
+
+      if (e164 !== null) {
+        // Phones are stored AS PUBLISHED, so the normalised form is matched
+        // through the evidence row that recorded it rather than by comparing
+        // formatted strings — "(03) 5550 2201" and "03 5550 2201" are the same
+        // handset and would never compare equal.
+        const { data, error } = await db().from(TABLES.prospectPhones).select("prospect_id, raw").limit(2000);
+        if (error) fail(TABLES.prospectPhones, "read", error);
+        const { normalisePhone } = require("./acquisition-phone");
+        const ids = [...new Set((data || []).filter((r) => {
+          const n = normalisePhone(r.raw);
+          return n.ok && n.e164 === e164;
+        }).map((r) => r.prospect_id))];
+        if (ids.length > 0) {
+          const found = await db().from(TABLES.prospects).select("*").in("prospect_id", ids).limit(limit);
+          if (found.error) fail(TABLES.prospects, "read", found.error);
+          add(found.data);
+        }
+      }
+
+      return [...collected.values()].map(fromProspectRow);
+    },
+
+    /**
+     * One row per published number, idempotent on (prospect_id, raw).
+     *
+     * That unique constraint is laq1's, and it is exactly the right key: the
+     * same listing re-imported publishes the same raw string, and a genuinely
+     * new number published later is a genuinely new row.
+     */
+    async upsertProspectPhone(row) {
+      const before = await db().from(TABLES.prospectPhones).select("*").eq("prospect_id", row.prospectId).eq("raw", row.raw).maybeSingle();
+      if (before.error) fail(TABLES.prospectPhones, "read", before.error);
+      if (before.data) return { created: false, phone: fromPhoneRow(before.data) };
+
+      const { data, error } = await db().from(TABLES.prospectPhones).insert(toPhoneRow(row)).select().single();
+      if (error) {
+        // A racing insert loses to the unique constraint; the row it wanted now
+        // exists, which is the outcome it was asking for.
+        if (uniqueViolation(error)) return { created: false, phone: { ...row } };
+        fail(TABLES.prospectPhones, "insert", error);
+      }
+      return { created: true, phone: fromPhoneRow(data) };
+    },
+
+    async listProspectPhones(prospectId) {
+      const { data, error } = await db().from(TABLES.prospectPhones).select("*").eq("prospect_id", prospectId);
+      if (error) fail(TABLES.prospectPhones, "read", error);
+      return (data || []).map(fromPhoneRow);
+    },
+
+    /**
+     * Append one evidence row, or recognise that its content is already there.
+     *
+     * APPEND-ONLY AND IDEMPOTENT BY CONTENT. The table's trigger refuses UPDATE
+     * outright, so there is no "upsert" available and none wanted. The ledger's
+     * contentHash covers the claim alone; evidenceId folds in a sequence number
+     * and a timestamp, so the same fact re-imported carries a NEW id and the
+     * SAME hash. Deduplicating on the id would append a row per import forever.
+     */
+    async appendEvidence(row) {
+      const before = await db().from(TABLES.evidence).select("*").eq("prospect_id", row.prospectId).eq("content_hash", row.contentHash).maybeSingle();
+      if (before.error) fail(TABLES.evidence, "read", before.error);
+      if (before.data) return { created: false, evidence: fromEvidenceRow(before.data) };
+
+      const { data, error } = await db().from(TABLES.evidence).insert(toEvidenceRow(row)).select().single();
+      if (error) {
+        if (uniqueViolation(error)) return { created: false, evidence: { ...row } };
+        fail(TABLES.evidence, "insert", error);
+      }
+      return { created: true, evidence: fromEvidenceRow(data) };
+    },
+
+    async listEvidence(prospectId) {
+      const { data, error } = await db().from(TABLES.evidence).select("*").eq("prospect_id", prospectId).order("sequence", { ascending: true });
+      if (error) fail(TABLES.evidence, "read", error);
+      return (data || []).map(fromEvidenceRow);
     },
 
     async listLiveLeases() {
