@@ -470,7 +470,7 @@ expensive to reverse afterwards.
 
 ### What dev holds now
 
-Sixteen rows across three milestones. Every one describes an invented business
+Eighteen rows across four milestones. Every one describes an invented business
 on an invented number; they are the only acquisition data on dev, and none is to
 be removed — see §7.4.
 
@@ -483,6 +483,7 @@ be removed — see §7.4.
 | `acquisition_prospects` | **2** — `pr_0b9f51cfe79018067bf1`, `pr_f546eb7194421d554527` | M8G |
 | `acquisition_prospect_phones` | **1** | M8G |
 | `acquisition_evidence` | **9** | M8G |
+| `acquisition_decisions` | **2** — one review_opened, one review_resolved for `rv_pr_m8h_review_probe_0001` | M8H |
 
 The M8E row cost **one** row rather than three, and the reason is the property
 M8E exists to defend: suppressions carry no foreign key, so proving one needs no

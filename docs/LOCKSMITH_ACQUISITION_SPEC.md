@@ -1781,3 +1781,162 @@ of a merge writes something nobody confirmed, and a wrong one cannot be unwritte
 cheaply. **Merge enrichment is not complete**, and automatic attachment on a
 *conclusive* merge is the obvious next step. It is listed as an open item rather
 than described as done.
+
+---
+
+## 39. M8H — the review queue, and merges that add rather than discard
+
+**Owns (source of truth for):** what reaches a human, how they decide it, what a
+merge is allowed to change, and the single-writer limit on the decision log.
+
+M8G left two practical gaps. Ambiguous candidates — the ones actually needing a
+person — were the only part of an import that did not survive the process. And a
+conclusive merge discarded everything the listing carried, including a number
+the business had started publishing.
+
+**No new SQL.** Both are built on `acquisition_decisions`, applied since M8D.
+
+### 39.1 A review item is two decisions, not a row with a status
+
+| Event | `decision` | Carries |
+|---|---|---|
+| `review_opened` | `defer` | the candidate, the duplicate signals, the possible matches, the reason |
+| `review_resolved` | `approve` / `reject` | what a human decided, who they were, why |
+
+Current state is a fold over the rows for one `entity_id` — the same shape
+suppression and outcomes already use. The table is append-only and hash-chained,
+so the queue inherits an audit trail rather than needing one.
+
+**A review item is deliberately not a prospect row.** The schema has
+`review_pending`, and using it would be wrong here for one specific reason: the
+commonest review item is *"this may be a duplicate of a business we already
+have"*, and writing it as a prospect creates exactly the duplicate row M8G
+removed.
+
+### 39.2 What enters review, and what does not
+
+| Enters review | Does not |
+|---|---|
+| Possible duplicate of a stored business | Conclusive duplicate — merged automatically |
+| Classification `needs_review` (lock-adjacent) | Clear locksmith — imported |
+| A row contradicting itself (state vs postcode) | Aggregator, other trade — excluded outright |
+| | No name, no usable number — refused outright |
+
+**Idempotent.** Re-importing the same unresolved candidate finds the open item
+and returns it. A founder who runs the same file twice is not asked twice, and a
+nightly import does not build a queue nobody can face. A **resolved** item is not
+reopened by the same evidence arriving again — that is the value of having
+recorded the decision.
+
+### 39.3 Resolving
+
+```
+node scripts/acquisition-review.js list [--status open|resolved]
+node scripts/acquisition-review.js show <review-id>
+node scripts/acquisition-review.js resolve <review-id> --decision <d> --by "<name>" --reason "<why>"
+```
+
+| Decision | Effect |
+|---|---|
+| `approve_as_new` | Persists through the **same M8G path**; no second implementation |
+| `merge_into_existing` | Attaches via the same enrichment path; `--target` required |
+| `reject_not_locksmith` | Recorded; no prospect created |
+| `reject_duplicate` | Recorded; no prospect created |
+| `needs_more_information` | Note appended; item stays **open** |
+
+`--by` and `--reason` are required and there is no `--auto`. The queue exists
+because the classifier could not decide; a command that let it decide anyway
+would be the classifier deciding with extra steps. Every resolution is recorded
+with `actorKind: "human"`.
+
+A **stale** resolution is refused, naming who decided it and when, so a second
+operator working from a list they loaded ten minutes ago is told what happened
+rather than wondering why nothing changed.
+
+### 39.4 Merge enrichment
+
+When dedupe concludes a listing is a business already stored:
+
+- the **canonical prospect id is kept**;
+- genuinely new normalised phones are attached, **once**;
+- genuinely new evidence is appended, **once**;
+- the raw published value is preserved, because that is what a reviewer checks
+  against the source.
+
+**The claims are re-recorded under the canonical prospect**, not re-pointed. A
+candidate's evidence names the candidate's id; editing that field would leave a
+content hash matching nothing, so the same fact would append again on every
+future import, forever, into an append-only table.
+
+**Additive only.** A merge never touches the canonical prospect's own fields. A
+directory row spelling the suburb differently is not evidence the stored record
+is wrong — it is evidence two sources disagree, and the ledger is where a
+disagreement belongs.
+
+**And it cannot upgrade source authority.** Re-recorded claims keep the merged
+listing's own source, which is a directory. A weaker source cannot overwrite a
+stronger one because it overwrites nothing: both rows remain and `assessEvidence`
+still reads the strongest. This is the M8G provenance defect's mirror image.
+
+### 39.5 Suppression is untouched by all of it
+
+Proven: a suppressed business still blocks after merge enrichment; the M8E gate
+still refuses; a review resolution cannot erase or mutate a suppression; and
+**approving a candidate as new does not un-suppress it** — approval is about
+identity, permission is decided at the gate from durable state.
+
+### 39.6 Continuing the decision chain — and the limit on it
+
+Nothing persisted decisions before M8H, so the chain only ever lived inside one
+process and starting from genesis each time was correct. A durable queue changes
+that: a fresh process must **continue** the chain it finds.
+
+`createAuditLog({ initialHead, initialSequence })` hydrates from the last stored
+row. `verifyRows()` is **unchanged** — hydration makes a restart continuous, it
+does not make verification more forgiving.
+
+> **SINGLE WRITER. This is not concurrency safety and must not be read as it.**
+>
+> - A fresh **sequential** process can safely continue the chain.
+> - **Two concurrent writers could still fork it** from the same head.
+> - M8H does **not** solve distributed or concurrent append serialisation.
+> - Before multiple acquisition workers may write decisions concurrently, this
+>   must be replaced or protected by a **database-level serialisation
+>   mechanism** — an advisory lock, a serialisable transaction, or a chain head
+>   held in a row updated under a constraint. None of those is built.
+
+### 39.7 One defect the real proof found
+
+`recorded_at` is a `timestamptz`. It is written as `...000Z` and returned as
+`...+00:00` — the same instant, a different string, and therefore a different
+sha256. `sequence` is a `bigint` and returns as a string.
+
+Either one silently breaks `verifyChain()`, which then reports an **untampered**
+log as altered. That is the worst failure available to an integrity control,
+because it destroys trust in the one thing that was supposed to be trustworthy,
+and it would have been found by somebody investigating a breach that never
+happened. Both are canonicalised on read, and a test pins the shape.
+
+The in-memory store could not reproduce it — it hands back the same object. Only
+real Postgres did.
+
+### 39.8 Dev residue
+
+**2 new rows in `acquisition_decisions`**, both fictional, from the review-queue
+proof: one `review_opened`, one `review_resolved`, for
+`rv_pr_m8h_review_probe_0001`.
+
+No prospect, phone, evidence, suppression, outcome, queue or qualification row
+was created, and no existing M8D/M8E/M8G row was modified. Prospect persistence
+was proven against real Postgres in M8G and merge enrichment is proven offline
+against the store contract; neither was worth new permanent residue.
+
+### 39.9 Known limitations
+
+- **Single writer**, as above. The binding one.
+- `listReviewItems` folds the whole decision log in memory. Fine at pilot
+  volume; a queue of tens of thousands would want the fold materialised.
+- A rejection is not reconsidered when *materially changed* evidence arrives —
+  the same candidate id is simply not re-asked. Distinguishing "same question"
+  from "new information about the same business" needs a comparison the
+  architecture does not currently express.

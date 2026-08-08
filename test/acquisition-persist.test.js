@@ -137,13 +137,13 @@ describe("re-import is idempotent", () => {
 
   it("running it ten times leaves exactly one prospect, one phone and one set of evidence", async () => {
     const store = createInMemoryAcquisitionStore();
-    let id = null;
-    let evidenceCount = null;
-    for (let i = 0; i < 10; i += 1) {
-      const { written } = await importAndPersist(store, csv(ROW()));
-      id = written.persisted[0].prospectId;
-      if (evidenceCount === null) evidenceCount = (await store.listEvidence(id)).length;
-    }
+    // Only the FIRST run persists a prospect; every later run MERGES, which
+    // produces a merges entry rather than a persisted one. The id is captured
+    // once and the invariant is asserted against the database.
+    const first = await importAndPersist(store, csv(ROW()));
+    const id = first.written.persisted[0].prospectId;
+    const evidenceCount = (await store.listEvidence(id)).length;
+    for (let i = 0; i < 9; i += 1) await importAndPersist(store, csv(ROW()));
     assert.strictEqual((await store.findProspects({ fingerprint: id })).length, 1);
     assert.strictEqual((await store.listProspectPhones(id)).length, 1);
     assert.strictEqual((await store.listEvidence(id)).length, evidenceCount, "evidence must not grow on repeat imports");
@@ -164,47 +164,50 @@ describe("re-import is idempotent", () => {
     const a = await importAndPersist(store, csv(ROW()), { clock: () => new Date("2026-08-08T03:00:00.000Z") });
     const b = await importAndPersist(store, csv(ROW()), { clock: () => new Date("2026-08-09T11:22:33.000Z") });
 
-    const idsA = a.ledger.forProspect(a.written.persisted[0].prospectId).map((e) => e.evidenceId);
-    const idsB = b.ledger.forProspect(b.written.persisted[0].prospectId).map((e) => e.evidenceId);
+const id = a.written.persisted[0].prospectId;
+    const idsA = a.ledger.forProspect(id).map((e) => e.evidenceId);
+    const idsB = b.ledger.forProspect(id).map((e) => e.evidenceId);
     assert.notDeepStrictEqual(idsA, idsB, "the ids genuinely differ between imports");
-    assert.strictEqual(b.written.summary.evidenceAdded, 0, "yet nothing was appended");
+    // The second run merges and re-records under the canonical id; identical
+    // content means identical hashes, so nothing is appended either way.
+    assert.strictEqual(b.written.summary.evidenceAdded + b.written.summary.mergeEvidenceAdded, 0, "yet nothing was appended");
   });
 
   /**
-   * A KNOWN LIMITATION, PINNED SO IT CANNOT DRIFT INTO A SURPRISE.
+   * THE M8G LIMITATION, NOW REMOVED BY M8H.
    *
-   * When the importer MERGES a listing into a business already stored, nothing
-   * from that listing is persisted -- including a genuinely new number it
-   * published. The merged row is reported in the import outcome, with the
-   * signals that produced the merge, and a human attaches the number.
-   *
-   * This is the conservative direction: attaching a phone to a business on the
-   * strength of a merge decision writes a callable number nobody confirmed, and
-   * a wrong one cannot be unwritten cheaply. Automatic attachment on a
-   * CONCLUSIVE merge is the obvious M8H improvement.
+   * M8G merged a listing and threw away everything it carried, including a
+   * number the business had started publishing. The test here used to pin that
+   * as deliberate. M8H attaches it instead -- additively, to the canonical
+   * business, without touching its stored fields.
    */
-  it("reports a merged listing rather than silently attaching its new number", async () => {
+  it("attaches a newly published number to the business it merged into", async () => {
     const store = createInMemoryAcquisitionStore();
     const first = await importAndPersist(store, csv(ROW()));
     const id = first.written.persisted[0].prospectId;
 
     const second = await importAndPersist(store, csv(ROW({ phone_2: "0455 010 404" })));
 
-    const status = second.result.outcomes[0].status;
-    assert.ok([IMPORT_OUTCOMES.MERGED, IMPORT_OUTCOMES.REVIEW_REQUIRED].includes(status), `the business is recognised, not re-created; got ${status}`);
-    assert.ok(second.result.outcomes[0].mergedInto || second.result.outcomes[0].possibleDuplicateOf, "and it names the business it matched");
-    assert.strictEqual((await store.listProspectPhones(id)).length, 1, "the new number is not attached without a human");
-    assert.strictEqual(second.written.summary.created, 0, "and no second prospect is created");
+    assert.strictEqual(second.written.summary.created, 0, "no second prospect");
+    assert.strictEqual((await store.listProspectPhones(id)).length, 2, "the new number is attached to the canonical business");
+
+    const third = await importAndPersist(store, csv(ROW({ phone_2: "0455 010 404" })));
+    assert.strictEqual((await store.listProspectPhones(id)).length, 2, "and not attached twice");
+    assert.strictEqual(third.written.summary.mergePhonesAdded, 0);
   });
 
-  it("does not append evidence for a listing it merged", async () => {
+  it("appends genuinely new evidence from a merged listing, exactly once", async () => {
     const store = createInMemoryAcquisitionStore();
     const first = await importAndPersist(store, csv(ROW()));
     const id = first.written.persisted[0].prospectId;
     const before = (await store.listEvidence(id)).length;
 
     await importAndPersist(store, csv(ROW({ category: "Emergency locksmith" })));
-    assert.strictEqual((await store.listEvidence(id)).length, before, "a merged listing contributes nothing until a human accepts it");
+    const after = (await store.listEvidence(id)).length;
+    assert.ok(after > before, "a changed category is a new claim about the same business");
+
+    await importAndPersist(store, csv(ROW({ category: "Emergency locksmith" })));
+    assert.strictEqual((await store.listEvidence(id)).length, after, "and is not appended again");
   });
 
   /**
