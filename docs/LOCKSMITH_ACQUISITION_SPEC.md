@@ -1471,3 +1471,158 @@ store, which is the same contract the Supabase adapter implements.
 **One row**, approved in advance: one fictional `opt_out`,
 actor `m8e-crossprocess-probe`. No prospect row and no outcome row — because
 suppressions carry no foreign key, which is the same property M8E defends.
+
+---
+
+## 37. M8F — real-source lead intake
+
+**Owns (source of truth for):** how a real business export becomes canonical
+prospects, which source profiles this build reads, and what importing does and
+does not authorise.
+
+### 37.1 What it is, and what it is not
+
+A founder exports locksmiths from a directory tool, drops the CSV in, and gets
+clean deduplicated prospects with provenance attached. **Nothing is contacted at
+any point** — not the prospect, not a provider, and not the businesses' own
+websites.
+
+**There is still no live discovery.** No search API, no Google call, no
+Outscraper call, no crawler. `EXTERNAL_ACCESS_SUPPORTED` is still hardcoded
+`false` and the discovery registry still refuses any adapter that declares
+`requiresNetwork: true`. The export happens outside this system, by a human.
+
+### 37.2 It adds no second pipeline
+
+The importer produces **candidates** and hands them to the discovery admission
+path that already existed. Everything after mapping is machinery that was
+already proven: `acquisition-phone` normalises, `acquisition-discovery` admits
+and writes evidence through the ledger, `acquisition-dedupe` finds duplicates,
+`acquisition-qualification` scores, `acquisition-eligibility` decides.
+
+An importer that built prospects itself would have been a second definition of
+what a prospect is, a second provenance path, and a second place for suppression
+to be forgotten. There is exactly one of each.
+
+### 37.3 Supported source profiles
+
+| Profile | Reads | Source type |
+|---|---|---|
+| `outscraper-google-maps` | Outscraper / Google Maps business exports | `map_listing` |
+| `manual-csv` | A hand-curated CSV | `unverified_directory` |
+
+A profile is the only place a column name appears. Each accepts several
+spellings per field, because export tools disagree and a founder should not have
+to rename columns by hand.
+
+**Deliberately not imported**, though the export carries them: reviews, review
+text, reviewer names, photos, owner names, harvested emails, popular times. None
+is needed to decide whether a locksmith may lawfully be called, and importing
+personal data nobody needs is how a prospecting file becomes a privacy problem.
+
+### 37.4 Unknown stays unknown
+
+A missing column produces `null` — never a guess, never an empty string
+pretending to be a value.
+
+**Timezone is the sharpest case and the rule is absolute.** It is a compliance
+input: calling hours are checked in the business's local time, so a guessed
+timezone guesses whether a call is lawful. It is derived from an **explicit
+state column** and from nothing else. No state, no timezone — and eligibility
+refuses the prospect until a human supplies one. A postcode never produces a
+timezone.
+
+Where a row contradicts itself — a NSW state with a VIC postcode — **both values
+are kept and the contradiction is recorded**. Which one is wrong is not knowable
+from the row.
+
+### 37.5 Landlines are business numbers
+
+**A published business landline is the number a locksmith answers, and it is
+kept.**
+
+The engine's `CALLABLE_PHONE_KINDS` has always been
+`["mobile", "landline", "service"]`; the audit confirmed nothing in this
+repository ever filtered landlines. The filtering the founder remembers belonged
+to an **SMS-first** outreach method. AIDA is voice-first. In the fixture export,
+10 of 12 usable numbers are landlines — an SMS-era filter would have discarded
+most of the file.
+
+Only **premium-rate (`190x`)** and **short** numbers are refused, and only
+because dialling them can cost the recipient money.
+
+Multiple published numbers are all retained. One cell holding several numbers is
+split on commas, semicolons and slashes.
+
+### 37.6 Deduplication
+
+Uses `acquisition-dedupe`'s existing named-signal vocabulary verbatim.
+
+| Decision | What the importer does |
+|---|---|
+| `exact_duplicate`, `probable_same_business` | **MERGED** — evidence attaches to the existing prospect |
+| `same_business_different_location` | **kept separate** — a branch is a second business to call |
+| anything weaker | **REVIEW_REQUIRED**, with the signals that fired |
+
+A repeated source id within one file is caught before any of that, as the
+export's own duplicate.
+
+**A re-import merges; it does not multiply.** Running the same file twice
+imports nothing new.
+
+### 37.7 Locksmith / noise classification
+
+Deterministic and explainable — named signals, no score, **no LLM**. Not because
+a model would classify badly, but because this decides who gets phoned: a table
+gives the same answer twice, can be diffed when it changes, and can be argued
+with by someone holding the row. A model may later *propose* rows for review; it
+may never be what admits one.
+
+Facts and inferences stay apart. "The source's category column says Locksmith"
+is a fact; "therefore it is a locksmith" is an inference, and both are labelled.
+
+**The precedence that matters:** a lead-generation funnel's category column says
+"Locksmith" — that is the entire point of it — so **category can never be what
+rules one out**. An aggregator marker in the business *name* ("near me",
+"compare quotes", "find a") is decisive on its own, regardless of category. The
+same words in a description are weaker and buy a human review instead.
+
+### 37.8 Official-website authority — contract only
+
+The precedence **official website > verified directory > unverified directory /
+aggregator** is already owned by `acquisition-source`, and an imported map
+listing is classified as `map_listing`, which is not official.
+
+**No website is fetched.** The website column is normalised and compared as a
+string; it is never visited. It is recorded as a source reference but cited for
+no claim, because this build has not read it — attributing a phone number to a
+site nobody opened would manufacture exactly the confidence the pipeline exists
+to withhold.
+
+Live website verification remains **out of scope and unbuilt**.
+
+### 37.9 The dry-run command
+
+```
+node scripts/acquisition-import.js --file <csv> --source outscraper-google-maps
+```
+
+**Dry run is not a flag; it is the only mode.** There is no `--write`,
+`--commit` or `--apply`, and the CLI rejects them by name. This is not "the
+write flag defaults to off" — a default can be overridden by whoever is in a
+hurry; an absent capability cannot. Adding one would be a reviewable change, and
+would have to invent a prospect-writing path that does not currently exist.
+
+The command reads a file and prints a report. It imports no store, no provider
+and no network client, and a test asserts each.
+
+### 37.10 What importing does NOT do
+
+An imported prospect is **not callable**, and tests pin every part of this:
+
+- it has not been reviewed, so it fails record validity;
+- its number has not been washed, so DNCR-unknown blocks it;
+- suppression still overrides it — **a re-import cannot resurrect a business
+  that opted out**;
+- there is no dialler, and the M8E authorisation gate still stands between any
+  prospect and a call.
