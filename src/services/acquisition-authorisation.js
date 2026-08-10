@@ -28,20 +28,28 @@
 // rejection during discovery, ranking, batching and the founder's screens —
 // and loses only its authority at the last step.
 //
-// ── THREE AUTHORITATIVE READS, NOT ONE ──────────────────────────────
-// The invariant has been applied three times, each time closing a path by which
+// ── FOUR AUTHORITATIVE READS, NOT ONE ───────────────────────────────
+// The invariant has been applied four times, each time closing a path by which
 // something a caller held in memory could have decided a call:
 //
-//   suppression        M8E / M-7   store.lookupSuppression
-//   contact history    M8J / E-1   acquisition-history.readContactHistory
-//   batch approval     E-5         acquisition-batch-approval
+//   suppression          M8E / M-7   store.lookupSuppression
+//   contact history      M8J / E-1   acquisition-history.readContactHistory
+//   batch approval       E-5         acquisition-batch-approval
+//   duplicate resolution M8L         acquisition-duplicate-state
 //
-// The third is the one that had been assertable outright. `context.batch =
+// The last two were the ones that had been assertable. `context.batch =
 // { approved: true }` was, until E-5, sufficient — an object with no author, no
 // timestamp and no membership could clear the check that exists to record that
-// a named human looked at a specific list of businesses and said yes. The
-// caller's version is now destructured off the context and discarded; the
-// approval comes from acquisition_decisions or it does not exist.
+// a named human looked at a specific list of businesses and said yes.
+//
+// `context.duplicateResolution` was subtler and, in its way, worse: it was a
+// real analysis, honestly computed, over a record set the caller chose. Running
+// it over one prospect alone produces a resolution in which nothing is a
+// duplicate of anything, and that cleared the gate. It came from the same code
+// that would have caught the duplicate, pointed at nothing.
+//
+// Both are now destructured off the caller's context and discarded. The answers
+// come from acquisition_decisions or they do not exist.
 //
 // A BATCH APPROVAL IS STILL NOT PERMISSION TO CALL. It clears one check out of
 // nine. It cannot clear suppression, DNCR, duplicates, the calling window, the
@@ -73,6 +81,7 @@ const { assertStoreContract } = require("./acquisition-store");
 const { normaliseProspectPhones } = require("./acquisition-phone");
 const { readContactHistory } = require("./acquisition-history");
 const { resolveBatchApprovalForProspect } = require("./acquisition-batch-approval");
+const { resolveDuplicateStateForProspect } = require("./acquisition-duplicate-state");
 
 /**
  * The one code the existing vocabulary did not already have.
@@ -98,6 +107,8 @@ const AUTHORISATION_CODES = Object.freeze({
    * Aliased here because callers of this gate switch on AUTHORISATION_CODES.
    */
   BATCH_APPROVAL_STORE_UNAVAILABLE: ELIGIBILITY_CODES.BATCH_STORE_UNAVAILABLE,
+  /** M8L, aliased for the same reason as the one above. */
+  DUPLICATE_RESOLUTION_STORE_UNAVAILABLE: ELIGIBILITY_CODES.DUPLICATE_STORE_UNAVAILABLE,
 });
 
 /**
@@ -191,6 +202,8 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
       historySource: eligibility ? eligibility.historySource || null : null,
       /** And the founder batch approval (E-5). Always "durable" on any authorised one. */
       batchSource: eligibility ? eligibility.batchSource || null : null,
+      /** And the duplicate resolution (M8L). Always "durable" on any authorised one. */
+      duplicateSource: eligibility ? eligibility.duplicateSource || null : null,
       /** Which durable approval covered it, if one did. */
       batchKey: batchApproval ? batchApproval.batchKey || null : null,
       eligibilityCode: eligibility ? eligibility.code : null,
@@ -223,14 +236,19 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
   async function authorise(prospect, context = {}) {
     const instant = context.at instanceof Date && Number.isFinite(context.at.getTime()) ? context.at : now();
 
-    // ── THE CALLER'S BATCH APPROVAL IS TAKEN AWAY HERE (E-5) ──────────
+    // ── WHAT THE CALLER IS NOT ALLOWED TO DECIDE (E-5, M8L) ───────────
     //
-    // Not overwritten later, not ignored by convention — removed from the
-    // object before anything downstream can see it, in the same statement that
-    // captures it. `callerBatch` survives only so its `batchKey` can be used as
-    // a hint to the durable lookup. Every other field on it, including
-    // `approved: true`, is discarded and never consulted.
-    const { batch: callerBatch = null, ...callerContext } = context || {};
+    // Both are removed from the object before anything downstream can see them,
+    // in the same statement that captures them. Not overwritten later, not
+    // ignored by convention — taken away.
+    //
+    // `callerBatch` survives only so its `batchKey` can hint the durable lookup;
+    // every other field on it, including `approved: true`, is discarded.
+    //
+    // `duplicateResolution` survives for nothing at all. It needs no hint: a
+    // prospect names itself, and the review decisions are keyed by that same id.
+    // It is captured only so that the rest-spread cannot carry it through.
+    const { batch: callerBatch = null, duplicateResolution: _callerDuplicates = null, ...callerContext } = context || {};
 
     if (!prospect || typeof prospect !== "object") {
       return decide({
@@ -373,6 +391,39 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
       });
     }
 
+    // ── 2d. THE DURABLE DUPLICATE RESOLUTION (M8L) ────────────────────
+    //
+    // The fourth authoritative read. Until M8L the duplicate check was cleared
+    // by `context.duplicateResolution` — the output of resolveDuplicates() over
+    // a record set the caller chose. Default-deny held, so the hole was not a
+    // missing check; it was that `resolveDuplicates([oneProspect])` is a valid
+    // resolution in which nothing can be a duplicate of anything, and it passed.
+    //
+    // The answer now comes from the M8H review decisions: an open review means
+    // unresolved, a merge means the canonical business is the callable one, a
+    // rejection means this record is not callable at all, and approve-as-new
+    // means a human settled the identity question. No caller hint is taken,
+    // because none is needed.
+    //
+    // resolveDuplicateStateForProspect never throws — an unreadable store comes
+    // back `unavailable: true` and the engine refuses with
+    // duplicate_resolution_store_unavailable, which is the gate's own failure
+    // and never a claim about the business.
+    const duplicateState = await resolveDuplicateStateForProspect({ store, prospectId: prospect.prospectId });
+
+    if (duplicateState.unavailable && audit) {
+      audit.record({
+        entityType: "prospect",
+        entityId: prospect.prospectId || "unknown",
+        event: "authorisation_blocked",
+        decision: "veto",
+        actor: "dial-authoriser",
+        actorKind: "system",
+        reason: `The durable duplicate resolution could not be read, so authorisation was refused: ${duplicateState.message}`,
+        detail: { code: ELIGIBILITY_CODES.DUPLICATE_STORE_UNAVAILABLE },
+      });
+    }
+
     const contactHistory = await readContactHistory({ store, prospectId: prospect.prospectId });
     if (!contactHistory.available && audit) {
       audit.record({
@@ -405,10 +456,17 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
     const { suppression: _ignoredSuppression, historyIndex: _ignoredIndex, historyRequired: _ignoredFlag, ...collaborators } = engineOptions || {};
     const active = createEligibilityEngine({ ...collaborators, now, suppression: authoritative, historyRequired: true });
 
-    // `callerContext` is the context WITHOUT `batch` — see the destructure at
-    // the top of authorise(). All three authoritative answers are spread AFTER
-    // it, so a caller who supplies any of them cannot reach the engine with it.
-    const eligibility = active.evaluate(prospect, { ...callerContext, at: instant, history: contactHistory, batch: batchApproval });
+    // `callerContext` is the context WITHOUT `batch` and WITHOUT
+    // `duplicateResolution` — see the destructure at the top of authorise(). All
+    // four authoritative answers are spread AFTER it, so a caller who supplies
+    // any of them cannot reach the engine with it.
+    const eligibility = active.evaluate(prospect, {
+      ...callerContext,
+      at: instant,
+      history: contactHistory,
+      batch: batchApproval,
+      duplicateState,
+    });
 
     const failedChecks = (eligibility.failedChecks || []).map((f) => Object.freeze({ check: f.check, code: f.code, message: f.message }));
 

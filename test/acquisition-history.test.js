@@ -280,8 +280,15 @@ describe("every real authorisation path uses durable history", () => {
     };
   }
 
-  /** E-5: the durable approval the authoriser will actually read. */
+  /**
+   * E-5 + M8L: the durable state the authoriser will actually read.
+   *
+   * The prospect row is not ceremony. Since M8L a record that has never been
+   * compared against the businesses already held is refused as
+   * `duplicate_never_assessed`, and the stored row is that comparison.
+   */
   async function approveIn(store, p) {
+    await store.upsertProspect(p);
     const { canonicalBatchIdentity, recordBatchApproval } = require("../src/services/acquisition-batch-approval");
     const identity = canonicalBatchIdentity({ members: [{ rowId: p.prospectId, prospectId: p.prospectId, e164: NUMBER }] });
     const r = await recordBatchApproval({ store, now, identity, approvedBy: "Peter Dang", reason: "Approved for the history tests." });

@@ -107,8 +107,22 @@ function harness({ iso = WEDNESDAY_2PM, prospect = null, holidays = null, washed
   return { clock, prospect: p, engineOptions, context, washStore };
 }
 
+/**
+ * Persist the prospect, so durable duplicate resolution can clear it (M8L).
+ *
+ * A prospect object that exists only in this test's memory has never been
+ * compared against anything, and the gate now refuses it as
+ * `duplicate_never_assessed`. Storing it is what an import does, and it is the
+ * durable evidence that dedupe ran and did not hold this business.
+ */
+async function persist(store, prospect) {
+  await store.upsertProspect(prospect);
+  return prospect;
+}
+
 /** Durably approve a one-business batch, so the E-5 gate has something to read. */
 async function approveBatchIn(store, prospect, clock = now(), e164 = NUMBER) {
+  await persist(store, prospect);
   const identity = canonicalBatchIdentity({ members: [{ rowId: prospect.prospectId, prospectId: prospect.prospectId, e164 }], label: "m8e test batch" });
   const result = await recordBatchApproval({ store, now: clock, identity, approvedBy: "Peter Dang", reason: "Approved for the M8E tests." });
   assert.strictEqual(result.ok, true, result.message);
@@ -380,6 +394,7 @@ describe("the rules the gate must not have weakened", () => {
   it("still refuses without founder batch approval", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = harness();
+    await persist(store, prospect);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.BATCH_UNAPPROVED);
@@ -392,6 +407,7 @@ describe("the rules the gate must not have weakened", () => {
   it("refuses a caller who asserts an approval the store has never heard of", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = harness();
+    await persist(store, prospect);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, {
       ...context,
       batch: { approved: true, stale: false, batchHash: "abc123def456", approvedBy: "Peter", source: "durable" },

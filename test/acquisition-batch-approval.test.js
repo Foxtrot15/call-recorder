@@ -94,8 +94,22 @@ function evidenceFor(prospect, clock = now()) {
 
 const memberOf = (p, e164 = NUMBER) => ({ rowId: p.prospectId, prospectId: p.prospectId, e164 });
 
+/**
+ * Persist the prospect, so durable duplicate resolution can clear it (M8L).
+ *
+ * A prospect that exists only in this test's memory has never been compared
+ * against anything, and the gate refuses it as `duplicate_never_assessed`.
+ * Storing it is what an import does, and the stored row IS the durable evidence
+ * that dedupe ran and did not hold this business.
+ */
+async function persistProspect(store, prospect) {
+  await store.upsertProspect(prospect);
+  return prospect;
+}
+
 /** One durably approved batch containing `prospect`. Returns the identity. */
 async function approveOne(store, prospect, { clock = now(), e164 = NUMBER, by = FOUNDER } = {}) {
+  await persistProspect(store, prospect);
   const identity = canonicalBatchIdentity({ members: [memberOf(prospect, e164)], label: "test batch" });
   const result = await recordBatchApproval({ store, now: clock, identity, approvedBy: by, reason: "Approved for the pilot." });
   assert.strictEqual(result.ok, true, result.message);
@@ -596,6 +610,7 @@ describe("E-5 at the final M8E gate", () => {
   it("1. no durable approval ⇒ refused, whatever else is in order", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = gateHarness();
+    await persistProspect(store, prospect);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.BATCH_UNAPPROVED);
@@ -605,6 +620,7 @@ describe("E-5 at the final M8E gate", () => {
   it("2. THE MILESTONE: the caller says approved and the store says no ⇒ refused", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = gateHarness();
+    await persistProspect(store, prospect);
 
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, {
       ...context,
@@ -708,6 +724,7 @@ describe("E-5 at the final M8E gate", () => {
   it("9. the approval store being unreadable refuses with its own code, not with 'not approved'", async () => {
     const base = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = gateHarness();
+    await persistProspect(base, prospect);
     const store = {
       ...base,
       async listDecisions() {
@@ -716,7 +733,11 @@ describe("E-5 at the final M8E gate", () => {
     };
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
-    assert.strictEqual(decision.code, AUTHORISATION_CODES.BATCH_APPROVAL_STORE_UNAVAILABLE);
+    // Both durable reads go through listDecisions, so both are unavailable. The
+    // DUPLICATE check has the higher precedence (4 vs 5), so it is the decisive
+    // one -- and the batch failure is still reported alongside it.
+    assert.strictEqual(decision.code, AUTHORISATION_CODES.DUPLICATE_RESOLUTION_STORE_UNAVAILABLE);
+    assert.ok(decision.failedChecks.some((f) => f.code === AUTHORISATION_CODES.BATCH_APPROVAL_STORE_UNAVAILABLE));
     assert.strictEqual(decision.batchSource, "unavailable");
     assert.strictEqual(decision.dial, null);
   });
@@ -772,7 +793,13 @@ describe("E-5 fail-closed ratchets", () => {
       .filter((l) => !l.trimStart().startsWith("//") && !l.trimStart().startsWith("*") && !l.trimStart().startsWith("/*"))
       .join("\n");
 
-    assert.ok(/batch:\s*callerBatch\s*=\s*null,\s*\.\.\.callerContext/.test(code), "the caller's batch must be destructured off the context");
+    // The destructure may grow — M8L added `duplicateResolution` to it — but
+    // `batch` must still be taken off the caller's object and the remainder must
+    // still be the thing that reaches the engine.
+    const destructure = /const \{([^}]*)\}\s*=\s*context \|\| \{\};/.exec(code);
+    assert.ok(destructure, "authorise() must destructure the caller's context");
+    assert.match(destructure[1], /batch:\s*callerBatch\s*=\s*null/, "the caller's batch must be destructured off the context");
+    assert.match(destructure[1], /\.\.\.callerContext/, "the remainder must be captured separately from what was taken away");
     assert.ok(!/evaluate\(prospect,\s*\{\s*\.\.\.context\b/.test(code), "spreading the raw context would put a caller-supplied approval back in front of the engine");
     assert.ok(/batch:\s*batchApproval/.test(code), "the durable approval must be bound last and unconditionally");
   });
