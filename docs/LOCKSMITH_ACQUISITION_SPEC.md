@@ -2351,15 +2351,43 @@ answer twice, an unreadable store refusing, and A-L7 still open. That last class
 of defect — a value that survives the in-memory store and not the database — is
 what M8H hit and why the read proof was worth running at all.
 
-**E-2's proof is written and NOT RUN**, pending approval, because it is the
-first thing in this system that would UPDATE a row rather than append one.
-`scripts/dev/acquisition-lifecycle-proof/` performs a round trip
-`review_approved → review_pending → review_approved` on `pr_3740207ebbc0a379910f`
-— already fictional, already on dev since M8D, and already at `review_approved`,
-which is what lets the trip end where it began. It creates no row in any table
-and touches no append-only table; what would remain is **two entries in that one
-row's `history` journal and a bumped `updated_at`**. It refuses to run without
-`M8J_LIFECYCLE_PROOF_WRITE=yes`.
+**E-2 was proven against real dev Postgres on 2026-08-09, under explicit founder
+approval**, because it is the first thing in this system that UPDATEs a row
+rather than appending one. `scripts/dev/acquisition-lifecycle-proof/run.js`
+performed a round trip `review_approved → review_pending → review_approved` on
+`pr_3740207ebbc0a379910f` — already fictional, already on dev since M8D, and
+already at `review_approved`, which is what let the trip end where it began. It
+refuses to run without `M8J_LIFECYCLE_PROOF_WRITE=yes`.
+
+The **permanent dev residue is exactly what was approved, and nothing else**:
+
+| | before | after |
+|---|---|---|
+| `lifecycle` | `review_approved` | `review_approved` (unchanged) |
+| `history` | 0 entries | **2 entries** — the two hops, each with actor `m8j-proof` and a reason |
+| `updated_at` | `2026-08-07T13:04:02.910734+00:00` | `2026-08-09T00:36:42.287+00:00` |
+
+**No row was created in any table and no append-only table was written to.** The
+eight acquisition tables still hold **20 rows** in total, `acquisition_decisions`
+is still **4** rows, and the decision chain still verifies end to end with its
+head at the M8I concurrency probe — the projection wrote no second decision,
+which is the property §41.1 exists to guarantee.
+
+`verify.js` re-checks that world read-only, **16/16, zero residue**: the two
+transitions it attempts are both refused inside Node before any statement is
+sent (`already_at_target` and `stale_lifecycle` are decided before the UPDATE).
+It also proves the read path end to end — a gap-free record carrying the
+lifecycle read back from Postgres now PASSES `record_valid`, and the identical
+record at `review_pending` is refused, so the pass is not vacuous.
+
+One probe in the first run was wrong and the code was right. `run.js` L3 asked
+for `expectedFrom: review_pending, to: review_approved` while the row was
+already `review_approved` and expected `stale_lifecycle`; it got
+`already_at_target`. That ordering is deliberate — a reconciler cannot know
+whether its previous attempt landed, so a repair that finds its target already
+reached must not be reported as a conflict. A genuine stale case needs a target
+the row is not already at. Both readings are now pinned by a test in
+`test/acquisition-lifecycle.test.js` rather than left to be rediscovered.
 
 ### 41.9 Known limitations
 

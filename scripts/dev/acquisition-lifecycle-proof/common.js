@@ -1,5 +1,8 @@
 // ============================================================================
-// M8J / E-2 LIFECYCLE PROOF — shared harness.  NOT YET RUN.
+// M8J / E-2 LIFECYCLE PROOF — shared harness.
+//
+// The write half (run.js) has been RUN ONCE, on 2026-08-09, under explicit
+// founder approval; see run.js. verify.js is read-only and may be re-run freely.
 //
 // SAFETY
 //   1. Refuses any project ref but dev, before a client is constructed.

@@ -138,6 +138,31 @@ describe("the compare-and-set transition", () => {
     assert.equal((await store.loadProspect(PROSPECT_ID)).lifecycle, "review_rejected", "the first decision stands");
   });
 
+  it("ALREADY-AT-TARGET is checked BEFORE stale expectedFrom, and the order matters", async () => {
+    // The M8J dev proof tripped over this and reported it as a failure, so the
+    // reasoning is pinned here rather than left to be rediscovered.
+    //
+    // Row at review_approved. Caller believes review_pending and asks for
+    // review_approved. Two readings are available:
+    //
+    //   stale     "your expectedFrom is wrong"       — technically true
+    //   at target "it is already where you want it"  — also true, and useful
+    //
+    // The second wins, because the reconciler cannot know whether its previous
+    // attempt landed. If a repair whose first attempt succeeded came back as a
+    // conflict, every recovered projection would report a failure and somebody
+    // would eventually stop believing them.
+    const store = await storeWithProspect("review_approved");
+    const r = await store.transitionProspectLifecycle({ prospectId: PROSPECT_ID, expectedFrom: "review_pending", to: "review_approved", actor: "reconciler", reason: "A repair whose first attempt may already have landed." });
+    assert.equal(r.code, LIFECYCLE_TRANSITION_CODES.ALREADY_AT_TARGET);
+
+    // But a stale expectedFrom with a target the row is NOT at is a real
+    // conflict, and must be reported as one.
+    const conflict = await store.transitionProspectLifecycle({ prospectId: PROSPECT_ID, expectedFrom: "review_pending", to: "review_rejected", actor: "someone", reason: "Working from a ten-minute-old read." });
+    assert.equal(conflict.code, LIFECYCLE_TRANSITION_CODES.STALE_LIFECYCLE);
+    assert.equal((await store.loadProspect(PROSPECT_ID)).lifecycle, "review_approved", "and it wrote nothing");
+  });
+
   it("is idempotent at the target — a repair may run twice", async () => {
     const store = await storeWithProspect("review_approved");
     const again = await store.transitionProspectLifecycle({ prospectId: PROSPECT_ID, expectedFrom: "review_pending", to: "review_approved", actor: "reconciler", reason: "Repairing a projection that may not have landed." });

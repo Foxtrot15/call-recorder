@@ -1,5 +1,14 @@
 // ============================================================================
-// M8J / E-2 LIFECYCLE PROOF — the round trip.  NOT YET RUN.
+// M8J / E-2 LIFECYCLE PROOF — the round trip.
+//
+// RUN ONCE, against dev, on 2026-08-09, under explicit founder approval. The
+// approved residue is spent: `pr_3740207ebbc0a379910f` went 0 -> 2 history
+// entries and its `updated_at` moved to 2026-08-09T00:36:42.287+00:00, with the
+// lifecycle back at `review_approved` where it started.
+//
+// DO NOT RE-RUN IT CASUALLY. A second run is not idempotent in its residue: it
+// would append two MORE journal entries to that row, which is beyond what was
+// approved. Post-run state is checked by verify.js, which is read-only.
 //
 //   NODE_PATH=../call-recorder/node_modules \
 //   M8J_LIFECYCLE_PROOF_WRITE=yes \
@@ -55,8 +64,21 @@ async function main() {
   C.check("L2", "an illegal transition is refused", illegal.ok === false && illegal.code === LIFECYCLE_TRANSITION_CODES.TRANSITION_ILLEGAL, `${illegal.code}: ${illegal.message}`);
 
   // ── 3. A stale expectedFrom is refused — the CAS actually compares ─
-  const stale = await store.transitionProspectLifecycle({ prospectId: C.SUBJECT, expectedFrom: "review_pending", to: "review_approved", actor: "m8j-proof", reason: "Working from a stale read." });
+  //
+  // THE TARGET MUST DIFFER FROM THE CURRENT STATE, and the first version of
+  // this probe got that wrong. It asked for `expectedFrom: review_pending,
+  // to: review_approved` while the row was already `review_approved`, and got
+  // `already_at_target` — which is CORRECT and deliberate: the caller's desired
+  // end state already holds, and reporting a conflict would break the
+  // reconciler, whose whole job is to re-run a repair whose first attempt may
+  // have landed. Already-at-target is checked before staleness on purpose.
+  //
+  // A genuine stale case needs a target the row is NOT already at.
+  const stale = await store.transitionProspectLifecycle({ prospectId: C.SUBJECT, expectedFrom: "review_pending", to: "review_rejected", actor: "m8j-proof", reason: "Working from a read that is ten minutes old." });
   C.check("L3", "a STALE expectedFrom is refused rather than overwriting", stale.ok === false && stale.code === LIFECYCLE_TRANSITION_CODES.STALE_LIFECYCLE, `${stale.code}: reported current "${stale.from}"`);
+
+  const idempotent = await store.transitionProspectLifecycle({ prospectId: C.SUBJECT, expectedFrom: "review_pending", to: startedAt, actor: "m8j-proof", reason: "A repair whose first attempt may already have landed." });
+  C.check("L3b", "but a stale expectedFrom whose TARGET already holds is idempotent, not a conflict", idempotent.ok === true && idempotent.code === LIFECYCLE_TRANSITION_CODES.ALREADY_AT_TARGET, `${idempotent.code}`);
 
   const untouched = await store.loadProspect(C.SUBJECT);
   C.check("L4", "nothing moved during the three refusals", untouched.lifecycle === startedAt && (untouched.history || []).length === journalBefore, `lifecycle ${untouched.lifecycle}, journal ${(untouched.history || []).length}`);

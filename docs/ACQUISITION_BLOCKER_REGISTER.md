@@ -52,7 +52,7 @@ below are what would still have to be true *if* one did.
 | ~~**M-6**~~ | Authoritative public-holiday source | **OPEN** — tracked as **A-L2**, because the blocker is the source decision, not the code. |
 | ~~**M-7**~~ | Cross-process suppression visibility | **CLOSED in M8E.** Proven across two real processes against dev Postgres. |
 | ~~**E-1**~~ | Derive attempt history from `acquisition_contact_outcomes` | **CLOSED in M8J.** `acquisition-history.js` is the one derivation; the authoriser reads it every time and refuses on `contact_history_unavailable`. Proven read-only against real Postgres, 16/16, zero residue. |
-| ~~**E-2**~~ | Persist the review decision onto the prospect lifecycle | **CLOSED in M8J.** `transitionProspectLifecycle` is a compare-and-set; `acquisition-review-projection.js` projects the durable decision and repairs a lag without recording a second decision. |
+| ~~**E-2**~~ | Persist the review decision onto the prospect lifecycle | **CLOSED in M8J.** `transitionProspectLifecycle` is a compare-and-set; `acquisition-review-projection.js` projects the durable decision and repairs a lag without recording a second decision. Proven against real dev Postgres 2026-08-09 under founder approval — a `review_approved → review_pending → review_approved` round trip on one existing fictional row; post-run verification 16/16, zero further residue. **No row created anywhere**; the approved residue was 2 history entries and a bumped `updated_at`. |
 | **E-3** | Durable DNCR wash storage | **OPEN.** There is no wash table and no `dncr` column anywhere; the wash store is an in-process `Map`, so a wash does not survive a restart. Needs LAQ4. |
 | **E-5** | Durable batch approval | **OPEN.** `context.batch` is caller-supplied; there is no batch table. See §5. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
@@ -70,6 +70,12 @@ below are what would still have to be true *if* one did.
 
 Dev holds **20 fictional proof rows** across M8D/M8E/M8G/M8H/M8I. See
 [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §9.
+
+**M8J's E-2 proof added none of them.** It is the only exercise so far that
+UPDATEd an existing row rather than appending one: two entries on
+`pr_3740207ebbc0a379910f`'s `history` journal and a bumped `updated_at`, with
+the lifecycle left exactly where it was found. The total is still **20**,
+`acquisition_decisions` is still **4**, and no append-only table was touched.
 
 ---
 
