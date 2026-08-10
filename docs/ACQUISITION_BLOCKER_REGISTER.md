@@ -81,7 +81,7 @@ SQL was required to close A-L8.**
 | ~~**M-7**~~ | Cross-process suppression visibility | **CLOSED in M8E.** Proven across two real processes against dev Postgres. |
 | ~~**E-1**~~ | Derive attempt history from `acquisition_contact_outcomes` | **CLOSED in M8J.** `acquisition-history.js` is the one derivation; the authoriser reads it every time and refuses on `contact_history_unavailable`. Proven read-only against real Postgres, 16/16, zero residue. |
 | ~~**E-2**~~ | Persist the review decision onto the prospect lifecycle | **CLOSED in M8J.** `transitionProspectLifecycle` is a compare-and-set; `acquisition-review-projection.js` projects the durable decision and repairs a lag without recording a second decision. Proven against real dev Postgres 2026-08-09 under founder approval — a `review_approved → review_pending → review_approved` round trip on one existing fictional row; post-run verification 16/16, zero further residue. **No row created anywhere**; the approved residue was 2 history entries and a bumped `updated_at`. |
-| **E-3** | Durable DNCR wash storage | **OPEN.** There is no wash table and no `dncr` column anywhere; the wash store is an in-process `Map`, so a wash does not survive a restart. Needs LAQ4. |
+| **E-3** | Durable DNCR wash storage | **BUILT OFFLINE IN M8K; NOT APPLIED.** `laq4_create_dncr_washes.sql` is written, reviewed and **not run against any database**. The full code path exists and passes 34 tests: an append-only wash ledger, store methods on both adapters, hydration at the async boundary so `assess()` stays synchronous, canonical number keys, idempotent import, newest-**performed** wash wins, and a fail-closed `dncr_store_unavailable` that is kept distinct from "never checked". A dry-run-by-default operator CLI imports an attested wash. **Still open against real Postgres** until a human applies laq4 to dev and verifies it — until then a wash still does not survive a restart. |
 | **E-5** | Durable batch approval | **OPEN.** `context.batch` is caller-supplied; there is no batch table. See §5. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **ABSENT BY DESIGN.** Nothing to fix; nothing to build until §1 and §2 close. |
@@ -95,6 +95,7 @@ SQL was required to close A-L8.**
 | `laq1_create_acquisition_prospects.sql` | **applied** 2026-08-07 (M8D) | **not applied** |
 | `laq2_create_acquisition_queue.sql` | **applied** 2026-08-07 (M8D) | **not applied** |
 | `laq3_serialise_decision_chain.sql` | **applied** 2026-08-08 (M8I) | **not applied** |
+| `laq4_create_dncr_washes.sql` | **NOT APPLIED** — written 2026-08-10 (M8K), never run | **not applied** |
 
 Dev holds **20 fictional proof rows** across M8D/M8E/M8G/M8H/M8I. See
 [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §9.
@@ -153,7 +154,7 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 4 | Reviewed → `review_approved`, durably | 🟢 | 🟢 | **E-2**, proven on dev 2026-08-09 |
 | 5 | Qualified | 🟢 | 🟢 | Ordering only, never permission |
 | 6 | Duplicates resolved | 🟠 | 🟠 | Default-deny, but `duplicateResolution` is caller-supplied |
-| 7 | DNCR-cleared | 🟠 | 🟠 | Port complete and fail-closed. Needs **DNCR-1** and **E-3** |
+| 7 | DNCR-cleared | 🟠 | 🟠 | Port complete and fail-closed; **M8K built durable storage offline**, but `laq4` is not applied and nobody holds a DNCR account. Needs **DNCR-1** and **E-3** |
 | 8 | Permitted day/time | 🟠 | 🟠 | Fully implemented. Needs **A-L1**, **A-L2**, **A-L3** |
 | 9 | **Attempts permitted** | 🟠 | 🟢 | **A-L6 / A-L7 / A-L8 approved.** The values are decided and cited, the count comes from durable rows, a decline is permanent, and the policy refuses to call itself approved while anything inside it is not. No engineering deficiency remains |
 | 10 | Not suppressed | 🟢 | 🟢 | Append-only, DB-enforced, cross-process proven |

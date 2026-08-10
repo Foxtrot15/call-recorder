@@ -2525,3 +2525,97 @@ called has no history for such a ceiling to bound, and it has deliberately not
 been given an invented number.
 
 **A-L1 is untouched and still binding.** So is **DNCR-1**.
+
+---
+
+## 43. M8K — durable DNCR wash storage (E-3), built offline
+
+**`laq4_create_dncr_washes.sql` is WRITTEN AND NOT APPLIED — not to dev, not to
+production.** The code path, both adapters, the operator tooling and 34 tests
+exist and pass against the in-memory adapter. The schema they were written
+against has never been run. **M8K cannot be called complete against real
+Postgres until a human applies and verifies that migration.**
+
+### 43.1 The gap it closes
+
+Until now the wash store was an in-process `Map`. A wash a human performed,
+attested and imported did not survive the process exiting: after a restart every
+number read back as `unknown`, which vetoes. The failure direction was always
+safe, but it also meant a real wash could never actually authorise anything
+across a restart, and the DNCR gate could not go green even in principle.
+
+### 43.2 A ledger, not a flag
+
+The obvious schema is one row per number with a boolean `washed`. It cannot
+answer the only question that matters, which is not "was it washed" but "is what
+we know still good enough to rely on **right now**".
+
+So `acquisition_dncr_washes` stores wash EVENTS and nothing derived from them —
+`washed_at`, `result`, `attested_by`, `mode`, `authoritative`, `batch_ref`,
+`source`, `recorded_at` — and freshness is recomputed at read time on every
+call. A wash that crosses the statutory 30 days becomes unusable **without any
+row changing and without anything having had to notice**. Nothing decays in the
+database, and nothing is ever rewritten because time passed.
+
+A stale wash decays to `unknown`, never to its last answer. There is no
+`unknown` in the `result` CHECK, deliberately: unknown is the ABSENCE of a
+usable row, not a row, and storing it would invite somebody to read "we recorded
+that we do not know" as a check having been performed.
+
+### 43.3 Three states, and now four reasons
+
+| State | Meaning |
+|---|---|
+| `not_listed` | we washed, and the number was absent from the Register |
+| `listed` | we washed, and it was present |
+| `unknown` — never washed | nobody has checked this number |
+| `unknown` — stale | we checked, and the check has expired |
+| `unknown` — **unavailable** | **we could not read the ledger at all** |
+
+The last is new in M8K and is kept apart from the others. All of them veto, so
+the call is refused either way — but "never checked" is a fact about the number
+and "could not read" is a fault in this system, and a founder shown the first
+would go and wash a number that may already have been washed. Eligibility names
+it `dncr_store_unavailable`, and `hydrateWashStore` returns an explicitly
+unavailable store rather than an empty one. **An empty `Map` presented as a
+successful read is indistinguishable from "nobody is on the Register", and that
+mistake authorises calls.** An unavailable store also refuses to be written to,
+so a failed read cannot accept an import and appear to have worked.
+
+### 43.4 Ordering, idempotency and canonical numbers
+
+- **The newest wash wins by when it was PERFORMED, not when it was recorded.**
+  Paperwork arrives out of order; a June wash filed after an August one must not
+  displace it. `latestWashFor` orders on `washed_at`.
+- **Re-importing the same run does not duplicate.** laq4's unique index covers
+  `(e164, washed_at, result, coalesce(batch_ref,''))` — `coalesce` because NULLs
+  are distinct in a Postgres unique index, so without it two imports with no
+  batch reference would both be allowed. A 23505 is reported as `created: false`.
+- **A wash is recorded against a telephone, not a spelling of one.** Numbers are
+  canonicalised through `acquisition-phone.js` on the way in, so a file that
+  writes the same number two ways produces one row.
+- **A future `washed_at` is refused by a trigger**, not only by the application.
+  It is the one input error that silently EXTENDS how long we believe we may
+  call somebody. It is a trigger rather than a CHECK because Postgres does not
+  allow `now()` in a check constraint.
+- **A fixture result can never be authoritative.** `authoritative` is derived
+  from `mode` in both adapters and enforced by a CHECK that ties the two
+  together, so test data cannot be presented as a real wash.
+
+### 43.5 What M8K is not
+
+No DNCR account, endpoint, credential, API, SOAP, SFTP or scrape — and ratchets
+in `test/acquisition-dncr-durable.test.js` fail the build if one appears,
+including a check that the string `"live"` never becomes a mode. The wash still
+happens **out of band**, performed by a person against the real Register, and
+enters as attested data. `scripts/acquisition-dncr-import.js` loads it, dry-run
+by default, `--write` typed in full, `--attested-by` mandatory.
+
+**The official export's shape is unknown to this repository**, so it does not
+pretend otherwise. The CLI defines a small canonical AIDA format
+(`e164,result`); mapping a real DNCR export is **pending a sample from the
+founder** and belongs beside the other import profiles when one arrives.
+
+**DNCR-1 is untouched.** Nobody holds the account, so no wash can be attested
+yet. M8K gives an attested wash somewhere durable to live; it does not produce
+one.
