@@ -313,6 +313,82 @@ describe("when the wash ledger cannot be read", () => {
   });
 });
 
+// ── The DNCR gate, every state, offline ─────────────────────────────
+//
+// The live proof in scripts/dev/acquisition-dncr-proof/ covers the two states
+// dev's single fictional row can actually be in — fresh and, at a later
+// evaluation instant, stale. The rest are pinned here rather than by writing
+// more rows to dev: a `listed` row in particular would be permanent, and there
+// is no reason to keep one when a fixture proves the same thing.
+
+describe("what the DNCR gate does in each state", () => {
+  const PHONE = "(03) 5550 1042";
+
+  function gate(washStore, at = AT) {
+    const engine = createEligibilityEngine({ now: () => at, washStore });
+    const decision = engine.evaluate(
+      {
+        prospectId: "pr_gate_probe",
+        businessName: "Gate Probe Locksmiths",
+        timezone: "Australia/Melbourne",
+        lifecycle: "review_approved",
+        phones: [{ raw: PHONE }],
+        sourceRefs: [],
+      },
+      {}
+    );
+    return {
+      failed: (decision.failedChecks || []).find((f) => f.check === "dncr"),
+      passed: (decision.passedChecks || []).includes("dncr"),
+      decision,
+    };
+  }
+
+  it("store unavailable => dncr_store_unavailable", () => {
+    const g = gate(unavailableWashStore("the ledger is unreachable."));
+    assert.strictEqual(g.failed.code, ELIGIBILITY_CODES.DNCR_UNAVAILABLE);
+  });
+
+  it("no durable row => dncr_not_checked", async () => {
+    const empty = await hydrateWashStore({ store: createInMemoryAcquisitionStore(), now });
+    assert.strictEqual(empty.available, true, "an empty ledger is readable — it just holds nothing");
+    const g = gate(empty);
+    assert.strictEqual(g.failed.code, ELIGIBILITY_CODES.DNCR_UNKNOWN);
+  });
+
+  it("a stale row => dncr_wash_stale, and asks for another wash", async () => {
+    const { wash } = await persistedThenHydrated({}, { clock: clockAt(DNCR_WASH_VALIDITY_DAYS + 5) });
+    const g = gate(wash, new Date(AT.getTime() + (DNCR_WASH_VALIDITY_DAYS + 5) * DAY));
+    assert.strictEqual(g.failed.code, ELIGIBILITY_CODES.DNCR_STALE);
+    assert.match(g.failed.requiredFounderAction, /again/i);
+  });
+
+  it("listed => blocked, permanently, on the number itself", async () => {
+    const { wash } = await persistedThenHydrated({ results: [{ e164: PHONE, result: "listed" }] });
+    const g = gate(wash);
+    assert.strictEqual(g.failed.code, ELIGIBILITY_CODES.DNCR_LISTED);
+    assert.strictEqual(g.failed.temporary, false, "being on the Register is not a delay");
+  });
+
+  it("a fresh authoritative not_listed clears the DNCR gate — and ONLY that gate", async () => {
+    const { wash } = await persistedThenHydrated({ results: [{ e164: PHONE, result: "not_listed" }] });
+    const g = gate(wash);
+
+    assert.strictEqual(g.passed, true, "the DNCR check passes");
+    assert.ok(!g.failed, "and contributes no failure");
+
+    // The point: clearing DNCR is not clearing anything else. This prospect is
+    // still refused, by every other gate that has not been satisfied, and a
+    // cleared wash must never read as permission to call.
+    assert.strictEqual(g.decision.eligible, false, "one gate passing is not eligibility");
+    const stillFailing = g.decision.failedChecks.map((f) => f.check);
+    for (const check of ["suppression", "duplicate", "policy_approval", "batch_approval"]) {
+      assert.ok(stillFailing.includes(check), `${check} must still be refusing`);
+    }
+    assert.ok(!stillFailing.includes("dncr"), "dncr is the only one the wash was allowed to settle");
+  });
+});
+
 // ── Safety: no live DNCR anything ───────────────────────────────────
 
 describe("M8K is storage and import only", () => {
