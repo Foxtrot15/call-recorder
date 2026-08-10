@@ -1,32 +1,24 @@
 // ============================================================================
-// E-5 RESTART PROOF — shared fixtures and a file-backed store.
+// M8L RESTART PROOF — shared fixtures and a file-backed store.
 //
-//   node scripts/dev/acquisition-batch-approval-proof/process-a.js
-//   node scripts/dev/acquisition-batch-approval-proof/process-b.js
+//   node scripts/dev/acquisition-duplicate-proof/process-a.js
+//   node scripts/dev/acquisition-duplicate-proof/process-b.js
 //
 // ── WHY A FILE AND NOT POSTGRES ─────────────────────────────────────
-// The claim E-5 has to prove is that a batch approved by a process that has
-// EXITED is recognised by a process that has never seen it. What makes that
-// claim true is the fold over append-only decision rows, and that fold does not
-// know or care which durable thing the rows came out of.
+// The claim M8L has to prove is that a duplicate resolved by a human in one
+// process is still resolved for a process that has never seen it, and that a
+// caller who says otherwise cannot override it. What makes that true is the fold
+// over append-only review decisions, and that fold does not know or care which
+// durable thing the rows came out of.
 //
-// Running it against dev Postgres would append a PERMANENT approval row to
-// acquisition_decisions — an append-only table, on a database whose fictional
-// row count is tracked in the runbook — to demonstrate a property this proves
-// with none. The residue would buy the adapter's row mapping, which
-// test/acquisition-store.test.js and the M8H/M8I proofs already cover.
+// Running it against dev would append PERMANENT review rows to
+// acquisition_decisions — an append-only table — to demonstrate a property this
+// proves with none. The M8H review queue and the M8I decision chain were both
+// already proven against real dev Postgres; nothing about the substrate is in
+// question here.
 //
-// So the store here is a JSON file, and the two processes are genuinely two OS
-// processes with no shared heap. Process A's memory is gone before B starts;
-// everything B knows, it read back.
-//
-// ── WHAT THIS STORE IS AND IS NOT ───────────────────────────────────
-// A thin persistence wrapper over createInMemoryAcquisitionStore — the same
-// reference implementation the unit tests run against, seeded from the file and
-// re-dumped after each write. It persists DECISIONS, SUPPRESSIONS and PROSPECTS,
-// which is what this proof reads; everything else delegates and is not durable
-// here. It is a proof harness, not an adapter, and nothing outside this
-// directory uses it.
+// So the store is a JSON file, and the two processes are genuinely two OS
+// processes with no shared heap.
 //
 // NOTHING HERE TOUCHES A DATABASE, A NETWORK OR A PROVIDER.
 // ============================================================================
@@ -40,38 +32,29 @@ const { createEvidenceLedger } = require("../../../src/services/acquisition-evid
 const { createWashStore } = require("../../../src/services/acquisition-dncr");
 const { createFixtureHolidayProvider } = require("../../../src/services/acquisition-holidays");
 const { createAttemptPolicy } = require("../../../src/services/acquisition-attempt-policy");
-const { resolveDuplicates } = require("../../../src/services/acquisition-dedupe");
 
-// A fixed instant inside the permitted calling window, so neither process
-// depends on when it happens to be run.
 const AT = new Date("2026-08-05T04:00:00Z"); // Wednesday, 14:00 Melbourne
 const clock = () => AT;
 
-// Fictional. Belongs to no business. The 5550 block is reserved for fiction.
+// Fictional. The 5550 block belongs to no business.
 const NUMBER = "+61355501042";
-const OTHER_NUMBER = "+61355501099";
-const SOURCE = { url: "https://e5-batch-approval-probe.example.com.au/contact" };
-
+const CANONICAL_NUMBER = "+61355501077";
+const SOURCE = { url: "https://m8l-duplicate-probe.example.com.au/contact" };
 const FOUNDER = "Peter Dang";
 
-const STATE_FILE = path.resolve(process.env.E5_STATE || path.join(__dirname, ".e5-store.json"));
-const HANDOFF = path.resolve(process.env.E5_HANDOFF || path.join(__dirname, ".process-a-approved.json"));
+const STATE_FILE = path.resolve(process.env.M8L_STATE || path.join(__dirname, ".m8l-store.json"));
+const HANDOFF = path.resolve(process.env.M8L_HANDOFF || path.join(__dirname, ".process-a-decided.json"));
 
 // -- The file-backed store -------------------------------------------
 
 function readState() {
-  if (!fs.existsSync(STATE_FILE)) return { decisions: [], suppressions: [], prospects: [] };
+  if (!fs.existsSync(STATE_FILE)) return { decisions: [], prospects: [], suppressions: [] };
   return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
 }
 
 function makeStore() {
   const seed = readState();
   const inner = createInMemoryAcquisitionStore({ seed });
-  // PROSPECT ROWS ARE PERSISTED TOO SINCE M8L. Durable duplicate resolution
-  // treats a stored row as the evidence that dedupe ran and did not hold this
-  // business; a prospect that exists only in a heap has never been compared
-  // against anything and the gate refuses it. So this proof has to store them,
-  // exactly as an import would.
   const known = new Set((seed.prospects || []).map((p) => p.prospectId));
 
   const dump = async () => {
@@ -82,7 +65,11 @@ function makeStore() {
     }
     fs.writeFileSync(
       STATE_FILE,
-      JSON.stringify({ decisions: await inner.listDecisions({ limit: 100000 }), suppressions: await inner.listSuppressions(), prospects }, null, 2)
+      JSON.stringify(
+        { decisions: await inner.listDecisions({ limit: 100000 }), prospects, suppressions: await inner.listSuppressions() },
+        null,
+        2
+      )
     );
   };
 
@@ -91,8 +78,7 @@ function makeStore() {
     kind: "file",
     async appendDecision(row) {
       const r = await inner.appendDecision(row);
-      // Durable BEFORE visible, exactly as the real adapters: the file is
-      // written before this call reports success.
+      // Durable BEFORE visible, exactly as the real adapters.
       if (r && r.created) await dump();
       return r;
     },
@@ -114,9 +100,9 @@ function resetState() {
   for (const f of [STATE_FILE, HANDOFF]) if (fs.existsSync(f)) fs.unlinkSync(f);
 }
 
-// -- The invented batch ----------------------------------------------
+// -- Fixtures --------------------------------------------------------
 
-function fixtureProspect({ name = "E5 Batch Probe Locksmiths", suburb = "Coburg", phone = "(03) 5550 1042" } = {}) {
+function fixtureProspect({ name, suburb, phone }) {
   let p = createProspect({
     businessName: name,
     tradeCategory: "Locksmith",
@@ -131,10 +117,14 @@ function fixtureProspect({ name = "E5 Batch Probe Locksmiths", suburb = "Coburg"
     discoveredAt: "2026-07-15T02:00:00.000Z",
   }).prospect;
   for (const to of ["evidence_captured", "review_pending", "review_approved"]) {
-    p = transitionProspect(p, to, { actor: FOUNDER, reason: "E-5 proof fixture", now: clock }).prospect;
+    p = transitionProspect(p, to, { actor: FOUNDER, reason: "M8L proof fixture", now: clock }).prospect;
   }
   return p;
 }
+
+/** The business already known, and the ambiguous candidate that may be it. */
+const canonical = () => fixtureProspect({ name: "M8L Canonical Locksmiths", suburb: "Coburg", phone: "(03) 5550 1077" });
+const candidate = () => fixtureProspect({ name: "M8L Ambiguous Locks", suburb: "Preston", phone: "(03) 5550 1042" });
 
 function evidenceFor(prospect) {
   const ledger = createEvidenceLedger({ now: clock });
@@ -143,16 +133,15 @@ function evidenceFor(prospect) {
     ["trade_category", "Locksmith"],
     ["phone", prospect.phones[0].raw],
   ]) {
-    ledger.record({ prospectId: prospect.prospectId, kind, captureMode: "fixture", value, observedAt: "2026-07-15T02:00:00.000Z", capturedBy: "e5-probe", source: SOURCE });
+    ledger.record({ prospectId: prospect.prospectId, kind, captureMode: "fixture", value, observedAt: "2026-07-15T02:00:00.000Z", capturedBy: "m8l-probe", source: SOURCE });
   }
   return ledger.forProspect(prospect.prospectId);
 }
 
-/** Everything the M8E gate needs EXCEPT the batch approval, which is durable. */
-function gateInputs(prospect, e164 = NUMBER) {
+/** Everything the M8E gate needs except the durable answers it reads itself. */
+function gateInputs(prospect, e164) {
   const washStore = createWashStore({ now: clock, mode: "fixture" });
   washStore.wash(e164);
-  const evidenceRows = evidenceFor(prospect);
   return {
     engineOptions: {
       washStore,
@@ -160,11 +149,8 @@ function gateInputs(prospect, e164 = NUMBER) {
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }),
       counselApproved: true,
     },
-    context: {
-      evidenceRows,
-      duplicateResolution: resolveDuplicates([{ ...prospect, numbers: [{ e164 }], evidenceCount: evidenceRows.length, hasOfficialSource: true }]),
-      // DELIBERATELY NO `batch`. That is the point of the proof.
-    },
+    // NO duplicateResolution and NO batch. That is the point of the proof.
+    context: { evidenceRows: evidenceFor(prospect) },
   };
 }
 
@@ -194,13 +180,14 @@ module.exports = {
   AT,
   clock,
   NUMBER,
-  OTHER_NUMBER,
+  CANONICAL_NUMBER,
   FOUNDER,
   STATE_FILE,
   HANDOFF,
   makeStore,
   resetState,
-  fixtureProspect,
+  canonical,
+  candidate,
   evidenceFor,
   gateInputs,
   check,

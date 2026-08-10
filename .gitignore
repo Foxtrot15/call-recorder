@@ -53,3 +53,7 @@ scripts/dev/acquisition-dncr-proof/.process-a-saw.json
 # anything on their own.
 scripts/dev/acquisition-batch-approval-proof/.e5-store.json
 scripts/dev/acquisition-batch-approval-proof/.process-a-approved.json
+
+# M8L duplicate resolution proof. Same shape, same reason.
+scripts/dev/acquisition-duplicate-proof/.m8l-store.json
+scripts/dev/acquisition-duplicate-proof/.process-a-decided.json

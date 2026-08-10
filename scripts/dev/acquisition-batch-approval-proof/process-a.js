@@ -40,6 +40,13 @@ async function main() {
   const one = C.fixtureProspect();
   const two = C.fixtureProspect({ name: "E5 Second Probe Locksmiths", suburb: "Preston", phone: "(03) 5550 1099" });
 
+  // Both are stored, because since M8L a record nothing has ever compared
+  // against the businesses already held is refused as duplicate_never_assessed.
+  // This proof is about batch approval; storing them keeps the duplicate gate
+  // out of its way rather than silently deciding it.
+  await store.upsertProspect(one);
+  await store.upsertProspect(two);
+
   // ── The batch the founder approves ────────────────────────────────
   const identity = canonicalBatchIdentity({
     members: [{ rowId: one.prospectId, prospectId: one.prospectId, e164: C.NUMBER }],
