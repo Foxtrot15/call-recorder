@@ -21,7 +21,12 @@
 //   attempts + washes    acquisition-attempt-policy.assess
 //   tz / holiday / hours acquisition-calling-policy.evaluate
 //   counsel approval     carried on the calling policy's decision
-//   batch approval       supplied by the caller (acquisition-batch)
+//   batch approval       acquisition-batch-approval, read from
+//                        acquisition_decisions (E-5). A caller may still supply
+//                        one for a preview screen, and it is labelled
+//                        `batchSource: "caller"` so nothing mistakes it for the
+//                        durable answer. The M8E gate binds the durable one
+//                        itself and discards whatever the caller passed.
 //
 // ── PRECEDENCE IS EXPLICIT, AND PERMANENT BEATS TEMPORARY ───────────
 // Checks are ordered, and the DECISIVE reason is the highest-precedence
@@ -92,6 +97,13 @@ const ELIGIBILITY_CODES = Object.freeze({
   POLICY_UNAPPROVED: "attempt_policy_unapproved",
   COUNSEL_UNAPPROVED: "counsel_approval_missing",
   BATCH_UNAPPROVED: "founder_batch_approval_missing",
+  // E-5. Distinct from BATCH_UNAPPROVED for exactly the reason HISTORY_UNAVAILABLE
+  // is distinct from ATTEMPTS_BLOCKED: that one says "we looked, and this batch
+  // was never approved". This one says "we could not look", which is a fact
+  // about us. A founder told their approval is missing goes and approves the
+  // batch again; a founder told the store is unreadable goes and fixes the
+  // store. Reporting ours as theirs sends them to the wrong place.
+  BATCH_STORE_UNAVAILABLE: "batch_approval_store_unavailable",
   ATTEMPTS_BLOCKED: "attempt_or_wash_restriction",
   // M8J / E-1. Distinct from ATTEMPTS_BLOCKED on purpose: that says "we know,
   // and the answer is no". This says "we could not find out", which is a fact
@@ -175,7 +187,11 @@ function createEligibilityEngine({
    * @param {object} [context.duplicateResolution]  from resolveDuplicates()
    * @param {object} [context.campaign]   { id, approved, killSwitchEngaged, blocked, blockReason }
    * @param {object} [context.history]    { attempts, lastAttemptAt, lastContactAt, lastOutcome }
-   * @param {object} [context.batch]      { approved, batchHash, approvedBy, stale }
+   * @param {object} [context.batch]      { approved, stale, unavailable, source,
+   *                                        code, message, batchKey, batchHash,
+   *                                        approvedBy } — from
+   *                                        acquisition-batch-approval on any
+   *                                        path that could lead to a call
    * @param {Date}   [context.at]
    */
   function evaluate(prospect, context = {}) {
@@ -326,22 +342,52 @@ function createEligibilityEngine({
     }
 
     // ── 8. Founder batch approval ──────────────────────────────────
-    if (!batch || batch.approved !== true) {
+    //
+    // ── WHERE THE APPROVAL COMES FROM (E-5) ─────────────────────────
+    // `batchSource` records it, on the same terms and for the same reason as
+    // `historySource`:
+    //
+    //   durable      read from acquisition_decisions by
+    //                acquisition-batch-approval. THE PRODUCTION SOURCE, and the
+    //                only one the M8E gate will accept — see
+    //                acquisition-authorisation, which discards whatever the
+    //                caller passed and binds its own.
+    //   unavailable  the approval store could not be read. Refused as OUR
+    //                failure, never as a finding about the batch.
+    //   caller       an object a caller built. Legitimate for the founder's
+    //                screens, the dry runs and the walkthrough, where the
+    //                question is "what would this look like" rather than "may
+    //                this be called". It is labelled so that nothing can claim
+    //                durability it does not have.
+    //   absent       no batch context at all.
+    const batchSource = !batch ? "absent" : batch.unavailable === true ? "unavailable" : batch.source === "durable" ? "durable" : "caller";
+
+    if (batch && batch.unavailable === true) {
       add(
-        fail("batch_approval", ELIGIBILITY_CODES.BATCH_UNAPPROVED, "This prospect is not in a batch the founder has approved.", {
+        fail("batch_approval", ELIGIBILITY_CODES.BATCH_STORE_UNAVAILABLE, batch.message || "Whether the founder has approved a batch containing this business could not be established, so no call is permitted.", {
+          temporary: true,
+          requiredFounderAction: "Restore access to the durable approval records. Nothing may be called until they can be read.",
+          detail: { batchSource },
+        })
+      );
+    } else if (!batch || batch.approved !== true) {
+      add(
+        fail("batch_approval", ELIGIBILITY_CODES.BATCH_UNAPPROVED, (batch && batch.message) || "This prospect is not in a batch the founder has approved.", {
           temporary: true,
           requiredFounderAction: "Review and approve a calling batch containing this business.",
+          detail: { batchSource, batchCode: batch ? batch.code || null : null },
         })
       );
     } else if (batch.stale === true) {
       add(
-        fail("batch_approval", ELIGIBILITY_CODES.BATCH_UNAPPROVED, "The approved batch is out of date — the records or their eligibility changed after it was approved, so the approval no longer covers what would be called.", {
+        fail("batch_approval", ELIGIBILITY_CODES.BATCH_UNAPPROVED, batch.message || "The approved batch is out of date — the records changed after it was approved, so the approval no longer covers what would be called.", {
           temporary: true,
           requiredFounderAction: "Re-review and re-approve the batch.",
+          detail: { batchSource, batchCode: batch.code || null },
         })
       );
     } else {
-      add(pass("batch_approval", `Included in batch ${batch.batchHash ? batch.batchHash.slice(0, 12) : "(unnamed)"}, approved by ${batch.approvedBy || "unknown"}.`));
+      add(pass("batch_approval", `Included in batch ${batch.batchHash ? batch.batchHash.slice(0, 12) : "(unnamed)"}, approved by ${batch.approvedBy || "unknown"}.`, { batchSource }));
     }
 
     // ── 9. Attempts and washes ─────────────────────────────────────
@@ -443,10 +489,11 @@ function createEligibilityEngine({
       attemptPolicyVersion: attempts.version,
       counselApproved,
       historySource,
+      batchSource,
     });
   }
 
-  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved, historySource = "absent" }) {
+  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved, historySource = "absent", batchSource = "absent" }) {
     const failures = results.filter((r) => r.ok === false);
     const passed = results.filter((r) => r.ok === true).map((r) => r.check);
 
@@ -494,6 +541,8 @@ function createEligibilityEngine({
       counselApproved: ca,
       /** Where the attempt history came from: durable | caller | unavailable | absent. */
       historySource,
+      /** Where the batch approval came from: durable | caller | unavailable | absent (E-5). */
+      batchSource,
       evaluatedAt: instant.toISOString(),
       localTime,
       provenance: provenance ? Object.freeze(provenance) : null,

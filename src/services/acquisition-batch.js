@@ -27,6 +27,23 @@
 // That is the difference between "the founder approved this batch" and "the
 // founder approved something once and we have been calling ever since".
 //
+// ── THIS MODULE'S APPROVAL IS IN-PROCESS. E-5 IS THE DURABLE ONE ────
+// `approveBatch` here returns an approved batch OBJECT, and
+// `checkApprovalFreshness` compares it against a freshly assembled one. Both are
+// the FOUNDER'S SCREEN: "you looked at this list ten minutes ago — has anything
+// changed since?" `batchHash` covers each row's eligibility for exactly that
+// reason, so a wash expiring while the founder reads shows up as a change.
+//
+// It is NOT what a call is authorised against, and it must not become that. A
+// hash that moves whenever the world moves would make every durable approval
+// look stale within hours, and a founder asked to re-approve an unchanged list
+// daily learns to do it without reading it.
+//
+// The durable approval lives in acquisition-batch-approval.js. It binds to a
+// `membershipHash` over WHO and ON WHAT NUMBER only, it is written to the
+// append-only decision log, and it is what acquisition-authorisation reads at
+// the final gate. See that file's header for why the two hashes differ.
+//
 // ── ROWS ARE DOMAIN RESULTS, NOT RECOMPUTED ─────────────────────────
 // Every row carries the eligibility decision produced by the eligibility
 // engine. A founder UI renders these; it must never re-derive eligibility, or
@@ -95,6 +112,10 @@ function categoriseDecision(decision, duplicateStatus) {
   if (code === "record_invalid" || code === "record_not_reviewed" || code === "no_usable_number") return "needsManualReview";
   if (code === "attempt_policy_unapproved" || code === "counsel_approval_missing") return "policyBlocked";
   if (code === "founder_batch_approval_missing") return "eligibleLater";
+  // E-5. The approval could not be READ, which is not the same as there not
+  // being one. It must not appear under a heading a founder can clear by
+  // approving something, because approving again would not fix it.
+  if (code === "batch_approval_store_unavailable") return "needsManualReview";
   if (code === "attempt_or_wash_restriction") return "attemptBlocked";
   if (code === "campaign_blocked" || code === "kill_switch_engaged") return "policyBlocked";
 
