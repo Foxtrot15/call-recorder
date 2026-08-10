@@ -1,7 +1,7 @@
 # Acquisition SQL Runbook — applying LAQ1, LAQ2, LAQ3 (and, when approved, LAQ4) to dev
 
-**Status:** **APPLIED TO DEV** — LAQ1 + LAQ2 on 2026-08-07 (M8D) and LAQ3 on
-2026-08-08 (M8I), against project ref
+**Status:** **APPLIED TO DEV** — LAQ1 + LAQ2 on 2026-08-07 (M8D), LAQ3 on
+2026-08-08 (M8I) and **LAQ4 on 2026-08-10 (M8K)**, against project ref
 `wvwemitmmsdytyutaqbm`. **NOT applied to production.** Nothing in this
 repository applies SQL, and a test asserts that — every step below is something
 a human runs by hand, and every step below was run by hand.
@@ -9,9 +9,10 @@ a human runs by hand, and every step below was run by hand.
 **Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3 and LAQ4 are applied
 in, how each is verified, and what can and cannot be rolled back.
 
-> **LAQ4 is WRITTEN AND NOT APPLIED — not to dev, not to production.** M8K wrote
-> it, reviewed it, and built the entire code path against it offline. Applying
-> it is a human decision nobody has taken yet. See **§11**.
+> **LAQ4 is APPLIED TO DEV** (2026-08-10, by hand) **and NOT applied to
+> production.** Dev holds exactly one permanent fictional wash row from the
+> behavioural probe, and the durable path has been proven restart-safe against
+> real Postgres across two separate OS processes. See **§11**.
 
 > **Apply to the dev Supabase project only.** Production is out of scope for
 > this runbook, for M8C, for M8D and for M8I.
@@ -31,8 +32,8 @@ only, and were run in this order against dev:
 | `07_restart_proof_verify.sql` | Proves §7 left exactly its three intentional rows |
 | `08_laq3_preflight.sql` | LAQ3 pre-flight: no duplicate `prev_hash`, the index name is free, the chain state recorded (§10) |
 | `09_laq3_verify.sql` | LAQ3 structure: the index exists, is UNIQUE, covers exactly `(prev_hash)`, and nothing else moved |
-| `10_laq4_preflight.sql` | **LAQ4 pre-flight — NOT YET RUN:** laq2's refusal function exists, the wash table and its index names are free, the RLS posture is intact, row counts recorded (§11) |
-| `11_laq4_verify.sql` | **LAQ4 verification — NOT YET RUN:** table, constraints, indexes, both triggers, then an optional behavioural probe that writes one permanent fictional row |
+| `10_laq4_preflight.sql` | LAQ4 pre-flight: laq2's refusal function exists, the wash table and its index names are free, the RLS posture is intact, row counts recorded (§11) |
+| `11_laq4_verify.sql` | LAQ4 structure: table, constraints, indexes, both triggers — plus §5, a behavioural probe that **writes one permanent fictional row**. §5 has been run once against dev and **must not be run there again** |
 
 ---
 
@@ -42,9 +43,12 @@ only, and were run in this order against dev:
 |---|---|---|
 | `laq1_create_acquisition_prospects.sql` | `acquisition_prospects`, `acquisition_prospect_phones`, `acquisition_evidence`, `acquisition_decisions` | nothing |
 | `laq2_create_acquisition_queue.sql` | `acquisition_suppressions`, `acquisition_qualifications`, `acquisition_call_queue`, `acquisition_contact_outcomes` | widens the `lifecycle` CHECK on `acquisition_prospects` |
+| `laq4_create_dncr_washes.sql` (§11) | `acquisition_dncr_washes` | nothing |
 
-Eight tables. All RLS-enabled with **no policies**, meaning service_role only.
+Nine tables. All RLS-enabled with **no policies**, meaning service_role only.
 None has a `client_id`, and none is reachable from any client-facing route.
+
+(LAQ3 creates no table — it adds one unique index. See §10.)
 
 **Order matters.** LAQ2 reuses the trigger function LAQ1 defines and ALTERs a
 constraint LAQ1 creates. It raises immediately if LAQ1 has not been applied
@@ -641,9 +645,10 @@ kept honest by review.
 
 ## 11. LAQ4 — durable DNCR wash storage (M8K)
 
-`supabase/sql/laq4_create_dncr_washes.sql`. **WRITTEN AND NOT APPLIED — not to
-dev, not to production.** Everything below is what a human would do; none of it
-has been done.
+`supabase/sql/laq4_create_dncr_washes.sql`. **APPLIED TO DEV on 2026-08-10, by
+hand. NOT applied to production.** Sections 11.1–11.6 record what was done and
+how to do it again on a fresh database; **§11.7 records the live dev state and
+the durability proof**.
 
 One new table, `public.acquisition_dncr_washes`, plus one trigger function, two
 triggers, three indexes and RLS. **No existing table is altered**, no column is
@@ -721,14 +726,49 @@ That rollback is only safe *before real washes exist*. Once an attested wash is
 stored, dropping this table destroys the evidence that calls were lawfully made,
 and the rollback becomes a restore rather than a drop.
 
-### 11.7 What LAQ4 does not close
+### 11.7 What dev holds now, and what was proven
 
-**DNCR-1 remains open and is not an engineering item.** Nobody holds a DNCR
-account, and no wash can be attested until somebody does. LAQ4 gives an attested
-wash somewhere durable to live; it does not produce one, and nothing in this
+**LAQ4 applied to dev 2026-08-10.** The behavioural probe ran once and left one
+permanent fictional row:
+
+| field | value |
+|---|---|
+| `e164` | `+61355509999` (fictional, belongs to no business) |
+| `result` | `not_listed` |
+| `washed_at` | `2026-08-09T00:00:00Z` |
+| `attested_by` | `laq4-verify` |
+| `mode` / `authoritative` | `import` / `true` |
+| `batch_ref` | `laq4-verify-batch` |
+| `source` | `verification probe` |
+
+**Dev fictional residue is now 21 rows across nine tables** (was 20 across
+eight). `acquisition_decisions` is still 4 — laq4 wrote no decision.
+
+**The durability proof is `scripts/dev/acquisition-dncr-proof/`, and it is
+READ-ONLY.** Baseline, then two genuinely separate OS processes, then a
+later-instant evaluation of the same row. 33 checks, zero residue, and the wash
+ledger's sha256 is identical before and after:
+
+- **Process A** hydrates from dev, gets `not_listed` / authoritative / usable at
+  +6 days, and the DNCR gate passes. A control proves the answer came from
+  Postgres: a store built without a durable read knows nothing about the number.
+- **Process B**, a new process after A exited, recovers the same row field for
+  field and gets the same answer.
+- **The same row at +42 days** decays to `unknown` — not to `not_listed` — and
+  eligibility refuses with `dncr_wash_stale`, telling the founder to wash it
+  *again*. **No row changed**: freshness is a question about when you ask.
+
+`.process-a-saw.json` is a handoff file, not a cache: B re-reads Postgres and
+compares against it. It is gitignored.
+
+**A rerun caveat:** the fixed `washed_at` means re-running section 5d against dev
+now raises 23505 rather than inserting. That is 5e's demonstration, not 5d's, and
+is why §11.5 says not to run it there again.
+
+### 11.8 What LAQ4 still does not close
+
+**E-3 is closed on dev and open for production**, which is not applied. And
+**DNCR-1 remains external**: nobody holds a DNCR account, so no *real* wash has
+ever entered this system. The row above is fictional and attested by a
+verification probe, not by a person who washed a real list. Nothing in this
 repository can contact the Register.
-
-**M8K cannot be called complete against real Postgres until this migration is
-approved, applied by hand and verified.** Until then E-3 is closed *offline*:
-the code path, both adapters, the import tooling and 34 tests exist and pass,
-and the schema they were written against has never been run.

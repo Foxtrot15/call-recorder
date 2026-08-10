@@ -2528,13 +2528,12 @@ been given an invented number.
 
 ---
 
-## 43. M8K — durable DNCR wash storage (E-3), built offline
+## 43. M8K — durable DNCR wash storage (E-3), closed on dev
 
-**`laq4_create_dncr_washes.sql` is WRITTEN AND NOT APPLIED — not to dev, not to
-production.** The code path, both adapters, the operator tooling and 34 tests
-exist and pass against the in-memory adapter. The schema they were written
-against has never been run. **M8K cannot be called complete against real
-Postgres until a human applies and verifies that migration.**
+**`laq4_create_dncr_washes.sql` was applied to DEV on 2026-08-10, by hand.
+NOT applied to production.** The durable path has since been proven against real
+Postgres across two genuinely separate OS processes — see §43.6. **E-3 is closed
+on dev and open for production**, which has no acquisition schema at all.
 
 ### 43.1 The gap it closes
 
@@ -2619,3 +2618,69 @@ founder** and belongs beside the other import profiles when one arrives.
 **DNCR-1 is untouched.** Nobody holds the account, so no wash can be attested
 yet. M8K gives an attested wash somewhere durable to live; it does not produce
 one.
+
+### 43.6 The dev proof — two processes, one row, two answers
+
+`scripts/dev/acquisition-dncr-proof/` is **read-only**: a baseline, two separate
+OS processes, and a later-instant evaluation. **33 checks, zero residue**, and
+the wash ledger's sha256 is byte-identical before and after.
+
+The subject is the one fictional row laq4's behavioural probe left on dev:
+`+61355509999`, `not_listed`, washed `2026-08-09T00:00:00Z`, attested
+`laq4-verify`, `mode: import`, `authoritative: true`. It is not a real wash.
+
+| | evaluated at | answer |
+|---|---|---|
+| Process A | washed_at **+6 days** | `not_listed`, authoritative, usable → **DNCR gate passes** |
+| Process B (new process) | washed_at **+6 days** | identical, field for field |
+| Process B | washed_at **+42 days** | `unknown` (was `not_listed`), unusable → **`dncr_wash_stale`** |
+
+Three things make this a proof rather than a demonstration:
+
+1. **The knowledge came from Postgres.** A control in process A builds a wash
+   store with no durable read; it answers `unknown` and holds zero records. The
+   number is only known once the ledger is read.
+2. **Process B is a different OS process** — asserted on pid — started after A
+   exited. Nothing survives A but the row and a small handoff file, and B
+   re-reads Postgres and compares against it rather than trusting it.
+3. **Nothing changed to make the wash expire.** The +42-day answer comes from
+   the *same hydrated store* as the +6-day one, and the ledger hash is identical
+   afterwards. Freshness is a question about when you ask, not a property
+   stored on the row and not a background job that rewrites it.
+
+The stale refusal is also specific: `dncr_wash_stale`, not `dncr_not_checked`
+and not `dncr_store_unavailable`, and the founder is told to wash the number
+**again** rather than for the first time.
+
+### 43.7 What dev holds, and what it does not mean
+
+**21 fictional rows across nine tables** — the 20 from M8D/M8E/M8G/M8H/M8I plus
+M8K's single wash row. `acquisition_decisions` is still **4**: laq4 wrote no
+decision. The durability proof added nothing.
+
+**That row is not evidence anybody may be called.** It is fictional, attested by
+a verification probe rather than by a person who washed a real list, and it
+belongs to no business. **DNCR-1 is still open**: nobody holds a Register
+account, so no real wash has ever entered this system. M8K built the place a
+real wash will live and proved that place works.
+
+Mapping a genuine DNCR export is still **pending a real sample** — the CLI's
+canonical `e164,result` format is what exists until one arrives. There is no
+live DNCR API, SOAP, SFTP or account anywhere in this repository, and ratchets
+fail the build if one appears.
+
+### 43.8 A verifier defect, found and fixed
+
+Section 5 of `11_laq4_verify.sql` originally wrote its probe row with
+`now() - interval '1 day'` and then told the operator to "re-run 5d verbatim" to
+demonstrate the idempotency index.
+
+**That was wrong in the direction that reads as a pass.** `washed_at` is part of
+the unique key `(e164, washed_at, result, coalesce(batch_ref,''))`, so a second
+run a minute later carried a different `washed_at`, produced a different key, and
+would have inserted a **second permanent row** — leaving the operator believing
+they had proven duplicates were impossible while creating one.
+
+Every timestamp in that section is now a literal, 5d and 5e are byte-identical
+on purpose, and the section carries a warning that it has already been run
+against dev and must not be run there again.

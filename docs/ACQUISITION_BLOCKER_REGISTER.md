@@ -81,7 +81,7 @@ SQL was required to close A-L8.**
 | ~~**M-7**~~ | Cross-process suppression visibility | **CLOSED in M8E.** Proven across two real processes against dev Postgres. |
 | ~~**E-1**~~ | Derive attempt history from `acquisition_contact_outcomes` | **CLOSED in M8J.** `acquisition-history.js` is the one derivation; the authoriser reads it every time and refuses on `contact_history_unavailable`. Proven read-only against real Postgres, 16/16, zero residue. |
 | ~~**E-2**~~ | Persist the review decision onto the prospect lifecycle | **CLOSED in M8J.** `transitionProspectLifecycle` is a compare-and-set; `acquisition-review-projection.js` projects the durable decision and repairs a lag without recording a second decision. Proven against real dev Postgres 2026-08-09 under founder approval — a `review_approved → review_pending → review_approved` round trip on one existing fictional row; post-run verification 16/16, zero further residue. **No row created anywhere**; the approved residue was 2 history entries and a bumped `updated_at`. |
-| **E-3** | Durable DNCR wash storage | **BUILT OFFLINE IN M8K; NOT APPLIED.** `laq4_create_dncr_washes.sql` is written, reviewed and **not run against any database**. The full code path exists and passes 34 tests: an append-only wash ledger, store methods on both adapters, hydration at the async boundary so `assess()` stays synchronous, canonical number keys, idempotent import, newest-**performed** wash wins, and a fail-closed `dncr_store_unavailable` that is kept distinct from "never checked". A dry-run-by-default operator CLI imports an attested wash. **Still open against real Postgres** until a human applies laq4 to dev and verifies it — until then a wash still does not survive a restart. |
+| ~~**E-3**~~ | Durable DNCR wash storage | **CLOSED ON DEV in M8K — proven restart-safe against real Postgres.** `laq4` applied to dev 2026-08-10; **not applied to production**. An attested wash persisted on dev was read back by **two genuinely separate OS processes**, gave the same answer both times, and the *same row* evaluated 42 days after the wash decays to `unknown` and refuses with `dncr_wash_stale` — **without any row changing**, because freshness is computed at read time. 33 read-only checks, zero residue. The path fails closed: an unreadable ledger yields `dncr_store_unavailable`, kept distinct from "never checked", never an empty Map read as success. 39 offline tests cover the states dev's single row cannot be in. **Open for production**, which has no acquisition schema at all. |
 | **E-5** | Durable batch approval | **OPEN.** `context.batch` is caller-supplied; there is no batch table. See §5. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **ABSENT BY DESIGN.** Nothing to fix; nothing to build until §1 and §2 close. |
@@ -95,10 +95,18 @@ SQL was required to close A-L8.**
 | `laq1_create_acquisition_prospects.sql` | **applied** 2026-08-07 (M8D) | **not applied** |
 | `laq2_create_acquisition_queue.sql` | **applied** 2026-08-07 (M8D) | **not applied** |
 | `laq3_serialise_decision_chain.sql` | **applied** 2026-08-08 (M8I) | **not applied** |
-| `laq4_create_dncr_washes.sql` | **NOT APPLIED** — written 2026-08-10 (M8K), never run | **not applied** |
+| `laq4_create_dncr_washes.sql` | **applied** 2026-08-10 (M8K) | **not applied** |
 
-Dev holds **20 fictional proof rows** across M8D/M8E/M8G/M8H/M8I. See
-[ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §9.
+Dev holds **21 fictional proof rows** across nine tables (M8D/M8E/M8G/M8H/M8I,
+plus M8K's one wash row). See [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md)
+§9 and §11.7.
+
+**M8K added exactly one row**, and it is the only row laq4 has ever produced:
+`+61355509999`, `not_listed`, washed `2026-08-09T00:00:00Z`, attested by
+`laq4-verify`, batch `laq4-verify-batch`. It is fictional, it belongs to no
+business, and it is **not a real DNCR wash** — it was written by the migration's
+behavioural probe, not by anybody who washed a list. It is append-only and
+cannot be removed. The M8K durability proof is **read-only** and added nothing.
 
 **M8J's E-2 proof added none of them.** It is the only exercise so far that
 UPDATEd an existing row rather than appending one: two entries on
@@ -154,7 +162,7 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 4 | Reviewed → `review_approved`, durably | 🟢 | 🟢 | **E-2**, proven on dev 2026-08-09 |
 | 5 | Qualified | 🟢 | 🟢 | Ordering only, never permission |
 | 6 | Duplicates resolved | 🟠 | 🟠 | Default-deny, but `duplicateResolution` is caller-supplied |
-| 7 | DNCR-cleared | 🟠 | 🟠 | Port complete and fail-closed; **M8K built durable storage offline**, but `laq4` is not applied and nobody holds a DNCR account. Needs **DNCR-1** and **E-3** |
+| 7 | DNCR-cleared | 🟠 | 🟠 | **E-3 closed on dev** — storage is durable, restart-safe and fail-closed, proven against real Postgres. Still AMBER, and now for **one** reason rather than two: **DNCR-1**, nobody holds a Register account, so no real wash exists to store |
 | 8 | Permitted day/time | 🟠 | 🟠 | Fully implemented. Needs **A-L1**, **A-L2**, **A-L3** |
 | 9 | **Attempts permitted** | 🟠 | 🟢 | **A-L6 / A-L7 / A-L8 approved.** The values are decided and cited, the count comes from durable rows, a decline is permanent, and the policy refuses to call itself approved while anything inside it is not. No engineering deficiency remains |
 | 10 | Not suppressed | 🟢 | 🟢 | Append-only, DB-enforced, cross-process proven |
@@ -164,9 +172,13 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 14 | Future dial request | 🔴 | 🔴 | **E-7.** No dialler, by design |
 
 **Gate 9 moved AMBER → GREEN.** Its amber was always a policy amber rather than
-a defect, and the policy has now been decided. Gate 7 is the one to watch next:
-it is amber for two reasons at once — nobody holds the DNCR account (**DNCR-1**)
-and a wash does not survive a restart (**E-3**).
+a defect, and the policy has now been decided.
+
+**Gate 7 lost one of its two reasons.** M8K closed **E-3** on dev: a wash now
+survives a restart, proven across two separate OS processes against real
+Postgres. It stays AMBER for the remaining reason, which is not engineering —
+**DNCR-1**, nobody holds a Register account, so there is no real wash to store.
+**Every engineering item behind gate 7 is now done on dev.**
 
 **One RED remains, and it is the one that should be last.**
 
@@ -176,7 +188,8 @@ and a wash does not survive a restart (**E-3**).
 
 1. **A-L1** — counsel sign-off. Nothing moves without it.
 2. **DNCR-1** — the account and the attestation procedure; then one imported
-   wash. **E-3** if it must survive a restart.
+   wash. Somewhere durable to put it already exists (**E-3**, closed on dev),
+   and `scripts/acquisition-dncr-import.js` loads it.
 3. **A-L2 / A-L3** — the holiday source. Has its own 2027-01-01 deadline.
 4. **E-7** — the dialler, accepting only an `AuthorisedDial`.
 
