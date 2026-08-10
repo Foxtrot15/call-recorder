@@ -3,10 +3,19 @@
 //
 //   node scripts/acquisition-review.js list [--status open|resolved]
 //   node scripts/acquisition-review.js show <review-id>
+//   node scripts/acquisition-review.js duplicates
 //   node scripts/acquisition-review.js resolve <review-id> --decision <d> --by <name> --reason "..."
 //                                              [--target <prospect-id>]
 //
 // The ambiguous imported locksmiths, and what a human decides about them.
+//
+// ── AND SINCE M8L, WHAT THOSE DECISIONS NOW CONTROL ─────────────────
+// These decisions are no longer only a queue. They are the durable answer the
+// final pre-dial gate reads for "is this business a duplicate of one we already
+// know?" — a question that used to be settled by whatever `duplicateResolution`
+// object a caller had computed in memory. `duplicates` is the founder-facing
+// view of that state; it is the same rows this file already resolves, counted by
+// what they mean for calling.
 //
 // ── EVERY DECISION IS TYPED BY A PERSON ─────────────────────────────
 // There is no --auto, no --approve-all and no heuristic default. The queue
@@ -53,12 +62,17 @@ AIDA locksmith acquisition — review queue
 
   node scripts/acquisition-review.js list [--status open|resolved]
   node scripts/acquisition-review.js show <review-id>
+  node scripts/acquisition-review.js duplicates
   node scripts/acquisition-review.js resolve <review-id> \\
         --decision <${Object.values(REVIEW_DECISIONS).join("|")}> \\
         --by "<your name>" --reason "<why>" [--target <prospect-id>]
 
   --target is required for ${REVIEW_DECISIONS.MERGE_INTO_EXISTING}.
   ${REVIEW_DECISIONS.NEEDS_MORE_INFORMATION} records a note and leaves the item open.
+
+  duplicates  what these decisions mean for calling (M8L): how many identities
+              are still unresolved, which were merged and into what, and which
+              were rejected. Read-only.
 
 Every decision names a person and a reason. There is no automatic mode.
 Resolving a review does not make a business callable.
@@ -125,6 +139,59 @@ async function main() {
       if (i.status === STATUS.RESOLVED) console.log(`    decided ${i.decision} by ${i.decidedBy}: ${i.decisionReason}`);
       console.log("");
     }
+    return;
+  }
+
+  if (args.command === "duplicates") {
+    const { summariseDuplicateState } = require("../src/services/acquisition-duplicate-state");
+    const summary = await summariseDuplicateState({ store: s });
+
+    if (!summary.available) {
+      console.error(`  The durable review decisions could not be read: ${summary.reason}`);
+      console.error("  This is NOT the same as 'no duplicates'. Nothing has been established, and");
+      console.error("  the final gate refuses every call while it stays that way.");
+      process.exit(1);
+    }
+
+    const c = summary.counts;
+    console.log("");
+    console.log("=".repeat(78));
+    console.log(`DUPLICATE RESOLUTION — ${c.total} identit${c.total === 1 ? "y" : "ies"} ever questioned`);
+    console.log("=".repeat(78));
+    console.log("");
+    console.log(`  ${String(c.unresolved).padStart(4)}  still unresolved — a person has to decide, and nothing on either side is callable`);
+    console.log(`  ${String(c.resolvedDistinct).padStart(4)}  resolved as distinct businesses`);
+    console.log(`  ${String(c.merged).padStart(4)}  merged into a canonical business`);
+    console.log(`  ${String(c.rejectedDuplicate).padStart(4)}  rejected as duplicates`);
+    console.log(`  ${String(c.rejectedOther).padStart(4)}  rejected for another reason`);
+    console.log("");
+
+    const LABEL = {
+      unresolved: "UNRESOLVED",
+      resolvedDistinct: "DISTINCT",
+      merged: "MERGED",
+      rejectedDuplicate: "REJECTED (duplicate)",
+      rejectedOther: "REJECTED",
+    };
+    const at = Date.now();
+    for (const bucket of ["unresolved", "merged", "rejectedDuplicate", "rejectedOther", "resolvedDistinct"]) {
+      const rows = summary.items.filter((i) => i.bucket === bucket);
+      if (rows.length === 0) continue;
+      console.log(`  ── ${LABEL[bucket]} ──`);
+      for (const r of rows) {
+        console.log(`    ${r.reviewId}   ${r.businessName || "(no name)"}`);
+        if (r.canonicalId) console.log(`      into      ${r.canonicalId}`);
+        if (r.possibleMatches.length) console.log(`      may be    ${r.possibleMatches.join(", ")}`);
+        if (r.decidedBy) console.log(`      decided   ${r.decision} by ${r.decidedBy} on ${r.decidedAt}: ${r.decisionReason}`);
+        else console.log(`      waiting   opened ${age(r.openedAt, at)} ago`);
+      }
+      console.log("");
+    }
+
+    console.log("  These decisions are what the final pre-dial gate reads. Resolving one does");
+    console.log("  not make a business callable: suppression, DNCR, calling hours, the attempt");
+    console.log("  policy and the founder batch approval all still apply.");
+    console.log("");
     return;
   }
 
