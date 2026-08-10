@@ -19,6 +19,7 @@ const { createAttemptPolicy } = require("../src/services/acquisition-attempt-pol
 const { createEvidenceLedger } = require("../src/services/acquisition-evidence");
 const { resolveDuplicates } = require("../src/services/acquisition-dedupe");
 const { createProspect, transitionProspect, identityFingerprint } = require("../src/services/acquisition-prospect");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 // Wednesday 14:00 in Melbourne — squarely inside the permitted window.
@@ -80,7 +81,7 @@ function happyPath({ iso = WEDNESDAY_2PM, prospect = null } = {}) {
     suppression,
     holidays: createFixtureHolidayProvider(),
     attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-    counselApproved: true,
+    callingPolicyApproval: FOUNDER_CALLING_POLICY,
   });
 
   const context = {
@@ -170,7 +171,7 @@ describe("precedence — permanent blocks outrank temporary ones", () => {
       suppression: createSuppressionList({ now: clock }),
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     });
     const evidenceRows = evidenceFor(listedProspect, clock);
     const d = engine2.evaluate(listedProspect, {
@@ -233,7 +234,7 @@ describe("DNCR", () => {
       suppression: createSuppressionList({ now: clock }),
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     });
     const d = engine.evaluate(p, {
       evidenceRows: evidenceFor(p, clock),
@@ -258,7 +259,7 @@ describe("DNCR", () => {
       suppression: createSuppressionList({ now: evalClock }),
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     });
     const d = engine.evaluate(p, {
       evidenceRows: evidenceFor(p, evalClock),
@@ -278,7 +279,7 @@ describe("DNCR", () => {
       suppression: createSuppressionList({ now: clock }),
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     });
     const d = engine.evaluate(p, { evidenceRows: evidenceFor(p, clock), duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }] }]), batch: { approved: true, batchHash: "x", approvedBy: "P" } });
     assert.strictEqual(d.eligible, false);
@@ -350,7 +351,7 @@ describe("timezone, holidays and the calling window", () => {
       suppression: createSuppressionList({ now: clock }),
       holidays: createNullHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     });
     const d = engine.evaluate(p, { evidenceRows: evidenceFor(p, clock), duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }], hasOfficialSource: true }]), batch: { approved: true, batchHash: "x", approvedBy: "P" } });
     assert.strictEqual(d.eligible, false);
@@ -399,7 +400,7 @@ describe("attempts, retries and washes", () => {
 });
 
 describe("policy and founder approval", () => {
-  it("blocks when the calling hours have no counsel sign-off", () => {
+  it("blocks when no calling policy has been adopted — the DEFAULT (M8M)", () => {
     const clock = now();
     const p = goodProspect();
     const engine = createEligibilityEngine({
@@ -408,11 +409,13 @@ describe("policy and founder approval", () => {
       suppression: createSuppressionList({ now: clock }),
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-      counselApproved: false,
+      callingPolicyApproval: createCallingPolicyApproval(),
     });
     const d = engine.evaluate(p, { evidenceRows: evidenceFor(p, clock), duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }], hasOfficialSource: true }]), batch: { approved: true, batchHash: "x", approvedBy: "P" } });
-    assert.strictEqual(d.code, ELIGIBILITY_CODES.COUNSEL_UNAPPROVED);
-    assert.ok(d.requiredFounderAction.some((a) => /counsel sign-off/i.test(a)));
+    assert.strictEqual(d.code, ELIGIBILITY_CODES.CALLING_POLICY_UNAPPROVED);
+    assert.ok(d.requiredFounderAction.some((a) => /versioned calling policy/i.test(a)));
+    assert.match(d.message, /not approved/i);
+    assert.ok(!/lawyer|counsel|legal advice/i.test(d.message), "the refusal must not ask for a lawyer — that is not what this gate wants any more");
   });
 
   it("blocks when the attempt and wash policy has not been approved — the DEFAULT", () => {
@@ -423,7 +426,7 @@ describe("policy and founder approval", () => {
       washStore: (() => { const s = createWashStore({ now: clock, mode: "fixture" }); s.wash(NUMBER); return s; })(),
       suppression: createSuppressionList({ now: clock }),
       holidays: createFixtureHolidayProvider(),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
       // attemptPolicy omitted → the proposed, unapproved policy
     });
     const d = engine.evaluate(p, { evidenceRows: evidenceFor(p, clock), duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }], hasOfficialSource: true }]), batch: { approved: true, batchHash: "x", approvedBy: "P" } });
@@ -500,6 +503,7 @@ describe("determinism and isolation", () => {
       const { createEvidenceLedger } = require(path.join(root, "src/services/acquisition-evidence"));
       const { resolveDuplicates } = require(path.join(root, "src/services/acquisition-dedupe"));
       const { createProspect, transitionProspect } = require(path.join(root, "src/services/acquisition-prospect"));
+      const { FOUNDER_CALLING_POLICY } = require(path.join(root, "src/services/acquisition-calling-approval"));
       const clock = () => new Date("2026-08-04T22:30:00Z");
       let p = createProspect({ businessName: "Northside Lock & Key", tradeCategory: "Locksmith", suburb: "Brunswick", state: "VIC",
         region: "Melbourne", timezone: "Australia/Melbourne", phones: [{ raw: "(03) 5550 1042" }],
@@ -511,7 +515,7 @@ describe("determinism and isolation", () => {
         ledger.record({ prospectId: p.prospectId, kind, captureMode: "fixture", value, observedAt: "2026-07-15T02:00:00.000Z", capturedBy: "t", source: src });
       const store = createWashStore({ now: clock, mode: "fixture" }); store.wash("+61355501042");
       const engine = createEligibilityEngine({ now: clock, washStore: store, suppression: createSuppressionList({ now: clock }),
-        holidays: createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }), counselApproved: true });
+        holidays: createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }), callingPolicyApproval: FOUNDER_CALLING_POLICY });
       const d = engine.evaluate(p, { evidenceRows: ledger.forProspect(p.prospectId),
         duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: "+61355501042" }], hasOfficialSource: true }]),
         batch: { approved: true, batchHash: "x", approvedBy: "Peter" } });

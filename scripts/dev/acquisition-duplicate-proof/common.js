@@ -32,6 +32,7 @@ const { createEvidenceLedger } = require("../../../src/services/acquisition-evid
 const { createWashStore } = require("../../../src/services/acquisition-dncr");
 const { createFixtureHolidayProvider } = require("../../../src/services/acquisition-holidays");
 const { createAttemptPolicy } = require("../../../src/services/acquisition-attempt-policy");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../../../src/services/acquisition-calling-approval");
 
 const AT = new Date("2026-08-05T04:00:00Z"); // Wednesday, 14:00 Melbourne
 const clock = () => AT;
@@ -147,7 +148,7 @@ function gateInputs(prospect, e164) {
       washStore,
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     },
     // NO duplicateResolution and NO batch. That is the point of the proof.
     context: { evidenceRows: evidenceFor(prospect) },

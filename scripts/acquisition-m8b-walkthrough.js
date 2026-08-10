@@ -25,6 +25,7 @@ process.env.ACQUISITION_REVIEW_ENABLED = "true";
 
 const root = path.join(__dirname, "..");
 const req = (m) => require(path.join(root, m));
+const { FOUNDER_CALLING_POLICY } = req("src/services/acquisition-calling-approval");
 
 const { registerM8bFixtureAdapter, M8B_ADAPTER_NAME } = req("src/services/acquisition-m8b-fixtures");
 const { discoverProspects } = req("src/services/acquisition-discovery");
@@ -287,7 +288,7 @@ const engineFor = (state) =>
     suppression,
     holidays: holidaysFor(state),
     attemptPolicy,
-    counselApproved: true,
+    callingPolicyApproval: FOUNDER_CALLING_POLICY,
   });
 
 const BATCH_CONTEXT = { approved: true, batchHash: "walkthrough-assembly", approvedBy: "walkthrough stand-in" };

@@ -140,7 +140,7 @@ describe("blocked prospects are grouped by why", () => {
     const list = [prospect({ businessName: "A", suburb: "Kew" }), prospect({ businessName: "B", suburb: "Carlton" }), prospect({ businessName: "C", suburb: "Fitzroy" })];
     const s = summarise({
       prospects: list,
-      evaluate: (p) => (p.businessName === "C" ? blockedWith("dncr_listed", "On the Register.")(p) : blockedWith("counsel_approval_missing", "Waiting on counsel.")(p)),
+      evaluate: (p) => (p.businessName === "C" ? blockedWith("dncr_listed", "On the Register.")(p) : blockedWith("calling_policy_unapproved", "Waiting on a calling policy.")(p)),
     });
     assert.strictEqual(s.blockedBreakdown[0].count, 2);
     assert.strictEqual(s.blockedBreakdown[0].key, "policyBlocked");

@@ -37,6 +37,7 @@ const { createEvidenceLedger } = require("../src/services/acquisition-evidence")
 const { createProspect, transitionProspect, identityFingerprint } = require("../src/services/acquisition-prospect");
 const { canonicalBatchIdentity, recordBatchApproval } = require("../src/services/acquisition-batch-approval");
 const { projectReviewResolution } = require("../src/services/acquisition-review-projection");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 const WEDNESDAY_2PM = "2026-08-05T04:00:00Z";
@@ -79,7 +80,7 @@ function evidenceFor(prospect, clock = now()) {
 }
 
 /** Everything the M8E gate needs except the two durable answers. */
-function gateHarness({ iso = WEDNESDAY_2PM, prospect = null, washed = true, e164 = NUMBER, holidays = null, counselApproved = true } = {}) {
+function gateHarness({ iso = WEDNESDAY_2PM, prospect = null, washed = true, e164 = NUMBER, holidays = null, callingPolicyApproval = FOUNDER_CALLING_POLICY } = {}) {
   const clock = now(iso);
   const p = prospect || makeProspect();
   const evidenceRows = evidenceFor(p, clock);
@@ -88,7 +89,7 @@ function gateHarness({ iso = WEDNESDAY_2PM, prospect = null, washed = true, e164
   return {
     clock,
     prospect: p,
-    engineOptions: { washStore, holidays: holidays || createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }), counselApproved },
+    engineOptions: { washStore, holidays: holidays || createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }), callingPolicyApproval },
     // NO duplicateResolution, and no batch. Both are durable now.
     context: { evidenceRows },
   };
@@ -542,12 +543,12 @@ describe("M8L does not bypass any other gate", () => {
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.POLICY_UNAPPROVED);
   });
 
-  it("resolved + counsel not approved ⇒ refused on counsel (A-L1 is untouched)", async () => {
+  it("resolved + calling policy not adopted ⇒ refused on the calling policy", async () => {
     const store = createInMemoryAcquisitionStore();
-    const { clock, prospect, engineOptions, context } = gateHarness({ counselApproved: false });
+    const { clock, prospect, engineOptions, context } = gateHarness({ callingPolicyApproval: createCallingPolicyApproval() });
     await resolvedAndCallable(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
-    assert.strictEqual(decision.code, ELIGIBILITY_CODES.COUNSEL_UNAPPROVED);
+    assert.strictEqual(decision.code, ELIGIBILITY_CODES.CALLING_POLICY_UNAPPROVED);
   });
 
   it("resolved + kill switch ⇒ refused on the campaign", async () => {

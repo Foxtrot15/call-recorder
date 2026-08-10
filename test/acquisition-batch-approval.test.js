@@ -48,6 +48,7 @@ const { createProspect, transitionProspect, identityFingerprint } = require("../
 const { assembleBatch, recordFounderAction, submitForApproval, approveBatch } = require("../src/services/acquisition-batch");
 const { verifyRows } = require("../src/services/acquisition-audit");
 const { DEFAULT_CAPS } = require("../src/config/acquisition");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 const WEDNESDAY_2PM = "2026-08-05T04:00:00Z";
@@ -117,7 +118,7 @@ async function approveOne(store, prospect, { clock = now(), e164 = NUMBER, by = 
 }
 
 /** Everything the M8E gate needs except the batch approval, which is durable. */
-function gateHarness({ iso = WEDNESDAY_2PM, prospect = null, washed = true, counselApproved = true, holidays = null } = {}) {
+function gateHarness({ iso = WEDNESDAY_2PM, prospect = null, washed = true, callingPolicyApproval = FOUNDER_CALLING_POLICY, holidays = null } = {}) {
   const clock = now(iso);
   const p = prospect || goodProspect();
   const evidenceRows = evidenceFor(p, clock);
@@ -130,7 +131,7 @@ function gateHarness({ iso = WEDNESDAY_2PM, prospect = null, washed = true, coun
   return {
     clock,
     prospect: p,
-    engineOptions: { washStore, holidays: holidays || createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }), counselApproved },
+    engineOptions: { washStore, holidays: holidays || createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }), callingPolicyApproval },
     context: { evidenceRows, duplicateResolution },
   };
 }
@@ -872,7 +873,7 @@ describe("E-5 the founder-facing batch flow, end to end", () => {
       suppression: require("../src/services/acquisition-suppression").createSuppressionList({ now: clock }),
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     });
 
     let batch = assembleBatch({

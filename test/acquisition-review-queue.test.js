@@ -551,7 +551,7 @@ describe("nothing in the review path can contact anybody", () => {
 
   it("cannot approve compliance or mark a business callable", () => {
     const src = read("acquisition-review-queue.js");
-    for (const pattern of [/counselApproved/, /washStore/, /review_approved/, /appendSuppression/]) {
+    for (const pattern of [/callingPolicyApproval/, /washStore/, /review_approved/, /appendSuppression/]) {
       assert.ok(!pattern.test(src), `the review queue must not touch ${pattern}`);
     }
   });

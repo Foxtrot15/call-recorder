@@ -21,6 +21,7 @@ const { createAttemptPolicy } = require("../src/services/acquisition-attempt-pol
 const { createEvidenceLedger } = require("../src/services/acquisition-evidence");
 const { resolveDuplicates } = require("../src/services/acquisition-dedupe");
 const { createProspect, transitionProspect } = require("../src/services/acquisition-prospect");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 const WEDNESDAY_2PM = "2026-08-05T04:00:00Z";
@@ -77,7 +78,7 @@ function world({ iso = WEDNESDAY_2PM } = {}) {
     suppression,
     holidays: createFixtureHolidayProvider(),
     attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-    counselApproved: true,
+    callingPolicyApproval: FOUNDER_CALLING_POLICY,
   });
 
   const evaluate = (p, ctx) => engine.evaluate(p, { ...ctx, batch: { approved: true, batchHash: "assembly", approvedBy: "Peter" } });

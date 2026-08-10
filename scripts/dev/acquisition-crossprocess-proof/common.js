@@ -36,6 +36,7 @@ const { createAttemptPolicy } = require("../../../src/services/acquisition-attem
 const { createEvidenceLedger } = require("../../../src/services/acquisition-evidence");
 const { resolveDuplicates } = require("../../../src/services/acquisition-dedupe");
 const { createProspect, transitionProspect, identityFingerprint } = require("../../../src/services/acquisition-prospect");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../../../src/services/acquisition-calling-approval");
 
 // -- Credentials -----------------------------------------------------
 
@@ -108,7 +109,7 @@ function engineOptionsFor(prospect, clock) {
     washStore,
     holidays: createFixtureHolidayProvider(),
     attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "m8e-probe" }),
-    counselApproved: true,
+    callingPolicyApproval: FOUNDER_CALLING_POLICY,
   };
 }
 

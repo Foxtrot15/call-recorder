@@ -16,6 +16,7 @@ const { createCallingPolicy, POLICY_CODES, localParts, isUsableTimeZone } = requ
 const { createFixtureHolidayProvider, createNullHolidayProvider } = require("../src/services/acquisition-holidays");
 const { createSuppressionList } = require("../src/services/acquisition-suppression");
 const { CALLING_WINDOWS } = require("../src/config/acquisition");
+const { FOUNDER_CALLING_POLICY } = require("../src/services/acquisition-calling-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 const PERTH = "Australia/Perth";
@@ -383,16 +384,20 @@ describe("missing or unusable policy", () => {
     assert.strictEqual(gate.evaluate({ timezone: MELBOURNE }).code, POLICY_CODES.POLICY_MISSING);
   });
 
-  it("carries the policy source and its legal status in every decision", () => {
+  it("carries the policy source and its approval status in every decision", () => {
     const d = createCallingPolicy({ now, holidays: createFixtureHolidayProvider() }).evaluate({ timezone: MELBOURNE });
-    assert.match(d.policy.source, /OUTBOUND_BDM_ARCHITECTURE/);
-    assert.strictEqual(d.policy.counselApproved, false, "the window is documented, not legally signed off");
+    assert.match(d.policy.source, /CALLING_WINDOWS/);
+    assert.strictEqual(d.policy.approved, false, "an un-wired gate reports the window as unadopted");
+    assert.strictEqual(d.policy.isLegalAdvice, false);
     assert.strictEqual(d.policy.holidayCalendarAuthoritative, false, "the fixture calendar is not authoritative");
   });
 
-  it("counselApproved must be passed explicitly to become true", () => {
-    const d = createCallingPolicy({ now, holidays: createFixtureHolidayProvider(), counselApproved: true }).evaluate({ timezone: MELBOURNE });
-    assert.strictEqual(d.policy.counselApproved, true);
+  it("the founder approval must be passed explicitly to become approved (M8M)", () => {
+    const d = createCallingPolicy({ now, holidays: createFixtureHolidayProvider(), callingPolicyApproval: FOUNDER_CALLING_POLICY }).evaluate({ timezone: MELBOURNE });
+    assert.strictEqual(d.policy.approved, true);
+    assert.strictEqual(d.policy.version, FOUNDER_CALLING_POLICY.version);
+    assert.strictEqual(d.policy.isLegalAdvice, false, "an adopted policy is never a legal opinion, however approved it is");
+    assert.strictEqual(d.policy.approval.approvedBy, "Peter Dang");
   });
 
   it("uses the repo-documented window by default rather than inventing one", () => {

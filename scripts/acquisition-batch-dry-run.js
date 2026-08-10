@@ -35,6 +35,7 @@ const { createFixtureHolidayProvider, describeCoverage } = require(path.join(roo
 const { createAttemptPolicy } = require(path.join(root, "src/services/acquisition-attempt-policy"));
 const { createEligibilityEngine } = require(path.join(root, "src/services/acquisition-eligibility"));
 const batchSvc = require(path.join(root, "src/services/acquisition-batch"));
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const VERBOSE = process.argv.includes("--verbose");
 
@@ -123,7 +124,7 @@ const attemptPolicy = createAttemptPolicy({ approved: true, approvedBy: "dry-run
 console.log(`  Attempt policy: ${attemptPolicy.describeGap()}`);
 console.log(`  Counsel approval: SIMULATED for this dry run. In any real build it is false and blocks everything.`);
 
-const engine = createEligibilityEngine({ now, washStore, suppression, holidays, attemptPolicy, counselApproved: true });
+const engine = createEligibilityEngine({ now, washStore, suppression, holidays, attemptPolicy, callingPolicyApproval: FOUNDER_CALLING_POLICY });
 
 const batch0 = batchSvc.assembleBatch({
   prospects,
@@ -181,7 +182,7 @@ if (!approval.ok) {
 step(7, "AN APPROVAL GOES STALE WHEN THE FACTS CHANGE");
 const sundayEngine = createEligibilityEngine({
   now: () => new Date("2026-08-09T02:00:00.000Z"),
-  washStore, suppression, holidays, attemptPolicy, counselApproved: true,
+  washStore, suppression, holidays, attemptPolicy, callingPolicyApproval: FOUNDER_CALLING_POLICY,
 });
 const dispositions = Object.fromEntries(batch.rows.map((r) => [r.prospectId, r.disposition]));
 const sundayBatch = batchSvc.assembleBatch({

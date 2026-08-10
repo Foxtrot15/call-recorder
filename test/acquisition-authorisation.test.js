@@ -33,6 +33,7 @@ const { createEvidenceLedger } = require("../src/services/acquisition-evidence")
 const { resolveDuplicates } = require("../src/services/acquisition-dedupe");
 const { createProspect, transitionProspect, identityFingerprint } = require("../src/services/acquisition-prospect");
 const { canonicalBatchIdentity, recordBatchApproval } = require("../src/services/acquisition-batch-approval");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 const WEDNESDAY_2PM = "2026-08-05T04:00:00Z"; // inside the permitted window
@@ -85,7 +86,7 @@ function evidenceFor(prospect, clock = now()) {
  * a deliberate cost of the milestone — clearing that gate now requires the same
  * durable artifact production would.
  */
-function harness({ iso = WEDNESDAY_2PM, prospect = null, holidays = null, washed = true, counselApproved = true } = {}) {
+function harness({ iso = WEDNESDAY_2PM, prospect = null, holidays = null, washed = true, callingPolicyApproval = FOUNDER_CALLING_POLICY } = {}) {
   const clock = now(iso);
   const p = prospect || goodProspect();
   const evidenceRows = evidenceFor(p, clock);
@@ -99,7 +100,7 @@ function harness({ iso = WEDNESDAY_2PM, prospect = null, holidays = null, washed
     washStore,
     holidays: holidays || createFixtureHolidayProvider(),
     attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }),
-    counselApproved,
+    callingPolicyApproval,
   };
 
   const context = { evidenceRows, duplicateResolution };
@@ -416,13 +417,13 @@ describe("the rules the gate must not have weakened", () => {
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.BATCH_UNAPPROVED);
   });
 
-  it("still refuses without counsel approval", async () => {
+  it("still refuses without an adopted calling policy", async () => {
     const store = createInMemoryAcquisitionStore();
-    const { clock, prospect, engineOptions, context } = harness({ counselApproved: false });
+    const { clock, prospect, engineOptions, context } = harness({ callingPolicyApproval: createCallingPolicyApproval() });
     await approveBatchIn(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
-    assert.strictEqual(decision.code, ELIGIBILITY_CODES.COUNSEL_UNAPPROVED);
+    assert.strictEqual(decision.code, ELIGIBILITY_CODES.CALLING_POLICY_UNAPPROVED);
   });
 });
 

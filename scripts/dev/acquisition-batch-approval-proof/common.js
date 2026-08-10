@@ -41,6 +41,7 @@ const { createWashStore } = require("../../../src/services/acquisition-dncr");
 const { createFixtureHolidayProvider } = require("../../../src/services/acquisition-holidays");
 const { createAttemptPolicy } = require("../../../src/services/acquisition-attempt-policy");
 const { resolveDuplicates } = require("../../../src/services/acquisition-dedupe");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../../../src/services/acquisition-calling-approval");
 
 // A fixed instant inside the permitted calling window, so neither process
 // depends on when it happens to be run.
@@ -158,7 +159,7 @@ function gateInputs(prospect, e164 = NUMBER) {
       washStore,
       holidays: createFixtureHolidayProvider(),
       attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: FOUNDER }),
-      counselApproved: true,
+      callingPolicyApproval: FOUNDER_CALLING_POLICY,
     },
     context: {
       evidenceRows,

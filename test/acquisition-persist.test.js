@@ -441,7 +441,7 @@ describe("the persistence layer cannot contact anybody", () => {
   });
 
   it("cannot approve compliance or move a lifecycle", () => {
-    for (const pattern of [/transitionProspect/, /review_approved/, /counselApproved/, /washStore/]) {
+    for (const pattern of [/transitionProspect/, /review_approved/, /callingPolicyApproval/, /washStore/]) {
       assert.ok(!pattern.test(src), `persistence must not touch ${pattern}`);
     }
   });

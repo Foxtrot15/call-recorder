@@ -33,6 +33,7 @@ const { createFixtureHolidayProvider } = require("../src/services/acquisition-ho
 const { resolveDuplicates } = require("../src/services/acquisition-dedupe");
 const { createEvidenceLedger } = require("../src/services/acquisition-evidence");
 const { createProspect, transitionProspect } = require("../src/services/acquisition-prospect");
+const { FOUNDER_CALLING_POLICY, createCallingPolicyApproval } = require("../src/services/acquisition-calling-approval");
 
 const PROSPECT_ID = "pr_history_0001";
 const NUMBER = "+61355507401";
@@ -297,7 +298,7 @@ describe("every real authorisation path uses durable history", () => {
   function engineOptions(clock) {
     const wash = createWashStore({ now: clock, mode: "fixture" });
     wash.wash(NUMBER);
-    return { washStore: wash, holidays: createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }), counselApproved: true };
+    return { washStore: wash, holidays: createFixtureHolidayProvider(), attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter" }), callingPolicyApproval: FOUNDER_CALLING_POLICY };
   }
 
   it("the authoriser blocks when the contact history cannot be read", async () => {
@@ -382,7 +383,7 @@ describe("ratchets: A-L7 is decided, and the answer cannot drift", () => {
     // has to put their name to it.
     const policy = createAttemptPolicy();
     assert.equal(policy.approved, false);
-    const engine = createEligibilityEngine({ now, counselApproved: true });
+    const engine = createEligibilityEngine({ now, callingPolicyApproval: FOUNDER_CALLING_POLICY });
     const d = engine.evaluate({ ...{ prospectId: "p", businessName: "B", timezone: "Australia/Melbourne", lifecycle: "review_approved", phones: [{ raw: "(03) 5550 7401" }], sourceRefs: [], history: [] } }, {});
     const policyCheck = d.failedChecks.find((f) => f.check === "policy_approval");
     assert.ok(policyCheck, "an unapproved policy must still block");
