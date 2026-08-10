@@ -2411,14 +2411,19 @@ reached must not be reported as a conflict. A genuine stale case needs a target
 the row is not already at. Both readings are now pinned by a test in
 `test/acquisition-lifecycle.test.js` rather than left to be rediscovered.
 
-### 41.9 Known limitations
+### 41.9 Known limitations — SNAPSHOT as at M8J, partly superseded
+
+> Two of these have since been closed. **E-3** closed in M8K (§43) and **E-5** in
+> §44; both entries are left as written because this section records what M8J
+> knew. [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md) is the
+> live list and wins wherever it disagrees.
 
 - **E-5 — durable batch approval** is still open. `context.batch` is
   caller-supplied and there is no batch table. Not a hard blocker for one
   attended founder-approved call; a blocker for anything unattended or repeated.
-  See the register §5.
+  See the register §5. **— CLOSED in §44, with no SQL.**
 - **E-3 — durable DNCR wash storage** is still open. The wash store is an
-  in-process `Map`; a wash does not survive a restart.
+  in-process `Map`; a wash does not survive a restart. **— CLOSED on dev in §43.**
 - **Duplicate resolution** is still caller-supplied, the same shape of gap E-1
   just closed for history.
 - `listOutcomes` has no explicit limit and inherits PostgREST's page cap. Scoped
@@ -2684,3 +2689,255 @@ they had proven duplicates were impossible while creating one.
 Every timestamp in that section is now a literal, 5d and 5e are byte-identical
 on purpose, and the section carries a warning that it has already been run
 against dev and must not be run there again.
+
+---
+
+## 44. E-5 — durable founder batch approval, closed with no SQL
+
+**No migration was written and none was applied.** Every durable structure this
+milestone needs already existed and has been on dev since M8D/M8I. E-5 is closed
+offline and proven across two genuinely separate OS processes; see §44.8.
+
+### 44.1 The gap it closes
+
+The batch machinery had worked since A2. `acquisition-batch.js` assembled a
+reviewable batch, hashed it, refused to approve one containing an ineligible
+record, and detected staleness; the eligibility engine refused
+`founder_batch_approval_missing` unless a batch approval was present. All of it
+lived in memory.
+
+Three consequences, in ascending order of seriousness:
+
+1. **A restart lost it.** A batch approved this morning left nothing behind for
+   an afternoon worker to read.
+2. **Nobody could attest what an approval had covered.** The membership was
+   never written down — the same class of gap E-2 closed for review decisions.
+3. **It was assertable.** `context.batch = { approved: true }` cleared the check.
+   An object with no author, no timestamp and no membership satisfied the one
+   gate whose entire purpose is to record that a named human looked at a
+   specific list of businesses and said yes.
+
+The third is why E-5 is a correctness item and not only a durability one.
+
+### 44.2 Why acquisition_decisions, and why no new table
+
+An approval is a **decision**, and this repository already keeps decisions in one
+append-only, hash-chained ledger. The audit asked whether that table could
+represent this safely rather than assuming it, and every property needed was
+already there:
+
+| requirement | what already provides it |
+|---|---|
+| `entity_type` admits `batch` | **laq1**, in the CHECK as written — no ALTER needed |
+| structured membership | `detail jsonb`; 25 members is small |
+| efficient lookup | `idx_acq_decisions_entity (entity_type, entity_id)` |
+| a historical approval cannot be edited | `acq_decisions_no_update` trigger |
+| a removed or altered approval is detectable | the `prev_hash` chain |
+| concurrent approvals cannot fork | `unique (prev_hash)` — **laq3**, applied M8I |
+
+So a durable approval is one or two rows per batch:
+
+```
+batch_approval_recorded    approve   who, when, why, and the exact membership
+batch_approval_withdrawn   reject    who withdrew it, and why
+```
+
+and current state is a fold over the rows for one `entity_id` — exactly how the
+review queue (§39), suppression and outcomes already work. A `batches` table with
+an `approved` boolean would have been a status column over a decision.
+
+**The event names are deliberately not `batch_approved`/`batch_approval_revoked`.**
+Those two are already used by `acquisition-batch.js` for its in-process session
+audit. A test pins that a persisted `batch_approved` row confers nothing.
+
+### 44.3 Batch identity is the content
+
+`entity_id` is `ba_<membershipHash>`, derived from the membership itself:
+
+```
+membershipHash = contentHash({
+  v: "acq-batch-approval-1",
+  schemaVersion,
+  campaignId,
+  policyVersion,
+  members: [{ rowId, prospectId, e164 }] sorted by rowId,
+})
+```
+
+Deterministic, with **no clock, no random id and no assembly timestamp**, and
+independent of the order the caller held the rows in. A changed batch is
+therefore a *different entity with no approval of its own*, and no amount of
+replaying an approval object can reach it. A random batch id would have protected
+nothing — it names a container whose contents can be swapped after the founder
+looks at them.
+
+`rowId` rather than `prospectId` alone, because A1 derives `prospectId` from the
+identity fingerprint and two records for one business in one suburb share it.
+
+The **label is not in the hash**: renaming a batch must not invalidate an
+approval, and naming two different lists the same thing must not make them one.
+
+### 44.4 Two hashes, and the distinction that required them
+
+The single most consequential decision in the milestone.
+
+| | covers | answers |
+|---|---|---|
+| `batchHash` (`acquisition-batch.js`) | membership **and each row's eligibility** | "has anything changed since you looked at this screen?" |
+| `membershipHash` (`acquisition-batch-approval.js`) | **who, and on what number**, plus schema/campaign/policy version | "is this the exact list that was approved?" |
+
+`batchHash` is right for the founder's screen and wrong for a durable approval.
+A DNCR wash expiring, a suppression arriving, an attempt cap filling or a window
+closing all change it — so a durable approval bound to it would read STALE while
+the membership was untouched. A founder asked to re-approve an unchanged list
+daily learns to approve without reading.
+
+So the durable approval binds to membership only, and the two states stay apart:
+
+- **BATCH STALE** — the membership changed; the approval does not describe what
+  would be called. Re-approve.
+- **APPROVED, PROSPECT CURRENTLY INELIGIBLE** — the membership is exactly what
+  was approved and something else refuses the call right now. Nothing to
+  re-approve, and `batch_approval` does not even appear in `failedChecks`.
+
+A test asserts the second directly: with a durable approval in place and no
+DNCR wash, the refusal is `dncr_not_checked` and the batch check is absent.
+
+### 44.5 What changed at the M8E gate
+
+`createDialAuthoriser` now performs a **third** authoritative read, on the same
+terms as durable suppression (M8E) and durable contact history (M8J). The
+caller's `batch` is **removed from the context in the same statement that
+captures it**, so it cannot reach the engine:
+
+```js
+const { batch: callerBatch = null, ...callerContext } = context || {};
+// ...
+const batchApproval = await resolveBatchApprovalForProspect({
+  store, prospectId, e164, batchKey: callerBatch ? callerBatch.batchKey : null,
+});
+const eligibility = active.evaluate(prospect, {
+  ...callerContext, at: instant, history: contactHistory, batch: batchApproval,
+});
+```
+
+Its `batchKey` survives as a *reference* that narrows the lookup and confers
+nothing: if the store says there is no approval, there is none, whatever the
+object claimed.
+
+Two paths exist and both are durable:
+
+- **named** — the caller knows the batch key;
+- **search** — the caller knows only a prospect. This is the restart path: a
+  fresh worker does not have to be told which batch to trust.
+
+The number is compared as well as the business. An approved business whose
+callable number has since changed is refused as `batch_membership_changed`,
+because membership is who **and** on what number.
+
+Decisions now carry `batchSource: durable | caller | unavailable | absent`,
+mirroring `historySource`. A ratchet asserts every authorised decision reports
+`durable`.
+
+### 44.6 Fail closed, and whose failure it is
+
+`batch_approval_store_unavailable` is a new eligibility code, distinct from
+`founder_batch_approval_missing` for exactly the reason
+`contact_history_unavailable` is distinct from `attempt_or_wash_restriction`:
+one says *we looked and this batch was never approved*, the other says *we could
+not look*. A founder told the first goes and approves; a founder told the second
+goes and fixes the store. Reporting ours as theirs sends them to the wrong place.
+
+It is reported at the batch check's own precedence, so a **suppressed business is
+still reported as suppressed** even when the approval store is unreadable. A test
+pins that.
+
+The write path fails closed too: an approval is not appended against a store
+whose current state could not be read first.
+
+### 44.7 The operator command
+
+```
+node scripts/acquisition-batch.js preview --prospect <id> [--prospect <id> ...]
+node scripts/acquisition-batch.js approve <batch-key> \
+      --prospect <id> [...] --by "<name>" --reason "<why>"
+node scripts/acquisition-batch.js show <batch-key>
+node scripts/acquisition-batch.js list [--status approved|withdrawn]
+node scripts/acquisition-batch.js revoke <batch-key> --by "<name>" --reason "<why>"
+```
+
+`approve` makes you name the prospects **again**, next to the key. That looks
+redundant and is the safety property: the key is derived from the membership, so
+re-deriving it from what you name and comparing it against what you typed is what
+proves the list has not moved since `preview` printed it. A command taking only a
+key would be approving a name.
+
+- `preview` writes nothing and prints the exact membership, the hash, and whether
+  it is already approved.
+- `--by` and `--reason` are required. There is no `--yes`, no `--all`, no default
+  approver, and a system actor (`system`, `aida`, `bot`, `ai`, `claude`, …) is
+  refused by name.
+- Approving the same unchanged batch twice is **idempotent** — the second run
+  writes nothing and says so.
+- A stale batch is refused with both keys printed and an instruction to re-run
+  `preview`.
+- Dev-only, and it has no provider, network or dialler.
+
+### 44.8 The proof
+
+`scripts/dev/acquisition-batch-approval-proof/`, two genuinely separate OS
+processes. **Process A: 9/9. Process B: 26/26.**
+
+Process A invents a batch, approves it, proves the approval is idempotent, proves
+a system actor cannot make one, and **exits** — its heap gone before B starts.
+Process B never sees an approval object. It reads the approval back, confirms the
+same person, instant, hash and membership, and then:
+
+| | |
+|---|---|
+| B8–B9 | the real M8E gate **authorises**, with `batchSource: durable`, from a context containing no `batch` at all, and only then mints a slip |
+| B10a–b | an un-approved business fails **only** the batch check, and asserting an approval in the context changes nothing |
+| B11–B13 | adding a business yields a different key, and the old approval does not stretch to cover it |
+| B14 | an approved business on a **different number** is refused as stale |
+| B15–B17 | an opt-out recorded **after** approval still refuses, the batch approval is still valid, and no slip is minted |
+| B18–B19 | an unreadable store is `unavailable`, never "not approved" |
+| B20–B24 | withdrawal takes effect immediately, deletes nothing, and the chain still verifies |
+
+**Zero database residue.** The store is a JSON file, deliberately: what E-5 has
+to prove is a property of the fold over append-only rows, which does not know
+which durable thing the rows came from. Proving it against dev would have
+appended a **permanent** approval row to an append-only table to demonstrate
+something that needs none, and the adapter's row mapping is already covered by
+`test/acquisition-store.test.js` and the M8H/M8I proofs.
+
+An earlier version of probe B10 reused the first business's collaborators, so
+DNCR refused before the batch gate was reached: it printed a refusal that proved
+nothing about E-5. It now wires the second business so every other check passes,
+and the batch gate is the only thing that can refuse.
+
+### 44.9 The pilot ceiling, now enforced
+
+`maxBatchSize: 25` was a config value **nothing read**. It is now enforced at
+identity: a batch of 26 cannot be identified and therefore cannot be approved,
+and the refusal names A-L9 rather than inventing a larger number. The value is
+unchanged.
+
+### 44.10 A-L9 is deliberately still open
+
+E-5 supports one named founder or operator per approval. It invents **no** second
+approver role, **no** threshold above which two are required, and **no**
+automatic or AI approval. `actorKind: "human"` is written in one place and a
+ratchet asserts it is the only value that appears; another fails the build if a
+`secondApprover`/`approvers` concept is introduced without the decision being
+made.
+
+### 44.11 Known limitations
+
+- `listBatchApprovals` folds the log in memory with a 5000-row cap, the same
+  honest bound `listReviewItems` carries (§40.10). Fine at 25-business batches;
+  a campaign with thousands would want the fold materialised.
+- **No approval has ever been written to dev or production**, and one would be
+  permanent. E-5 is closed as engineering; the first real approval is a founder
+  decision, not a milestone step.
+- Duplicate resolution is still caller-supplied — the last remaining input of
+  that shape, and the natural successor to this work.

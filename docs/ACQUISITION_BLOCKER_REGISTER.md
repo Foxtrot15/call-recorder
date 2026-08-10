@@ -1,7 +1,8 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-10**, after the
-founder approved the attempt policy (**A-L6 / A-L7 / A-L8 closed**, approval
+**Status of this document:** LIVE. Last recomputed **2026-08-10**, after **E-5**
+closed (durable founder batch approval, no SQL) and after the founder approved
+the attempt policy (**A-L6 / A-L7 / A-L8 closed**, approval
 `AL6-AL7-AL8-2026-08-10`).
 
 **Owns (source of truth for):** what currently stands between a persisted
@@ -41,7 +42,7 @@ below are what would still have to be true *if* one did.
 | ~~**A-L8**~~ | The "not interested" consequence (and `declined`, `callback`) | **CLOSED — founder approved.** `not_interested` and `declined` are **permanent no-recontact**, not 180-/90-day cooldowns: the business is never cold-acquired again. Both labels stay **distinct** for analytics and audit. Neither is recorded as an `opt_out` — see §2.1. An explicitly requested **callback is honoured for 14 days** and then fails closed. |
 | **A-L10** | Is there a ceiling on repeated *uncounted* no-answer redials? | **OPEN — raised by the A-L6/A-L7/A-L8 closure.** Because a no-answer consumes no counted attempt, the cap alone no longer bounds how often a never-answering business may be rung; only the 2-day spacing does. **Not blocking a FIRST call** (an untried business has no history), but it wants an answer before any repeated campaign. Deliberately left as a decision rather than given an invented number. |
 | **A-L4** | Are the approved A-L6 numbers the intended *commercial* policy? | **OPEN** | Caps applied as ceilings; a campaign may be stricter, never looser — now **enforced**, not merely intended: an override that would loosen an approved rule is clamped back and recorded in `refusedOverrides`. Not blocking. |
-| **A-L9** | Who besides the founder may approve a batch; is a second approver needed above a threshold? | **OPEN** | Single named founder, `maxBatchSize: 25`. Governance, not blocking one call. |
+| **A-L9** | Who besides the founder may approve a batch; is a second approver needed above a threshold? | **OPEN — deliberately untouched by E-5** | Single named founder or operator per approval, `maxBatchSize: 25` — now **enforced**, not merely configured: a batch of 26 cannot be identified and therefore cannot be approved. E-5 invented no second approver role and no automatic approval, and a ratchet fails the build if one appears. Governance, not blocking one call. |
 
 ### 2.1 A decline is not an opt-out, and is not stored as one
 
@@ -82,7 +83,7 @@ SQL was required to close A-L8.**
 | ~~**E-1**~~ | Derive attempt history from `acquisition_contact_outcomes` | **CLOSED in M8J.** `acquisition-history.js` is the one derivation; the authoriser reads it every time and refuses on `contact_history_unavailable`. Proven read-only against real Postgres, 16/16, zero residue. |
 | ~~**E-2**~~ | Persist the review decision onto the prospect lifecycle | **CLOSED in M8J.** `transitionProspectLifecycle` is a compare-and-set; `acquisition-review-projection.js` projects the durable decision and repairs a lag without recording a second decision. Proven against real dev Postgres 2026-08-09 under founder approval — a `review_approved → review_pending → review_approved` round trip on one existing fictional row; post-run verification 16/16, zero further residue. **No row created anywhere**; the approved residue was 2 history entries and a bumped `updated_at`. |
 | ~~**E-3**~~ | Durable DNCR wash storage | **CLOSED ON DEV in M8K — proven restart-safe against real Postgres.** `laq4` applied to dev 2026-08-10; **not applied to production**. An attested wash persisted on dev was read back by **two genuinely separate OS processes**, gave the same answer both times, and the *same row* evaluated 42 days after the wash decays to `unknown` and refuses with `dncr_wash_stale` — **without any row changing**, because freshness is computed at read time. 33 read-only checks, zero residue. The path fails closed: an unreadable ledger yields `dncr_store_unavailable`, kept distinct from "never checked", never an empty Map read as success. 39 offline tests cover the states dev's single row cannot be in. **Open for production**, which has no acquisition schema at all. |
-| **E-5** | Durable batch approval | **OPEN.** `context.batch` is caller-supplied; there is no batch table. See §5. |
+| ~~**E-5**~~ | Durable batch approval | **CLOSED in E-5, offline — no SQL required.** A founder approval is now an append-only row in `acquisition_decisions` (`entity_type: 'batch'`, which the laq1 CHECK has admitted since it was written), keyed by `ba_<membershipHash>` — an identity derived from the membership itself. `acquisition-authorisation` destructures `context.batch` off the caller's context and **discards** it; the approval is read from the store or it does not exist. Proven across two genuinely separate OS processes, 9/9 and 26/26, **zero database residue**. See §5. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **ABSENT BY DESIGN.** Nothing to fix; nothing to build until §1 and §2 close. |
 
@@ -108,6 +109,13 @@ business, and it is **not a real DNCR wash** — it was written by the migration
 behavioural probe, not by anybody who washed a list. It is append-only and
 cannot be removed. The M8K durability proof is **read-only** and added nothing.
 
+**E-5 added none of them, and required no migration.** It writes to
+`acquisition_decisions`, which laq1 already created with an `entity_type` CHECK
+admitting `'batch'`; nothing was applied to dev or production for it. Its restart
+proof runs against a file-backed store and touches no database at all. **A real
+approval on dev would be a permanent decision row** in an append-only table, so
+none has been written and none should be without a decision to write it.
+
 **M8J's E-2 proof added none of them.** It is the only exercise so far that
 UPDATEd an existing row rather than appending one: two entries on
 `pr_3740207ebbc0a379910f`'s `history` journal and a bumped `updated_at`, with
@@ -116,37 +124,118 @@ the lifecycle left exactly where it was found. The total is still **20**,
 
 ---
 
-## 5. E-5, and whether it blocks a FIRST call
+## 5. E-5 — durable batch approval, closed
 
-Asked directly, because the previous audit called it blocking without examining it.
+**Both conditions that made it a blocker are now false, and no SQL was needed.**
 
-**It is not a hard blocker for one deliberately selected, founder-approved
-first call. It is a scale and governance blocker.**
+### 5.1 What it was
 
-The batch machinery exists and works: `acquisition-batch.js` assembles, hashes
-and detects staleness, and the eligibility engine refuses
-`founder_batch_approval_missing` unless `context.batch.approved === true` with a
-non-stale hash. What does not exist is a *table* — the approval lives in the
-object the caller passes.
+The batch machinery assembled, hashed and detected staleness, and the
+eligibility engine refused `founder_batch_approval_missing` unless
+`context.batch.approved === true`. What did not exist was any durable record —
+the approval lived in the object the caller passed. So:
 
-For one call, under a founder who is present, that is a real but bounded
-limitation: the approval is in the same process that authorises the dial,
-seconds apart, and the M8E slip is minted from an engine that saw it.
+- the approving process had to be the authorising process, because a batch
+  approved this morning left nothing for an afternoon worker to read;
+- nobody could attest afterwards which businesses an approval had covered;
+- and, worst, `{ approved: true }` was *assertable*. An object with no author,
+  no timestamp and no membership cleared the one check that exists to record
+  that a named human looked at a specific list and said yes.
 
-It becomes a blocker the moment either is true:
+### 5.2 What it is now
 
-- **the approving process is not the authorising process** — a batch approved
-  this morning and dialled by a worker this afternoon has no durable approval to
-  read, and the worker would be constructing one;
-- **more than a handful of calls** — nobody can attest afterwards which
-  businesses a given approval actually covered, because the approval was never
-  written down. That is the same class of gap E-2 just closed for review
-  decisions.
+A founder approval is an append-only row in `acquisition_decisions`:
 
-So: **AMBER for the first controlled pilot call, RED before any unattended or
-repeated dialling.** It was deliberately not built in M8J because it is separable
-from E-1 and E-2 — neither depends on it — and building it would have meant new
-SQL that the milestone explicitly preferred to avoid.
+| | |
+|---|---|
+| `entity_type` | `batch` — admitted by the laq1 CHECK since it was written |
+| `entity_id` | `ba_<membershipHash>` — **derived from the membership**, not a name |
+| `event` | `batch_approval_recorded` / `batch_approval_withdrawn` |
+| `decision` | `approve` / `reject`, `actor_kind` always `human` |
+| `detail` | the exact members, the hash, the label, campaign, policy version, the ceiling |
+
+Current state is a fold over the rows for one `entity_id` — the same shape the
+review queue (M8H), suppression and outcomes already use. `unique (prev_hash)`
+from laq3 makes concurrent approvals safe; the loser re-reads, finds the batch
+already approved, and writes nothing.
+
+**No new table, no `ALTER`, no CHECK change, no index, no function.** See §5.5.
+
+### 5.3 The two hashes, and why they are different
+
+This is the design decision the milestone turns on.
+
+| | covers | answers |
+|---|---|---|
+| `batchHash` (`acquisition-batch.js`) | membership **and each row's eligibility** | "has anything changed since you looked at this screen?" |
+| `membershipHash` (`acquisition-batch-approval.js`) | **who, and on what number**, plus schema/campaign/policy version | "is this the exact list that was approved?" |
+
+Binding the durable approval to the first would have made a DNCR wash expiring,
+a suppression arriving or a calling window closing all read as *the founder's
+decision has gone stale* — and a founder asked to re-approve an unchanged list
+every day learns to do it without reading it. So the durable approval binds to
+membership only, which yields two separately reportable states:
+
+- **BATCH STALE** — the membership changed. The approval does not cover this
+  list. Re-approve. (`batch_membership_changed`, or simply a different key with
+  no approval against it.)
+- **APPROVED, PROSPECT CURRENTLY INELIGIBLE** — the membership is exactly what
+  was approved; something else refuses the call right now. Nothing to
+  re-approve, and the batch check does not even appear in `failedChecks`.
+
+### 5.4 What a batch approval is not
+
+It is **not permission to dial, and it never becomes permission to dial.** It
+clears one check out of nine. Suppression, DNCR and its freshness, duplicates,
+lifecycle, campaign and kill switch, counsel and attempt policy, holidays and
+the calling window are all still evaluated at the instant of every call, and
+only the M8E gate mints an `AuthorisedDial`. A test pins that an approved batch
+does not outrank an opt-out recorded after it.
+
+An unreadable approval store is `batch_approval_store_unavailable` — the gate's
+own failure, never "not approved", for the same reason `contact_history_unavailable`
+is distinct from `attempt_or_wash_restriction`.
+
+### 5.5 Why no SQL was required
+
+Every structure needed already existed and is already applied to dev:
+
+- `acquisition_decisions.entity_type` **already admits `'batch'`** (laq1 line 199);
+- `detail` is `jsonb`, and a 25-member list is small;
+- `(entity_type, entity_id)` is indexed (`idx_acq_decisions_entity`);
+- append-only is enforced by trigger, so a historical approval cannot be edited;
+- the chain is hash-linked, so a removed or altered approval is detectable;
+- `unique (prev_hash)` (laq3) already serialises concurrent writers.
+
+A `batches` table with an `approved` boolean would have been a status column
+over a decision, and this project's rule is that decisions are appended, never
+edited. The one thing genuinely new is the *identity*, and that is a pure
+function, not a schema.
+
+### 5.6 What was proven, and where
+
+- **63 offline tests** in `test/acquisition-batch-approval.test.js`.
+- **A two-process restart proof**, `scripts/dev/acquisition-batch-approval-proof/`:
+  process A approves and exits; process B is a fresh OS process that reads the
+  approval back, authorises through the real M8E gate with **no `context.batch`
+  at all**, and then proves a mutated batch is not covered by it. **9/9 and
+  26/26.**
+- **Zero database residue.** The proof runs against a file-backed store, because
+  what E-5 has to prove is a property of the fold over append-only rows and not
+  of any particular adapter — and demonstrating it against dev would have
+  appended a permanent approval row to an append-only table to show something
+  that needs none. The adapter's own row mapping is covered by
+  `test/acquisition-store.test.js` and the M8H/M8I proofs.
+
+### 5.7 What is still open
+
+**A-L9 is untouched and remains open.** E-5 supports exactly one named founder
+or operator per approval. It does not invent a second approver role, a threshold
+above which two are required, or any automatic approval — a ratchet fails the
+build if a `secondApprover`/`approvers` concept appears without that decision
+being made. `maxBatchSize` stays at **25** and is now *enforced* rather than
+merely configured: an oversized batch cannot be identified, and therefore cannot
+be approved.
 
 ---
 
@@ -167,12 +256,19 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 9 | **Attempts permitted** | 🟠 | 🟢 | **A-L6 / A-L7 / A-L8 approved.** The values are decided and cited, the count comes from durable rows, a decline is permanent, and the policy refuses to call itself approved while anything inside it is not. No engineering deficiency remains |
 | 10 | Not suppressed | 🟢 | 🟢 | Append-only, DB-enforced, cross-process proven |
 | 11 | Campaign / kill switch | 🟢 | 🟢 | Own precedence in gate and engine |
-| 12 | Founder batch approval | 🟠 | 🟠 | See §5. AMBER for one attended call; RED beyond that. **E-5**, **A-L9** |
+| 12 | Founder batch approval | 🟠 | 🟢 | **E-5 closed.** Durable, restart-safe and proven across two OS processes. `context.batch` is discarded by the gate; the approval is read from `acquisition_decisions` or it does not exist. Membership-bound, so a compliance change does not fake staleness. **A-L9** is still open but is governance, not a defect |
 | 13 | Final M8E authorisation | 🟢 | 🟢 | Durable suppression **and** durable history; unforgeable slip; fails closed on either read |
 | 14 | Future dial request | 🔴 | 🔴 | **E-7.** No dialler, by design |
 
-**Gate 9 moved AMBER → GREEN.** Its amber was always a policy amber rather than
-a defect, and the policy has now been decided.
+**Gate 12 moved AMBER → GREEN.** E-5 closed it: an approval survives the process
+that made it, names exactly what it covered, cannot be asserted by a caller, and
+cannot be stretched over a batch whose membership has changed. It is GREEN as an
+*engineering* gate. It does not mean anything may be called — see §5.4 — and
+**A-L9 remains open** as a governance question about who else may approve and
+whether a larger batch needs a second approver.
+
+**Gate 9 moved AMBER → GREEN** on 2026-08-10. Its amber was always a policy amber
+rather than a defect, and the policy has now been decided.
 
 **Gate 7 lost one of its two reasons.** M8K closed **E-3** on dev: a wash now
 survives a restart, proven across two separate OS processes against real
@@ -193,10 +289,14 @@ Postgres. It stays AMBER for the remaining reason, which is not engineering —
 3. **A-L2 / A-L3** — the holiday source. Has its own 2027-01-01 deadline.
 4. **E-7** — the dialler, accepting only an `AuthorisedDial`.
 
-**E-5** sits alongside 4, and **M-5** is not on this path at all. **A-L10** is
-not on it either: a business that has never been called has no history for an
-uncounted-redial ceiling to bound.
+**M-5** is not on this path at all. **A-L10** is not on it either: a business
+that has never been called has no history for an uncounted-redial ceiling to
+bound.
 
-~~**A-L6 / A-L7 / A-L8**~~ left this list on 2026-08-10, approved.
+~~**E-5**~~ left this list on 2026-08-10, closed. ~~**A-L6 / A-L7 / A-L8**~~ left
+it the same day, approved.
+
+**Item 4 is now the only engineering work left before a call**, and it is the one
+that should be built last.
 
 Items 1–3 are decisions with lead times. Only item 4 is code.

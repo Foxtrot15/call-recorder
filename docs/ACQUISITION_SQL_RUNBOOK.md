@@ -9,6 +9,11 @@ a human runs by hand, and every step below was run by hand.
 **Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3 and LAQ4 are applied
 in, how each is verified, and what can and cannot be rolled back.
 
+> **There is no LAQ5.** E-5 (durable founder batch approval) required **no SQL**
+> — every structure it needs was already created by LAQ1 and LAQ3, including an
+> `entity_type` CHECK that has admitted `'batch'` since it was written. It wrote
+> **no row to dev**. See **§12**.
+
 > **LAQ4 is APPLIED TO DEV** (2026-08-10, by hand) **and NOT applied to
 > production.** Dev holds exactly one permanent fictional wash row from the
 > behavioural probe, and the durable path has been proven restart-safe against
@@ -772,3 +777,60 @@ is why §11.5 says not to run it there again.
 ever entered this system. The row above is fictional and attested by a
 verification probe, not by a person who washed a real list. Nothing in this
 repository can contact the Register.
+
+---
+
+## 12. E-5 — durable batch approval needed NO SQL
+
+**There is no LAQ5.** This section exists so that the question is answered here,
+in the document that owns migration state, rather than being re-asked later.
+
+E-5 makes founder batch approval durable and restart-safe. The audit that opened
+it asked whether `acquisition_decisions` could represent a batch approval safely,
+rather than assuming it could, and the answer was yes on every count:
+
+| what E-5 needed | what already provides it | applied |
+|---|---|---|
+| `entity_type` admitting `'batch'` | **LAQ1** — it is in the CHECK as originally written, alongside `prospect`, `phone`, `queue`, `suppression`, `campaign`, `system` | dev, 2026-08-07 |
+| a structured membership record | `acquisition_decisions.detail jsonb` — a 25-business membership is small | dev, 2026-08-07 |
+| lookup by batch | `idx_acq_decisions_entity (entity_type, entity_id)` | dev, 2026-08-07 |
+| a historical approval that cannot be edited | trigger `acq_decisions_no_update` | dev, 2026-08-07 |
+| tamper-evidence | the `prev_hash` chain | dev, 2026-08-07 |
+| concurrent approvals that cannot fork | `unique (prev_hash)` | **LAQ3**, dev, 2026-08-08 |
+
+So **no table, no `ALTER`, no CHECK change, no index, no constraint and no
+function** were written or applied for E-5. `02_laq1_verify.sql` V3.11 already
+checks the `entity_type` constraint; nothing new needs verifying, because
+nothing new was created.
+
+### 12.1 The residue question, answered before it arises
+
+A durable batch approval is a row in `acquisition_decisions`, which is
+**append-only and enforced as such by trigger**. Writing one against dev to
+demonstrate E-5 would therefore have created a **permanent** fictional approval
+row that could never be removed — the same class of residue §11.7 documents for
+LAQ4's one wash row.
+
+**No such row was written.** E-5's restart proof
+(`scripts/dev/acquisition-batch-approval-proof/`) runs two genuinely separate OS
+processes against a **file-backed store**, because what it has to prove is a
+property of the fold over append-only rows and that fold does not know which
+durable thing the rows came out of. The Supabase adapter's own row mapping for
+`acquisition_decisions` is already proven by `test/acquisition-store.test.js` and
+by the M8H/M8I exercises in §10.
+
+**Dev's fictional row count is unchanged by E-5.** `acquisition_decisions` still
+holds exactly the rows §9 and §10 describe.
+
+### 12.2 If a real approval is ever recorded on dev
+
+It would be a **permanent decision row**, and it should be treated as a founder
+decision rather than an engineering step. Before running
+`node scripts/acquisition-batch.js approve …` against dev, note that:
+
+- the row cannot be deleted, and the `UPDATE`/`DELETE` trigger will refuse;
+- **withdrawing** an approval appends a second row rather than removing the
+  first, which is correct and also means a withdrawal doubles the residue;
+- the approval names a real person, so it should name the person who actually
+  made the decision;
+- `preview` writes nothing and should be run and read first.
