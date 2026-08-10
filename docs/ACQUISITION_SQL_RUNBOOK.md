@@ -478,10 +478,12 @@ expensive to reverse afterwards.
 
 ## 9. After applying
 
-- Nothing starts calling. Both the counsel sign-off (A-L1) and the attempt
-  policy (A-L6) are still unapproved, and the eligibility engine blocks every
-  prospect while either is. **Applying the schema changed none of that.** The
-  full current list is [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md).
+- Nothing starts calling. **Applying the schema changed none of that**, and it
+  still does not: the calling policy (A-L1) and the attempt policy (A-L6) have
+  since been adopted by the founder — **neither is legal advice** — but
+  **DNCR-1** is still open, so no wash exists and `dncr_not_checked` blocks every
+  prospect regardless. The full current list is
+  [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md).
 - Update the status line at the top of
   [LOCKSMITH_ACQUISITION_SPEC.md](LOCKSMITH_ACQUISITION_SPEC.md).
   *Done for dev on 2026-08-07.*

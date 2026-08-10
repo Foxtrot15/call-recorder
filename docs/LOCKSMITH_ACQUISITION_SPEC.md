@@ -494,9 +494,16 @@ was consulted and the only one available is the server's. A child-process test
 runs the identical evaluation under `TZ=UTC`, `TZ=Pacific/Honolulu` and
 `TZ=Asia/Kathmandu` and requires byte-identical output.
 
-## A2.3 ⚠ Limitations that must be resolved before anything dials
+## A2.3 ⚠ Limitations that must be resolved before anything dials — SNAPSHOT as at A2
 
-**1. The permitted window is documented, not counsel-approved.**
+> **Item 1 is SUPERSEDED by §46 (M8M).** The founder has since adopted the window
+> as a versioned operating policy rather than obtaining a legal opinion, and
+> `counselApproved` no longer exists. The entry is left as written because this
+> section records what A2 knew. **It remains true that no lawyer has reviewed the
+> calling rules in this repository** — M8M changed who approves them, not that.
+> Item 2 (the holiday calendar) is **still open** as A-L2.
+
+**1. The permitted window is documented, not counsel-approved.** *(Superseded — see §46.)*
 The hours come from [OUTBOUND_BDM_ARCHITECTURE.md](OUTBOUND_BDM_ARCHITECTURE.md)
 §2.2 and the G10 row in §5 — Mon–Fri 09:00–20:00, Sat 09:00–17:00, never Sundays
 or public holidays, recipient-local — encoded once as `CALLING_WINDOWS` in
@@ -696,9 +703,9 @@ Stated plainly, and enforced rather than promised:
 
 | # | Decision | Blocks | Current behaviour |
 |---|---|---|---|
-| **A-L1** | **Counsel sign-off on the permitted calling window** (Phase 0). | Any dialling | Window applied with `counselApproved: false` on every decision |
+| ~~**A-L1**~~ | **Counsel sign-off on the permitted calling window** (Phase 0). *(Superseded by §46: closed as a founder operating policy, not legal advice.)* | Any dialling | Window applied with `counselApproved: false` on every decision |
 | **A-L2** | **An authoritative public-holiday source**, and which state calendars are carried per prospect. | Any dialling outside 2026 / outside VIC | Fixture, VIC + national, 2026 only; everything else refuses |
-| **A-L3** | Whether the **AFL Grand Final Friday** and other proclaimed holidays are in scope. | Accuracy of the VIC calendar | Absent, so those dates are treated as ordinary |
+| ~~**A-L3**~~ | Whether the **AFL Grand Final Friday** and other proclaimed holidays are in scope. *(The POLICY question — call on holidays at all? — is closed by §46: no. The DATA question stays open as A-L2, and this date is still absent rather than guessed.)* | Accuracy of the VIC calendar | Absent, so those dates are treated as ordinary |
 | **A-L4** | Confirmation that the caps (**3 attempts, 2 days apart, 30-day contact cooldown**) are the intended commercial policy. | Campaign design | `DEFAULT_CAPS` applied as ceilings |
 | **A-L5** | Whether calling a business's **1300/1800 number** carries the same obligations as a geographic one. | Wash scope | Treated identically — everything is washed |
 | ~~**A-L6**~~ | **Attempt limits, retry spacing and cooldown durations** — G9's "3" is an illustration, G8's "N days" is unspecified, and retry spacing has no source at all. | Any dialling | **CLOSED 2026-08-10** — 2 counted attempts, 2 days spacing, generic cooldown retired (§42) |
@@ -1065,6 +1072,11 @@ The run ends with an explicit list of what did **not** happen.
 > The walkthrough **simulates** counsel sign-off (A-L1) and attempt-policy
 > approval (A-L6), loudly, because without them the eligibility engine blocks
 > every prospect and the run would stop at step 7. Neither has been obtained.
+>
+> **Superseded (§42, §46):** both have since been decided by the founder — the
+> attempt policy on 2026-08-10 and the calling policy the same day — so the
+> walkthrough now supplies the real artifacts rather than simulating them.
+> Neither is legal advice.
 
 ## 23. What M8B deliberately does not do
 
@@ -3140,3 +3152,162 @@ reason on every decided one.
   list look like", not "may this be called". It is labelled
   `duplicateSource: "caller"` so nothing can mistake it, and the M8E gate
   discards it.
+
+---
+
+## 46. M8M — the founder-approved calling policy
+
+**A-L1 and A-L3 are closed by a founder decision, not by legal advice. No lawyer
+has reviewed the calling rules encoded in this repository.** That sentence is the
+most important one in this section, and the code is built so that it stays true
+in the reading as well as in the fact.
+
+### 46.1 What changed: the authority, not the rules
+
+Until M8M every prospect was refused with `counsel_approval_missing` — "the
+permitted calling hours have not been signed off by a lawyer". That was accurate
+for A2 and it was a blocker only an external lawyer could clear.
+
+The founder decided not to obtain a legal opinion for the pilot, and to operate
+under a written, versioned policy instead: AIDA follows the published Australian
+telemarketing calling-hours framework, applies it to AI voice acquisition calls
+on the same terms as any other telemarketing call, and takes the narrower option
+wherever the published rules leave room.
+
+So the question the gate asks changed — from *has a lawyer approved this?* to
+*has a named human adopted a policy, in a stated version, on a stated basis?* —
+and the answer it accepts changed with it. **The window did not change.**
+
+### 46.2 The artifact
+
+`src/services/acquisition-calling-approval.js`:
+
+| | |
+|---|---|
+| Version | `acq-calling-policy-2026-08-10` |
+| Adopted by | Peter Dang, 2026-08-10 |
+| Kind | `founder_operating_policy` |
+| `isLegalAdvice` | **`false`** |
+| Basis | Do Not Call Register Act 2006; the Telemarketing and Research Calls Industry Standard — adopted as AIDA's operating policy |
+| Applies to | AI voice acquisition calls to Australian businesses, recipient-local time |
+| Holiday rule | No cold acquisition call on an applicable public holiday; none when coverage is unknown |
+
+`createCallingPolicyApproval()` with no arguments is **not approved**, exactly as
+`counselApproved` defaulted to false and as `createAttemptPolicy()` still does.
+An engine built without an approval refuses every prospect. Forgetting to wire
+the policy stops calls; it does not skip the check.
+
+And `approved: true` alone is not an approval. It needs a **named human** — a
+system actor (`system`, `aida`, `ai`, `claude`, …) is refused by name — plus a
+**date**, a **version** and a **basis**. `describeGap()` reports every missing
+piece at once rather than one per fix.
+
+### 46.3 Why "approved" is fenced so heavily
+
+The failure mode being defended against is not a bug. It is a future reader
+finding `approved: true` and concluding the calling window was legally cleared.
+It was not; it was adopted. So:
+
+- `kind` and `isLegalAdvice` are **not parameters**. There is no argument that
+  produces an artifact claiming a lawyer reviewed anything, and a test constructs
+  one trying — passing `kind: "legal_advice", isLegalAdvice: true` — and asserts
+  both are ignored.
+- The artifact carries a `disclaimer` naming what it is not, and it travels on
+  every calling-policy decision as `policy.approval`.
+- A ratchet asserts the words *lawyer*, *counsel* and *legal advice* appear in no
+  policy refusal message.
+- A ratchet asserts `counselApproved`, `counsel_approval_missing` and
+  `COUNSEL_UNAPPROVED` have all left the engine's live code.
+
+**A real legal review, if one is ever obtained, is a different artifact.** It
+should be added alongside this one rather than by relabelling it.
+
+### 46.4 The retired gate
+
+`counselApproved` is **gone**, not renamed and not aliased. An alias would have
+let a caller keep satisfying the gate the old way and a reader keep believing the
+old thing. A caller passing `counselApproved: true` now supplies an option that
+changes nothing, and a test at the M8E gate proves it authorises nothing.
+
+`ELIGIBILITY_CODES.COUNSEL_UNAPPROVED` → `CALLING_POLICY_UNAPPROVED`
+(`"calling_policy_unapproved"`). The category mapping in `acquisition-batch.js`
+follows it; historical references in §A2.3, §A2.9 and §22 are left as written,
+because those sections record what A2 and M8B knew.
+
+### 46.5 The window, unchanged and re-pinned
+
+Mon–Fri **09:00–20:00**, Sat **09:00–17:00**, **no Sunday**; recipient-local IANA
+timezone; **open inclusive, close exclusive**; DST via `Intl`, never by hand.
+
+M8M adopted what was already encoded in `CALLING_WINDOWS` and already tested. No
+boundary moved. What M8M added is a ratchet that pins each one, so a future
+loosening is a deliberate act rather than an edit:
+
+| probe | expected |
+|---|---|
+| 09:00 Melbourne exactly | permitted — open is INCLUSIVE |
+| 08:59 | `before_permitted_hours` |
+| 19:59 / 20:00 exactly | permitted / `after_permitted_hours` — close is EXCLUSIVE |
+| Saturday 16:59 / 17:00 | permitted / refused |
+| every hour of a Melbourne Sunday | `prohibited_day`, all 24 |
+| Monday 09:00 immediately after | permitted — so the Sunday sweep is not vacuous |
+| same instant, Melbourne vs Perth | permitted vs `before_permitted_hours` |
+
+`CALLING_WINDOWS.sun` being `undefined` is asserted with a message saying that
+adding one is a founder decision, not a code change. Three more ratchets assert
+the gate never reads `process.env.TZ`, `resolvedOptions().timeZone` or
+`getTimezoneOffset` — a server-clock fallback is the classic way this breaks.
+
+### 46.6 Policy versus data: why A-L2 stays open
+
+**A-L3 asked whether AIDA should call on public holidays. Answered: no.** The
+published rules leave a holiday window technically available and AIDA declines to
+use it. That is a policy question and it is closed.
+
+**A-L2 asks whether we know which days those are. Untouched.** The calendar is
+still the hand-compiled fixture: `authoritative: false`, national + VIC, **2026
+only**, with AFL Grand Final Friday deliberately absent rather than guessed. From
+**2027-01-01** it answers `known: false` and the gate refuses every date with
+`holiday_coverage_unknown`.
+
+A single test pins both halves: with the policy adopted, one decision reports
+`policy.approved: true` **and** `policy.holidayCalendarAuthoritative: false`.
+Choosing not to call on holidays did not improve the calendar, and the register
+must not be allowed to claim it did.
+
+### 46.7 AI semantics
+
+AIDA applies its telemarketing operating policy to AI voice acquisition calls.
+There is **no separate AI calling window and no separate AI attempt rule** — a
+ratchet asserts no `aiWindow`/`aiCaps`-shaped concept exists, and that the
+approval's `windows` is the *same object* as `CALLING_WINDOWS` rather than a copy
+that could drift.
+
+**No AI-disclosure wording was invented.** That is a real question and M8M
+deliberately does not answer it; a ratchet fails the build if disclosure script
+text appears in this module.
+
+### 46.8 What M8M did not touch
+
+The attempt policy (A-L6/A-L7/A-L8) is unchanged. **DNCR is unchanged** — every
+callable number washed, fresh authoritative `not_listed` required, listed /
+unknown / stale / unavailable all blocking — and **DNCR-1 is still open**.
+Suppression still outranks every temporary calling-window block (proven on a
+Sunday, where "try again tomorrow" would have been exactly the wrong message for
+an opt-out). E-5, M8L, M8J and M8K all still apply, and only the M8E gate mints
+an `AuthorisedDial`.
+
+**No SQL.** Nothing here is durable state; it is engine configuration. **No dev
+write.**
+
+### 46.9 Known limitations
+
+- **No lawyer has reviewed this.** The basis is a lay reading of published
+  sources, adopted deliberately and labelled everywhere. If the reading is wrong,
+  the code is faithfully wrong.
+- The holiday calendar remains the weakest input — **A-L2**, with a hard
+  2027-01-01 cliff that is a refusal rather than a degradation.
+- The approval lives in code, not in `acquisition_decisions`. It is versioned and
+  attributed but it is not append-only, so a future change is a commit rather
+  than a durable event. That is acceptable while the policy is a constant and one
+  person adopts it; it would want revisiting alongside **A-L9**.

@@ -24,13 +24,21 @@ below are what would still have to be true *if* one did.
 
 ---
 
-## 1. Legal / counsel — nobody in engineering can close these
+## 1. Compliance policy and data — what engineering cannot decide alone
+
+> **M8M changed the AUTHORITY behind A-L1, not the standard of care.** The
+> permitted calling window is now covered by a **founder operating policy**, not
+> by a lawyer's opinion. That is a weaker claim than the one it replaced and the
+> code says so everywhere it can: the approval carries `isLegalAdvice: false` and
+> a disclaimer, no refusal message asks for counsel any more, and a ratchet fails
+> the build if anything relabels it as legal sign-off. **No lawyer has reviewed
+> the calling rules encoded in this repository.** See §9.
 
 | ID | Blocker | Status | Effect while open |
 |---|---|---|---|
-| **A-L1** | Counsel sign-off on the permitted calling window | **OPEN** | `counsel_approval_missing` blocks **every** prospect. Binding. |
-| **A-L2** | An authoritative public-holiday source, and which state calendars are carried | **OPEN** | Hand-compiled fixture, national + VIC, `authoritative: false`, covering **2026 only**. From **2027-01-01 the gate refuses every date.** Also **M-6**. |
-| **A-L3** | Are AFL Grand Final Friday and other proclaimed holidays in scope? | **OPEN** | Absent from the fixture rather than guessed, so those dates read as ordinary. |
+| ~~**A-L1**~~ | Sign-off on the permitted calling window | **CLOSED — founder operating policy, NOT legal advice** (`acq-calling-policy-2026-08-10`, Peter Dang). AIDA follows the published Australian telemarketing calling-hours framework and applies it to AI voice acquisition calls on the same terms. `counsel_approval_missing` is gone from the live path; an un-adopted policy still refuses with `calling_policy_unapproved`. Obtaining an actual legal review remains available and would be a **new, separate artifact** — not a relabelling of this one. |
+| **A-L2** | An authoritative public-holiday source, and which state calendars are carried | **OPEN — and NOT closed by A-L3** | Hand-compiled fixture, national + VIC, `authoritative: false`, covering **2026 only**. From **2027-01-01 the gate refuses every date.** Choosing not to call on holidays does not tell us which days those are. Also **M-6**. |
+| ~~**A-L3**~~ | Should AIDA call on public holidays at all? | **CLOSED — founder decision.** **No cold acquisition call on a public holiday applicable to the recipient**, and none when holiday coverage is unknown. The published rules leave a holiday window technically available; AIDA declines to use it. This settles the POLICY only — the DATA question is **A-L2**, still open, and AFL Grand Final Friday is still absent from the fixture rather than guessed. |
 | **A-L5** | Do 1300/1800 numbers carry the same DNCR obligations as geographic ones? | **OPEN** | Treated identically — everything is washed. Conservative. |
 | **DNCR-1** | Who holds the DNCR account, performs the wash, and may attest an import | **OPEN** | No wash can enter the system, so `dncr_not_checked` blocks every prospect. |
 
@@ -256,7 +264,7 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 5 | Qualified | 🟢 | 🟢 | Ordering only, never permission |
 | 6 | Duplicates resolved | 🟠 | 🟢 | **M8L closed it.** The answer is the M8H review decision, read from `acquisition_decisions` at the gate. `context.duplicateResolution` is discarded, so `resolveDuplicates([oneProspect])` — which the whole repo used to build, and which declares a known duplicate unique — no longer clears anything. Merged candidates are not a second calling target; unresolved and rejected identities refuse. See §8 |
 | 7 | DNCR-cleared | 🟠 | 🟠 | **E-3 closed on dev** — storage is durable, restart-safe and fail-closed, proven against real Postgres. Still AMBER, and now for **one** reason rather than two: **DNCR-1**, nobody holds a Register account, so no real wash exists to store |
-| 8 | Permitted day/time | 🟠 | 🟠 | Fully implemented. Needs **A-L1**, **A-L2**, **A-L3** |
+| 8 | Permitted day/time | 🟠 | 🟠 | **A-L1 and A-L3 closed** by founder policy (§9): the window is adopted, versioned and attributed, and holidays are refused outright. Still AMBER for **one** reason — **A-L2**, the holiday calendar is a hand-compiled 2026-only fixture, so from 2027-01-01 the gate refuses every date |
 | 9 | **Attempts permitted** | 🟠 | 🟢 | **A-L6 / A-L7 / A-L8 approved.** The values are decided and cited, the count comes from durable rows, a decline is permanent, and the policy refuses to call itself approved while anything inside it is not. No engineering deficiency remains |
 | 10 | Not suppressed | 🟢 | 🟢 | Append-only, DB-enforced, cross-process proven |
 | 11 | Campaign / kill switch | 🟢 | 🟢 | Own precedence in gate and engine |
@@ -293,24 +301,24 @@ Postgres. It stays AMBER for the remaining reason, which is not engineering —
 
 ## 7. The shortest honest path to one call
 
-1. **A-L1** — counsel sign-off. Nothing moves without it.
-2. **DNCR-1** — the account and the attestation procedure; then one imported
+1. **DNCR-1** — the account and the attestation procedure; then one imported
    wash. Somewhere durable to put it already exists (**E-3**, closed on dev),
-   and `scripts/acquisition-dncr-import.js` loads it.
-3. **A-L2 / A-L3** — the holiday source. Has its own 2027-01-01 deadline.
-4. **E-7** — the dialler, accepting only an `AuthorisedDial`.
+   and `scripts/acquisition-dncr-import.js` loads it. **This is now the only
+   blocker that stops the first call outright.**
+2. **A-L2** — an authoritative holiday source. Has its own 2027-01-01 deadline,
+   and until then the fixture covers the pilot period.
+3. **E-7** — the dialler, accepting only an `AuthorisedDial`.
 
 **M-5** is not on this path at all. **A-L10** is not on it either: a business
 that has never been called has no history for an uncounted-redial ceiling to
 bound.
 
-~~**E-5**~~ left this list on 2026-08-10, closed. ~~**A-L6 / A-L7 / A-L8**~~ left
-it the same day, approved.
+~~**A-L1**~~ and ~~**A-L3**~~ left this list on 2026-08-10 — closed by founder
+policy, **not by legal advice** (§9). ~~**E-5**~~ and ~~**M8L**~~ left it the
+same day, closed. ~~**A-L6 / A-L7 / A-L8**~~ the same day, approved.
 
-**Item 4 is now the only engineering work left before a call**, and it is the one
-that should be built last.
-
-Items 1–3 are decisions with lead times. Only item 4 is code.
+**Item 3 is the only engineering work left before a call**, and it is the one
+that should be built last. Items 1–2 are decisions and data with lead times.
 
 ---
 
@@ -421,3 +429,88 @@ outranks it, so a known opt-out is still reported as an opt-out.
   outside the page is not found, and the gate refuses.
 - Whether materially changed evidence should reopen a rejected identity is
   **open and unmodelled** — see §8.4.
+
+---
+
+## 9. M8M — the founder-approved calling policy
+
+**A-L1 and A-L3 are closed by a founder decision. No lawyer has reviewed
+anything in this repository, and nothing here should be read as saying one has.**
+
+### 9.1 What changed, precisely
+
+Not the rules. The **authority behind them**.
+
+Until M8M the eligibility engine refused every prospect with
+`counsel_approval_missing` — "the permitted calling hours have not been signed
+off by a lawyer" — which was accurate, and was a blocker only an external lawyer
+could clear. The founder has decided not to obtain a legal opinion for the pilot
+and to operate instead under a written, versioned policy of their own.
+
+So the gate did not disappear and was not hardcoded open. `counselApproved` is
+**gone** from the engine, not renamed and not aliased: a caller passing it now
+supplies an option that changes nothing, and the gate refuses with
+`calling_policy_unapproved` until a real approval artifact is supplied.
+
+### 9.2 What is encoded
+
+| | |
+|---|---|
+| Version | `acq-calling-policy-2026-08-10` |
+| Adopted by | Peter Dang, 2026-08-10 |
+| Kind | `founder_operating_policy` — **never** `legal_advice` |
+| Basis | The published Australian telemarketing calling-hours framework (Do Not Call Register Act 2006; the Telemarketing and Research Calls Industry Standard), adopted as AIDA's operating policy |
+| Applies to | **AI voice acquisition calls, governed as telemarketing calls.** No separate AI window, no separate AI attempt rule |
+| Window | Mon–Fri **09:00–20:00**, Sat **09:00–17:00**, **no Sunday** — recipient-local, open inclusive, close exclusive. **Unchanged**: M8M adopted the window that was already encoded and tested, it did not move a boundary |
+| Holidays | **No cold acquisition call on an applicable public holiday**, and none when coverage is unknown |
+| Timezone | Missing or unusable **fails closed**. Never the server's |
+
+AI disclosure wording is **deliberately out of scope** and none was invented.
+
+### 9.3 The honesty machinery
+
+Because "approved" is the word most likely to be misread later:
+
+- `kind` and `isLegalAdvice` are **not parameters**. No argument to
+  `createCallingPolicyApproval` can produce an artifact claiming a lawyer
+  reviewed it, and a test proves it.
+- The artifact carries a `disclaimer` saying in terms that it is not legal advice
+  and has not been reviewed by a lawyer, and it travels with every decision.
+- No refusal message asks for counsel any more — a ratchet asserts the words
+  *lawyer*, *counsel* and *legal advice* do not appear in the policy refusal.
+- `approved: true` alone is not an approval. It needs a **named human** (a system
+  actor is refused by name), a **date**, a **version** and a **basis** — the same
+  rule the attempt policy already enforces.
+- Default-deny survived: `createCallingPolicyApproval()` is unapproved, so an
+  engine built without one refuses everything.
+
+**A real legal review, if one is ever obtained, is a separate artifact.** It
+should be added alongside this one, not by relabelling it.
+
+### 9.4 Policy versus data — the distinction that keeps A-L2 open
+
+**A-L3 asked whether AIDA should call on public holidays. That is now answered:
+no.** It is a policy question and the founder settled it conservatively.
+
+**A-L2 asks whether we know which days those are. That is a data question and it
+is untouched.** The calendar is still a hand-compiled fixture, still
+`authoritative: false`, still national + VIC, still **2026 only**, and AFL Grand
+Final Friday is still absent rather than guessed. From **2027-01-01** the gate
+answers `holiday_coverage_unknown` and refuses every date.
+
+A test pins both halves at once: with the policy adopted, a decision reports
+`policy.approved: true` **and** `policy.holidayCalendarAuthoritative: false`.
+Deciding not to call on holidays did not improve the calendar.
+
+### 9.5 What this did NOT touch
+
+The attempt policy (A-L6/A-L7/A-L8) is unchanged. **DNCR is unchanged**: every
+callable number is still washed, a fresh authoritative `not_listed` is still
+required, and listed / unknown / stale / unavailable all still block — **DNCR-1
+is still open and is now the only blocker that stops the first call outright.**
+Suppression still outranks every temporary calling-window block. E-5, M8L, M8J
+and M8K all still apply, and only the M8E gate mints an `AuthorisedDial`.
+
+**53 offline tests** in `test/acquisition-calling-approval.test.js`, including
+boundary sweeps at 09:00/08:59, 19:59/20:00, Saturday 16:59/17:00, and every hour
+of a Melbourne Sunday.
