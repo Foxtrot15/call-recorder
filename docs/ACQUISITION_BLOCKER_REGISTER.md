@@ -119,8 +119,10 @@ none has been written and none should be without a decision to write it.
 **M8J's E-2 proof added none of them.** It is the only exercise so far that
 UPDATEd an existing row rather than appending one: two entries on
 `pr_3740207ebbc0a379910f`'s `history` journal and a bumped `updated_at`, with
-the lifecycle left exactly where it was found. The total is still **20**,
-`acquisition_decisions` is still **4**, and no append-only table was touched.
+the lifecycle left exactly where it was found. The total was **20** when M8J ran
+and is **21** now — M8K's one permanent `acquisition_dncr_washes` row is the
+difference, and it is the only row added since. `acquisition_decisions` is still
+**4**, and no append-only table was touched by M8J or by E-5.
 
 ---
 

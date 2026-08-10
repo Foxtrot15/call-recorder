@@ -2390,8 +2390,10 @@ The **permanent dev residue is exactly what was approved, and nothing else**:
 | `updated_at` | `2026-08-07T13:04:02.910734+00:00` | `2026-08-09T00:36:42.287+00:00` |
 
 **No row was created in any table and no append-only table was written to.** The
-eight acquisition tables still hold **20 rows** in total, `acquisition_decisions`
-is still **4** rows, and the decision chain still verifies end to end with its
+eight acquisition tables held **20 rows** in total **as at M8J** — the figure is
+**21** now, because M8K's behavioural probe later added one permanent wash row to
+a ninth table (§43.7); nothing else has been added since, and E-5 added nothing.
+`acquisition_decisions` is still **4** rows, and the decision chain still verifies end to end with its
 head at the M8I concurrency probe — the projection wrote no second decision,
 which is the property §41.1 exists to guarantee.
 
