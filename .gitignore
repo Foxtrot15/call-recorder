@@ -44,3 +44,6 @@ temp/
 # Claude Code personal/local settings (permissions etc.) — machine-specific.
 # Shared skills under .claude/skills/ ARE tracked.
 .claude/settings.local.json
+
+# M8K DNCR proof handoff (process A -> process B). Regenerated each run.
+scripts/dev/acquisition-dncr-proof/.process-a-saw.json
