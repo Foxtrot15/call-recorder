@@ -116,6 +116,12 @@ function categoriseDecision(decision, duplicateStatus) {
   // being one. It must not appear under a heading a founder can clear by
   // approving something, because approving again would not fix it.
   if (code === "batch_approval_store_unavailable") return "needsManualReview";
+  // M8L, on the same reasoning: a store that could not be read, and a record
+  // nothing has ever compared against anything, are both problems for the
+  // operator rather than duplicate decisions a founder can make from this screen.
+  if (code === "duplicate_resolution_store_unavailable") return "needsManualReview";
+  if (code === "duplicate_never_assessed") return "needsManualReview";
+  if (code === "review_decision_rejected") return "needsManualReview";
   if (code === "attempt_or_wash_restriction") return "attemptBlocked";
   if (code === "campaign_blocked" || code === "kill_switch_engaged") return "policyBlocked";
 

@@ -15,7 +15,11 @@
 //
 //   record validity      acquisition-prospect.assessProspect (A1)
 //   phone                acquisition-phone.normaliseProspectPhones
-//   duplicates           acquisition-dedupe.duplicateStatusFor
+//   duplicates           acquisition-duplicate-state, read from the M8H review
+//                        decisions in acquisition_decisions (M8L). A caller may
+//                        still supply a resolveDuplicates() result for a preview
+//                        screen; it is labelled `duplicateSource: "caller"` and
+//                        the M8E gate discards it.
 //   DNCR + freshness     acquisition-dncr  (assess, recomputed at read time)
 //   suppression          acquisition-suppression.check
 //   attempts + washes    acquisition-attempt-policy.assess
@@ -92,6 +96,20 @@ const ELIGIBILITY_CODES = Object.freeze({
   DNCR_UNAVAILABLE: "dncr_store_unavailable",
   DUPLICATE_REVIEW: "duplicate_requires_resolution",
   DUPLICATE_OF_CANONICAL: "duplicate_of_canonical",
+  // M8L. Three facts the old two codes could not tell apart.
+  //
+  // NEVER_ASSESSED is not "we found no duplicate". It is "nothing has ever
+  // looked", which is what an in-memory record analysed against itself amounts
+  // to. Reporting it as a clean result is how a business gets dialled twice.
+  DUPLICATE_NEVER_ASSESSED: "duplicate_never_assessed",
+  // A human rejected the record for a reason that is not duplication. Checked
+  // at this gate because the lifecycle that would otherwise block it is a
+  // PROJECTION of the same decision (M8J), and a projection that has not landed
+  // must not leave a rejected business callable.
+  REVIEW_REJECTED: "review_decision_rejected",
+  // OUR failure, never a finding about the business — same distinction as
+  // HISTORY_UNAVAILABLE and BATCH_STORE_UNAVAILABLE.
+  DUPLICATE_STORE_UNAVAILABLE: "duplicate_resolution_store_unavailable",
   CAMPAIGN_BLOCKED: "campaign_blocked",
   KILL_SWITCH: "kill_switch_engaged",
   POLICY_UNAPPROVED: "attempt_policy_unapproved",
@@ -184,7 +202,14 @@ function createEligibilityEngine({
    * @param {object} prospect  an A1 prospect
    * @param {object} context
    * @param {Array}  [context.evidenceRows]
-   * @param {object} [context.duplicateResolution]  from resolveDuplicates()
+   * @param {object} [context.duplicateResolution]  from resolveDuplicates(). A
+   *                                        PREVIEW input, never authority — a
+   *                                        caller can always produce a clean one
+   *                                        by analysing a record on its own.
+   * @param {object} [context.duplicateState]  from acquisition-duplicate-state
+   *                                        (M8L). Durable; when present it wins
+   *                                        outright and duplicateResolution is
+   *                                        not consulted at all.
    * @param {object} [context.campaign]   { id, approved, killSwitchEngaged, blocked, blockReason }
    * @param {object} [context.history]    { attempts, lastAttemptAt, lastContactAt, lastOutcome }
    * @param {object} [context.batch]      { approved, stale, unavailable, source,
@@ -195,7 +220,7 @@ function createEligibilityEngine({
    * @param {Date}   [context.at]
    */
   function evaluate(prospect, context = {}) {
-    const { evidenceRows = [], duplicateResolution = null, campaign = null, history = null, batch = null, at = null } = context;
+    const { evidenceRows = [], duplicateResolution = null, duplicateState = null, campaign = null, history = null, batch = null, at = null } = context;
     const instant = at instanceof Date && Number.isFinite(at.getTime()) ? at : now();
 
     const results = [];
@@ -295,19 +320,79 @@ function createEligibilityEngine({
     }
 
     // ── 5. Duplicates ──────────────────────────────────────────────
-    const dup = duplicateStatusFor(prospect.prospectId, duplicateResolution);
-    if (!duplicateResolution) {
-      add(fail("duplicate", ELIGIBILITY_CODES.DUPLICATE_REVIEW, "Duplicates have not been resolved for this set of records, so we cannot tell whether calling this one would dial the same business twice.", { temporary: true, requiredFounderAction: "Run duplicate resolution." }));
-    } else if (dup.blocked) {
-      add(
-        fail("duplicate", dup.code === "duplicate_of_canonical" ? ELIGIBILITY_CODES.DUPLICATE_OF_CANONICAL : ELIGIBILITY_CODES.DUPLICATE_REVIEW, dup.message, {
-          temporary: true,
-          requiredFounderAction: dup.requiresReview ? "Decide whether these records are the same business." : null,
-          detail: dup,
-        })
-      );
+    //
+    // ── WHERE THE ANSWER COMES FROM (M8L) ───────────────────────────
+    // `duplicateSource` records it, on the same terms as `historySource` and
+    // `batchSource`:
+    //
+    //   durable      read from the M8H review decisions in
+    //                acquisition_decisions by acquisition-duplicate-state. THE
+    //                PRODUCTION SOURCE, and the only one the M8E gate accepts —
+    //                see acquisition-authorisation, which discards whatever
+    //                `duplicateResolution` the caller passed.
+    //   unavailable  the durable store could not be read. Refused as OUR
+    //                failure, never as a finding about the business.
+    //   caller       a resolveDuplicates() result. Legitimate for the founder's
+    //                screens, the dry runs and the walkthrough, where the
+    //                question is "what does this list look like" rather than
+    //                "may this be called". Labelled so nothing can claim
+    //                durability it does not have — and note that a caller can
+    //                always produce a clean one by analysing a record against
+    //                itself, which is exactly why it is not authority.
+    //   absent       nothing was supplied. Refused, as before.
+    const duplicateSource = duplicateState ? (duplicateState.unavailable === true ? "unavailable" : "durable") : duplicateResolution ? "caller" : "absent";
+
+    if (duplicateState) {
+      // THE DURABLE ANSWER WINS OUTRIGHT. `duplicateResolution` is not consulted
+      // when one is present — not merged with, not used as a tiebreak. Two
+      // sources for one question is how they come to disagree.
+      if (duplicateState.unavailable === true) {
+        add(
+          fail("duplicate", ELIGIBILITY_CODES.DUPLICATE_STORE_UNAVAILABLE, duplicateState.message, {
+            temporary: true,
+            requiredFounderAction: "Restore access to the durable review records. Nothing may be called until they can be read.",
+            detail: { duplicateSource, state: duplicateState.state },
+          })
+        );
+      } else if (duplicateState.blocked === true) {
+        const code =
+          duplicateState.code === ELIGIBILITY_CODES.DUPLICATE_OF_CANONICAL
+            ? ELIGIBILITY_CODES.DUPLICATE_OF_CANONICAL
+            : duplicateState.code === ELIGIBILITY_CODES.DUPLICATE_NEVER_ASSESSED
+              ? ELIGIBILITY_CODES.DUPLICATE_NEVER_ASSESSED
+              : duplicateState.code === ELIGIBILITY_CODES.REVIEW_REJECTED
+                ? ELIGIBILITY_CODES.REVIEW_REJECTED
+                : ELIGIBILITY_CODES.DUPLICATE_REVIEW;
+        add(
+          fail("duplicate", code, duplicateState.message, {
+            temporary: code !== ELIGIBILITY_CODES.REVIEW_REJECTED,
+            requiredFounderAction:
+              code === ELIGIBILITY_CODES.DUPLICATE_REVIEW
+                ? "Decide whether these records are the same business."
+                : code === ELIGIBILITY_CODES.DUPLICATE_NEVER_ASSESSED
+                  ? "Import this business through the acquisition pipeline so its identity is compared against the records already held."
+                  : null,
+            detail: { duplicateSource, state: duplicateState.state, canonicalId: duplicateState.canonicalId, reviewId: duplicateState.reviewId },
+          })
+        );
+      } else {
+        add(pass("duplicate", duplicateState.message, { duplicateSource, state: duplicateState.state }));
+      }
     } else {
-      add(pass("duplicate", "No duplicate of this record was found."));
+      const dup = duplicateStatusFor(prospect.prospectId, duplicateResolution);
+      if (!duplicateResolution) {
+        add(fail("duplicate", ELIGIBILITY_CODES.DUPLICATE_REVIEW, "Duplicates have not been resolved for this set of records, so we cannot tell whether calling this one would dial the same business twice.", { temporary: true, requiredFounderAction: "Run duplicate resolution.", detail: { duplicateSource } }));
+      } else if (dup.blocked) {
+        add(
+          fail("duplicate", dup.code === "duplicate_of_canonical" ? ELIGIBILITY_CODES.DUPLICATE_OF_CANONICAL : ELIGIBILITY_CODES.DUPLICATE_REVIEW, dup.message, {
+            temporary: true,
+            requiredFounderAction: dup.requiresReview ? "Decide whether these records are the same business." : null,
+            detail: { ...dup, duplicateSource },
+          })
+        );
+      } else {
+        add(pass("duplicate", "No duplicate of this record was found.", { duplicateSource }));
+      }
     }
 
     // ── 6. Campaign ────────────────────────────────────────────────
@@ -490,10 +575,11 @@ function createEligibilityEngine({
       counselApproved,
       historySource,
       batchSource,
+      duplicateSource,
     });
   }
 
-  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved, historySource = "absent", batchSource = "absent" }) {
+  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved, historySource = "absent", batchSource = "absent", duplicateSource = "absent" }) {
     const failures = results.filter((r) => r.ok === false);
     const passed = results.filter((r) => r.ok === true).map((r) => r.check);
 
@@ -543,6 +629,8 @@ function createEligibilityEngine({
       historySource,
       /** Where the batch approval came from: durable | caller | unavailable | absent (E-5). */
       batchSource,
+      /** Where the duplicate resolution came from: durable | caller | unavailable | absent (M8L). */
+      duplicateSource,
       evaluatedAt: instant.toISOString(),
       localTime,
       provenance: provenance ? Object.freeze(provenance) : null,
