@@ -5,10 +5,14 @@
 -- policies. No existing table is altered, no column added to one, no data
 -- rewritten, no existing trigger touched, no foreign key changed.
 --
--- STATUS: NOT APPLIED. Written and reviewed; it has not been run against any
--- database, including dev. Apply to DEV ONLY, by hand, after
--- supabase/sql/verification/10_laq4_preflight.sql comes back clean.
--- See docs/ACQUISITION_SQL_RUNBOOK.md.
+-- STATUS: APPLIED TO DEV 2026-08-10, by hand, after
+-- supabase/sql/verification/10_laq4_preflight.sql came back clean.
+-- NOT APPLIED TO PRODUCTION.
+--
+-- Dev also holds ONE permanent fictional wash row from section 5 of
+-- supabase/sql/verification/11_laq4_verify.sql (+61355509999, not_listed,
+-- washed 2026-08-09). It is append-only and cannot be removed. Do not re-run
+-- that section against dev. See docs/ACQUISITION_SQL_RUNBOOK.md section 11.
 --
 -- ASCII ONLY, so no editor or clipboard can mangle a section heading.
 --
@@ -62,7 +66,7 @@
 
 begin;
 
--- ── The wash ledger ─────────────────────────────────────────────────
+-- -- The wash ledger -------------------------------------------------
 
 create table if not exists public.acquisition_dncr_washes (
   id                  uuid primary key default gen_random_uuid(),
@@ -111,7 +115,7 @@ create table if not exists public.acquisition_dncr_washes (
   recorded_at         timestamptz not null default now()
 );
 
--- ── Idempotency ─────────────────────────────────────────────────────
+-- -- Idempotency -----------------------------------------------------
 --
 -- Re-running the same import must not multiply rows. The natural key of a wash
 -- event is the number, the instant it was performed, and which run it came from.
@@ -135,7 +139,7 @@ create index if not exists acquisition_dncr_washes_batch
   on public.acquisition_dncr_washes (batch_ref)
   where batch_ref is not null;
 
--- ── A wash cannot have been performed in the future ─────────────────
+-- -- A wash cannot have been performed in the future -----------------
 --
 -- Enforced by a trigger rather than a CHECK because Postgres does not allow a
 -- non-immutable function like now() in a check constraint. It is worth a trigger
@@ -165,7 +169,7 @@ create trigger acq_dncr_no_future_wash
   before insert on public.acquisition_dncr_washes
   for each row execute function public.acquisition_reject_future_wash();
 
--- ── Append-only ─────────────────────────────────────────────────────
+-- -- Append-only -----------------------------------------------------
 --
 -- Reuses public.acquisition_refuse_mutation(), created by laq2 and already
 -- guarding evidence, decisions, suppressions and outcomes. Deliberately NOT
@@ -178,7 +182,7 @@ create trigger acq_dncr_washes_no_update
   before update or delete on public.acquisition_dncr_washes
   for each row execute function public.acquisition_refuse_mutation();
 
--- ── RLS, in the same transaction as creation (D8) ───────────────────
+-- -- RLS, in the same transaction as creation (D8) -------------------
 --
 -- Enabled with NO policies, which under Postgres RLS denies every non-superuser
 -- role outright. service_role bypasses RLS and is the only intended reader.
