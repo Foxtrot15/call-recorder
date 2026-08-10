@@ -96,7 +96,7 @@ select sum(n) as total_acquisition_rows from (
 -- -- 5. BEHAVIOURAL PROBE. THIS WRITES ONE PERMANENT FICTIONAL ROW. --
 -- ============================================================================
 --
--- ALREADY RUN AGAINST DEV ON 2026-08-09. DO NOT RUN IT THERE AGAIN.
+-- ALREADY RUN AGAINST DEV ON 2026-08-10. DO NOT RUN IT THERE AGAIN.
 --
 -- The row 5d creates is on dev now, it is counted in the dev fictional total of
 -- 21, and it CANNOT BE DELETED -- the table is append-only, which is the very
