@@ -32,6 +32,7 @@ const { createAttemptPolicy } = require("../src/services/acquisition-attempt-pol
 const { createEvidenceLedger } = require("../src/services/acquisition-evidence");
 const { resolveDuplicates } = require("../src/services/acquisition-dedupe");
 const { createProspect, transitionProspect, identityFingerprint } = require("../src/services/acquisition-prospect");
+const { canonicalBatchIdentity, recordBatchApproval } = require("../src/services/acquisition-batch-approval");
 
 const MELBOURNE = "Australia/Melbourne";
 const WEDNESDAY_2PM = "2026-08-05T04:00:00Z"; // inside the permitted window
@@ -76,7 +77,13 @@ function evidenceFor(prospect, clock = now()) {
 
 /**
  * The baseline the tests perturb: everything wired, everything permitted.
- * `suppression` is deliberately NOT supplied — the gate binds that itself.
+ *
+ * `suppression` is deliberately NOT supplied — the gate binds that itself. And
+ * since E-5, neither is the batch approval: `context.batch` is discarded by the
+ * gate, so a test that wants the batch check to pass has to write a real
+ * approval into the store with `approveBatchIn(store, prospect, clock)`. That is
+ * a deliberate cost of the milestone — clearing that gate now requires the same
+ * durable artifact production would.
  */
 function harness({ iso = WEDNESDAY_2PM, prospect = null, holidays = null, washed = true, counselApproved = true } = {}) {
   const clock = now(iso);
@@ -95,13 +102,17 @@ function harness({ iso = WEDNESDAY_2PM, prospect = null, holidays = null, washed
     counselApproved,
   };
 
-  const context = {
-    evidenceRows,
-    duplicateResolution,
-    batch: { approved: true, batchHash: "abc123def456", approvedBy: "Peter" },
-  };
+  const context = { evidenceRows, duplicateResolution };
 
   return { clock, prospect: p, engineOptions, context, washStore };
+}
+
+/** Durably approve a one-business batch, so the E-5 gate has something to read. */
+async function approveBatchIn(store, prospect, clock = now(), e164 = NUMBER) {
+  const identity = canonicalBatchIdentity({ members: [{ rowId: prospect.prospectId, prospectId: prospect.prospectId, e164 }], label: "m8e test batch" });
+  const result = await recordBatchApproval({ store, now: clock, identity, approvedBy: "Peter Dang", reason: "Approved for the M8E tests." });
+  assert.strictEqual(result.ok, true, result.message);
+  return identity;
 }
 
 const FINGERPRINT = identityFingerprint({ businessName: "Northside Lock & Key", suburb: "Brunswick", state: "VIC" });
@@ -275,6 +286,7 @@ describe("the final gate decides from durable state, not from memory", () => {
   it("authorises a clean business, and only then mints a dial permission", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = harness();
+    await approveBatchIn(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
 
     assert.strictEqual(decision.authorised, true, JSON.stringify(decision.failedChecks));
@@ -349,6 +361,7 @@ describe("the rules the gate must not have weakened", () => {
     const store = createInMemoryAcquisitionStore();
     const midnight = "2026-08-05T16:00:00Z"; // 02:00 Melbourne
     const { clock, prospect, engineOptions, context } = harness({ iso: midnight });
+    await approveBatchIn(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.WINDOW_BLOCKED);
@@ -358,6 +371,7 @@ describe("the rules the gate must not have weakened", () => {
     const store = createInMemoryAcquisitionStore();
     const holidays = { isHoliday: () => true, describe: () => "A public holiday." };
     const { clock, prospect, engineOptions, context } = harness({ holidays });
+    await approveBatchIn(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.WINDOW_BLOCKED);
@@ -366,8 +380,22 @@ describe("the rules the gate must not have weakened", () => {
   it("still refuses without founder batch approval", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = harness();
-    const { batch, ...withoutBatch } = context;
-    const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, withoutBatch);
+    const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
+    assert.strictEqual(decision.authorised, false);
+    assert.strictEqual(decision.code, ELIGIBILITY_CODES.BATCH_UNAPPROVED);
+  });
+
+  /**
+   * E-5. The gate used to accept this object as the approval. It no longer
+   * reaches the engine at all — see the destructure at the top of authorise().
+   */
+  it("refuses a caller who asserts an approval the store has never heard of", async () => {
+    const store = createInMemoryAcquisitionStore();
+    const { clock, prospect, engineOptions, context } = harness();
+    const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, {
+      ...context,
+      batch: { approved: true, stale: false, batchHash: "abc123def456", approvedBy: "Peter", source: "durable" },
+    });
     assert.strictEqual(decision.authorised, false);
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.BATCH_UNAPPROVED);
   });
@@ -375,8 +403,10 @@ describe("the rules the gate must not have weakened", () => {
   it("still refuses without counsel approval", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = harness({ counselApproved: false });
+    await approveBatchIn(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
     assert.strictEqual(decision.authorised, false);
+    assert.strictEqual(decision.code, ELIGIBILITY_CODES.COUNSEL_UNAPPROVED);
   });
 });
 
@@ -437,6 +467,7 @@ describe("nothing here can place a call", () => {
   it("mints an inert permission slip with no methods", async () => {
     const store = createInMemoryAcquisitionStore();
     const { clock, prospect, engineOptions, context } = harness();
+    await approveBatchIn(store, prospect, clock);
     const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
 
     assert.strictEqual(decision.authorised, true, JSON.stringify(decision.failedChecks));

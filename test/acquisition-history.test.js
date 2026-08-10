@@ -271,9 +271,21 @@ describe("every real authorisation path uses durable history", () => {
     return {
       evidenceRows,
       duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }], evidenceCount: evidenceRows.length, hasOfficialSource: true }]),
+      // A caller-supplied approval, which the ENGINE accepts for a preview and
+      // the AUTHORISER discards (E-5). The authoriser tests below seed a real
+      // one into the store with approveIn(); this one is here so the direct
+      // engine case at the end of the block gets past the batch check.
       batch: { approved: true, batchHash: "x", approvedBy: "P" },
       ...extra,
     };
+  }
+
+  /** E-5: the durable approval the authoriser will actually read. */
+  async function approveIn(store, p) {
+    const { canonicalBatchIdentity, recordBatchApproval } = require("../src/services/acquisition-batch-approval");
+    const identity = canonicalBatchIdentity({ members: [{ rowId: p.prospectId, prospectId: p.prospectId, e164: NUMBER }] });
+    const r = await recordBatchApproval({ store, now, identity, approvedBy: "Peter Dang", reason: "Approved for the history tests." });
+    assert.equal(r.ok, true, r.message);
   }
   function engineOptions(clock) {
     const wash = createWashStore({ now: clock, mode: "fixture" });
@@ -283,10 +295,11 @@ describe("every real authorisation path uses durable history", () => {
 
   it("the authoriser blocks when the contact history cannot be read", async () => {
     const store = createInMemoryAcquisitionStore();
+    const p = goodProspect();
+    await approveIn(store, p);
     store.listOutcomes = async () => { throw new Error("outcomes table unreachable"); };
 
     const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
-    const p = goodProspect();
     const d = await authoriser.authorise(p, ctx(p));
 
     assert.equal(d.authorised, false);
@@ -296,10 +309,13 @@ describe("every real authorisation path uses durable history", () => {
 
   it("the authoriser reports historySource: durable on a real decision", async () => {
     const store = createInMemoryAcquisitionStore();
-    const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
     const p = goodProspect();
+    await approveIn(store, p);
+    const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
     const d = await authoriser.authorise(p, ctx(p));
+    assert.equal(d.authorised, true, JSON.stringify(d.failedChecks));
     assert.equal(d.historySource, "durable");
+    assert.equal(d.batchSource, "durable");
   });
 
   it("a caller-supplied history cannot reach the authoriser's engine", async () => {
@@ -312,10 +328,12 @@ describe("every real authorisation path uses durable history", () => {
       outcome({ id: "o2", prospectId: subject.prospectId, outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
       outcome({ id: "o3", prospectId: subject.prospectId, recordedAt: "2026-08-03T00:00:00.000Z" }),
     ]);
+    await approveIn(store, subject);
     const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
     const d = await authoriser.authorise(subject, ctx(subject, { history: { attempts: 0, lastAttemptAt: null, lastContactAt: null, lastOutcome: null } }));
 
     assert.equal(d.authorised, false, "the durable two voicemails reached the cap; the caller's zero was ignored");
+    assert.equal(d.code, ELIGIBILITY_CODES.ATTEMPTS_BLOCKED, "and the cap is what refused it, not the batch gate");
     assert.equal(d.historySource, "durable", "the gate's own read wins");
     assert.equal(d.dial, null);
   });

@@ -21,12 +21,32 @@
 // ── THE INVARIANT, STATED ONCE ──────────────────────────────────────
 //
 //     THE FINAL PRE-DIAL DECISION MUST NEVER RELY SOLELY ON STALE
-//     PROCESS MEMORY.
+//     PROCESS MEMORY, OR ON ANYTHING THE CALLER ASSERTS.
 //
 // So this gate reads suppression from the store, every time, for the one
 // business it is being asked about. The hydrated index keeps its job — cheap
 // rejection during discovery, ranking, batching and the founder's screens —
 // and loses only its authority at the last step.
+//
+// ── THREE AUTHORITATIVE READS, NOT ONE ──────────────────────────────
+// The invariant has been applied three times, each time closing a path by which
+// something a caller held in memory could have decided a call:
+//
+//   suppression        M8E / M-7   store.lookupSuppression
+//   contact history    M8J / E-1   acquisition-history.readContactHistory
+//   batch approval     E-5         acquisition-batch-approval
+//
+// The third is the one that had been assertable outright. `context.batch =
+// { approved: true }` was, until E-5, sufficient — an object with no author, no
+// timestamp and no membership could clear the check that exists to record that
+// a named human looked at a specific list of businesses and said yes. The
+// caller's version is now destructured off the context and discarded; the
+// approval comes from acquisition_decisions or it does not exist.
+//
+// A BATCH APPROVAL IS STILL NOT PERMISSION TO CALL. It clears one check out of
+// nine. It cannot clear suppression, DNCR, duplicates, the calling window, the
+// attempt cap, the campaign, or a lifecycle that a human has not approved, and
+// nothing about it shortens the list of things re-evaluated here.
 //
 // ── WHAT IT DOES NOT DO ─────────────────────────────────────────────
 // It does not place a call. It cannot: there is no transport here, no provider
@@ -52,6 +72,7 @@ const { createSuppressionList } = require("./acquisition-suppression");
 const { assertStoreContract } = require("./acquisition-store");
 const { normaliseProspectPhones } = require("./acquisition-phone");
 const { readContactHistory } = require("./acquisition-history");
+const { resolveBatchApprovalForProspect } = require("./acquisition-batch-approval");
 
 /**
  * The one code the existing vocabulary did not already have.
@@ -70,6 +91,13 @@ const { readContactHistory } = require("./acquisition-history");
 const AUTHORISATION_CODES = Object.freeze({
   AUTHORISED: ELIGIBILITY_CODES.ELIGIBLE,
   SUPPRESSION_STORE_UNAVAILABLE: "suppression_store_unavailable",
+  /**
+   * E-5, and it belongs to the eligibility vocabulary rather than to a second
+   * one here — the engine is what reports it, at the batch check's own
+   * precedence, so a suppressed business is still reported as suppressed.
+   * Aliased here because callers of this gate switch on AUTHORISATION_CODES.
+   */
+  BATCH_APPROVAL_STORE_UNAVAILABLE: ELIGIBILITY_CODES.BATCH_STORE_UNAVAILABLE,
 });
 
 /**
@@ -148,7 +176,7 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
    * so a future refactor that adds an early return cannot accidentally produce
    * an authorised decision with no slip attached.
    */
-  function decide({ authorised, code, message, prospect, e164, instant, eligibility, suppressionSource, failedChecks }) {
+  function decide({ authorised, code, message, prospect, e164, instant, eligibility, suppressionSource, failedChecks, batchApproval = null }) {
     const base = Object.freeze({
       authorised,
       code,
@@ -161,6 +189,10 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
       suppressionSource,
       /** And where the attempt history came from. Always "durable" on any authorised one. */
       historySource: eligibility ? eligibility.historySource || null : null,
+      /** And the founder batch approval (E-5). Always "durable" on any authorised one. */
+      batchSource: eligibility ? eligibility.batchSource || null : null,
+      /** Which durable approval covered it, if one did. */
+      batchKey: batchApproval ? batchApproval.batchKey || null : null,
       eligibilityCode: eligibility ? eligibility.code : null,
       failedChecks: Object.freeze(failedChecks || []),
       note: "This is a decision about permission. Nothing here places, schedules or prepares a call.",
@@ -190,6 +222,15 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
    */
   async function authorise(prospect, context = {}) {
     const instant = context.at instanceof Date && Number.isFinite(context.at.getTime()) ? context.at : now();
+
+    // ── THE CALLER'S BATCH APPROVAL IS TAKEN AWAY HERE (E-5) ──────────
+    //
+    // Not overwritten later, not ignored by convention — removed from the
+    // object before anything downstream can see it, in the same statement that
+    // captures it. `callerBatch` survives only so its `batchKey` can be used as
+    // a hint to the durable lookup. Every other field on it, including
+    // `approved: true`, is discarded and never consulted.
+    const { batch: callerBatch = null, ...callerContext } = context || {};
 
     if (!prospect || typeof prospect !== "object") {
       return decide({
@@ -292,6 +333,46 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
     // `available: false`, the engine is built with historyRequired and refuses,
     // and the refusal is `contact_history_unavailable` — the gate's own
     // failure, not a claim about the business.
+    // ── 2c. THE DURABLE FOUNDER BATCH APPROVAL (E-5) ──────────────────
+    //
+    // The third authoritative read, and it exists for the same reason as the
+    // first two. Until E-5 the approval arrived as `context.batch`, an object
+    // the caller built — so a process that had never seen a founder could
+    // authorise a call by asserting one had approved, and a batch approved this
+    // morning by a process that has since exited left nothing behind to read.
+    //
+    // The caller's `batch` is destructured off the context below and DISCARDED.
+    // It may still name a batchKey as a REFERENCE, which narrows the lookup and
+    // confers nothing: if the store says there is no approval, there is no
+    // approval, whatever the object claimed. resolveBatchApprovalForProspect
+    // never throws — an unreadable store comes back `unavailable: true` and the
+    // engine refuses with batch_approval_store_unavailable, which is the gate's
+    // own failure and never a finding about the batch.
+    //
+    // WHAT THIS DELIBERATELY DOES NOT DO is treat the approval as permission.
+    // It clears exactly one check. Suppression, DNCR, duplicates, campaign,
+    // policy, attempts and the calling window are all still evaluated below,
+    // against the state of the world at this instant.
+    const batchApproval = await resolveBatchApprovalForProspect({
+      store,
+      prospectId: prospect.prospectId,
+      e164,
+      batchKey: callerBatch && typeof callerBatch === "object" ? callerBatch.batchKey || null : null,
+    });
+
+    if (batchApproval.unavailable && audit) {
+      audit.record({
+        entityType: "prospect",
+        entityId: prospect.prospectId || "unknown",
+        event: "authorisation_blocked",
+        decision: "veto",
+        actor: "dial-authoriser",
+        actorKind: "system",
+        reason: `The founder batch approval store could not be read, so authorisation was refused: ${batchApproval.message}`,
+        detail: { code: ELIGIBILITY_CODES.BATCH_STORE_UNAVAILABLE },
+      });
+    }
+
     const contactHistory = await readContactHistory({ store, prospectId: prospect.prospectId });
     if (!contactHistory.available && audit) {
       audit.record({
@@ -324,8 +405,10 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
     const { suppression: _ignoredSuppression, historyIndex: _ignoredIndex, historyRequired: _ignoredFlag, ...collaborators } = engineOptions || {};
     const active = createEligibilityEngine({ ...collaborators, now, suppression: authoritative, historyRequired: true });
 
-    //  is spread AFTER the caller's context for the same reason.
-    const eligibility = active.evaluate(prospect, { ...context, at: instant, history: contactHistory });
+    // `callerContext` is the context WITHOUT `batch` — see the destructure at
+    // the top of authorise(). All three authoritative answers are spread AFTER
+    // it, so a caller who supplies any of them cannot reach the engine with it.
+    const eligibility = active.evaluate(prospect, { ...callerContext, at: instant, history: contactHistory, batch: batchApproval });
 
     const failedChecks = (eligibility.failedChecks || []).map((f) => Object.freeze({ check: f.check, code: f.code, message: f.message }));
 
@@ -340,6 +423,7 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
         eligibility,
         suppressionSource: "durable",
         failedChecks,
+        batchApproval,
       });
     }
 
@@ -353,6 +437,7 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
       eligibility,
       suppressionSource: "durable",
       failedChecks: [],
+      batchApproval,
     });
   }
 
