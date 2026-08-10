@@ -1,7 +1,8 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-10**, after **E-5**
-closed (durable founder batch approval, no SQL) and after the founder approved
+**Status of this document:** LIVE. Last recomputed **2026-08-10**, after **M8L**
+closed the caller-supplied duplicate-resolution gap and **E-5** closed durable
+founder batch approval — **neither needed SQL** — and after the founder approved
 the attempt policy (**A-L6 / A-L7 / A-L8 closed**, approval
 `AL6-AL7-AL8-2026-08-10`).
 
@@ -84,6 +85,7 @@ SQL was required to close A-L8.**
 | ~~**E-2**~~ | Persist the review decision onto the prospect lifecycle | **CLOSED in M8J.** `transitionProspectLifecycle` is a compare-and-set; `acquisition-review-projection.js` projects the durable decision and repairs a lag without recording a second decision. Proven against real dev Postgres 2026-08-09 under founder approval — a `review_approved → review_pending → review_approved` round trip on one existing fictional row; post-run verification 16/16, zero further residue. **No row created anywhere**; the approved residue was 2 history entries and a bumped `updated_at`. |
 | ~~**E-3**~~ | Durable DNCR wash storage | **CLOSED ON DEV in M8K — proven restart-safe against real Postgres.** `laq4` applied to dev 2026-08-10; **not applied to production**. An attested wash persisted on dev was read back by **two genuinely separate OS processes**, gave the same answer both times, and the *same row* evaluated 42 days after the wash decays to `unknown` and refuses with `dncr_wash_stale` — **without any row changing**, because freshness is computed at read time. 33 read-only checks, zero residue. The path fails closed: an unreadable ledger yields `dncr_store_unavailable`, kept distinct from "never checked", never an empty Map read as success. 39 offline tests cover the states dev's single row cannot be in. **Open for production**, which has no acquisition schema at all. |
 | ~~**E-5**~~ | Durable batch approval | **CLOSED in E-5, offline — no SQL required.** A founder approval is now an append-only row in `acquisition_decisions` (`entity_type: 'batch'`, which the laq1 CHECK has admitted since it was written), keyed by `ba_<membershipHash>` — an identity derived from the membership itself. `acquisition-authorisation` destructures `context.batch` off the caller's context and **discards** it; the approval is read from the store or it does not exist. Proven across two genuinely separate OS processes, 9/9 and 26/26, **zero database residue**. See §5. |
+| ~~**M8L**~~ | Durable duplicate resolution | **CLOSED — no SQL.** `context.duplicateResolution` is no longer authority anywhere a call can be decided. The M8E gate destructures it off the caller's context and reads the **M8H review decision** instead — the same rows a human already wrote. Proven across two separate OS processes, 13/13 and 22/22, **zero database residue**. See §8. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **ABSENT BY DESIGN.** Nothing to fix; nothing to build until §1 and §2 close. |
 
@@ -252,7 +254,7 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 3 | Record complete + valid | 🟢 | 🟢 | `assessProspect`; timezone mandatory in code and in `laq1` |
 | 4 | Reviewed → `review_approved`, durably | 🟢 | 🟢 | **E-2**, proven on dev 2026-08-09 |
 | 5 | Qualified | 🟢 | 🟢 | Ordering only, never permission |
-| 6 | Duplicates resolved | 🟠 | 🟠 | Default-deny, but `duplicateResolution` is caller-supplied |
+| 6 | Duplicates resolved | 🟠 | 🟢 | **M8L closed it.** The answer is the M8H review decision, read from `acquisition_decisions` at the gate. `context.duplicateResolution` is discarded, so `resolveDuplicates([oneProspect])` — which the whole repo used to build, and which declares a known duplicate unique — no longer clears anything. Merged candidates are not a second calling target; unresolved and rejected identities refuse. See §8 |
 | 7 | DNCR-cleared | 🟠 | 🟠 | **E-3 closed on dev** — storage is durable, restart-safe and fail-closed, proven against real Postgres. Still AMBER, and now for **one** reason rather than two: **DNCR-1**, nobody holds a Register account, so no real wash exists to store |
 | 8 | Permitted day/time | 🟠 | 🟠 | Fully implemented. Needs **A-L1**, **A-L2**, **A-L3** |
 | 9 | **Attempts permitted** | 🟠 | 🟢 | **A-L6 / A-L7 / A-L8 approved.** The values are decided and cited, the count comes from durable rows, a decline is permanent, and the policy refuses to call itself approved while anything inside it is not. No engineering deficiency remains |
@@ -261,6 +263,13 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 12 | Founder batch approval | 🟠 | 🟢 | **E-5 closed.** Durable, restart-safe and proven across two OS processes. `context.batch` is discarded by the gate; the approval is read from `acquisition_decisions` or it does not exist. Membership-bound, so a compliance change does not fake staleness. **A-L9** is still open but is governance, not a defect |
 | 13 | Final M8E authorisation | 🟢 | 🟢 | Durable suppression **and** durable history; unforgeable slip; fails closed on either read |
 | 14 | Future dial request | 🔴 | 🔴 | **E-7.** No dialler, by design |
+
+**Gate 6 moved AMBER → GREEN.** M8L closed it. The amber was never "we do not
+detect duplicates" — `acquisition-dedupe` has been careful since A2. It was that
+the ANSWER was whatever the caller had computed, and the object every dry run and
+proof actually built (`resolveDuplicates([oneProspect])`) declares a known
+duplicate unique because it is the only record in it. The gate now reads what a
+human decided, or refuses.
 
 **Gate 12 moved AMBER → GREEN.** E-5 closed it: an approval survives the process
 that made it, names exactly what it covered, cannot be asserted by a caller, and
@@ -302,3 +311,113 @@ it the same day, approved.
 that should be built last.
 
 Items 1–3 are decisions with lead times. Only item 4 is code.
+
+---
+
+## 8. M8L — durable duplicate resolution, closed
+
+**No SQL. No new event. No second truth source.** The answer was already being
+written; nothing was reading it at the moment it mattered.
+
+### 8.1 What it was
+
+`acquisition-dedupe` has been careful since A2 — named signals, no similarity
+score, no threshold, and only an exact duplicate may consolidate without a
+person. Default-deny held too: no `duplicateResolution` meant refusal.
+
+The gap was not detection and was not a forgotten check. It was that the ANSWER
+came from `context.duplicateResolution` — the output of `resolveDuplicates()`
+over a record set **the caller chose**. And:
+
+```js
+resolveDuplicates([theOneProspect])   // nothing to compare against
+```
+
+is a perfectly valid resolution in which nothing is a duplicate of anything. It
+is what every test, every dry run and both dev proofs actually built, and it
+cleared the gate. The same module that would have caught the duplicate, pointed
+at nothing.
+
+Nor was any of it durable. A founder's judgement about an ambiguous identity —
+the one decision in this pipeline most obviously a human's — was recomputed in
+memory on every run.
+
+### 8.2 What it is now
+
+The M8H review decisions, which have recorded exactly this since M8H:
+
+| review outcome | durable duplicate state | at the gate |
+|---|---|---|
+| item still open, or `needs_more_information` | unresolved | `duplicate_requires_resolution` |
+| `approve_as_new` | a distinct business | passes |
+| `merge_into_existing` (+ `mergeTarget`) | merged | `duplicate_of_canonical`, canonical named |
+| `reject_duplicate` | rejected as a duplicate | `duplicate_of_canonical` |
+| `reject_not_locksmith` | rejected, not a duplicate matter | `review_decision_rejected` |
+| no review item, **and a stored prospect row** | cleared at import | passes |
+| no review item, **no row** | never assessed | `duplicate_never_assessed` |
+
+Inventing a `duplicate_resolved` event beside the review queue would have created
+a second truth source that could disagree with it, and the disagreement would be
+discovered by a call to the wrong business.
+
+### 8.3 The one inference, stated plainly
+
+**A prospect with no review item is treated as cleared only if a prospect ROW
+exists.** `acquisition-persist` writes a row only for candidates the import did
+NOT hold; a candidate with a duplicate concern is held, a review item opens, and
+no row is written (M8H). A row therefore means dedupe ran over the whole import
+and did not flag this business, or a human approved it as new.
+
+The converse is what makes it safe: a prospect object that exists only in a
+caller's memory has never been compared against anything, and is refused as
+`duplicate_never_assessed` rather than passing because no review happens to name
+it. **Absence of a review is evidence only when there is a row whose existence
+required one not to be needed.**
+
+### 8.4 Merge, distinct, reject
+
+- **Merged** — the candidate never becomes a prospect; what it knew was attached
+  to the canonical business (M8H `attachMergedListing`). The canonical is the
+  only callable identity, and the refusal names it. Proven to hold even when a
+  row for the candidate exists anyway and the lifecycle projection has run —
+  a merge moves no lifecycle, so the durable merge decision is what refuses.
+- **Approved as new** — the identity question is settled and nothing else is.
+  The record must still be stored, and every other gate still applies.
+- **Rejected** — not callable. An exact re-import does **not** resurrect it:
+  `openReviewItem` finds the resolved item and refuses to reopen, and even if
+  something did persist the row, the durable rejection still refuses at the gate.
+  Whether *materially new* evidence should reopen a rejection is deliberately
+  **not** modelled — it is a real question and M8L does not pretend to answer it.
+
+### 8.5 Fail closed
+
+`duplicate_resolution_store_unavailable` is distinct from
+`duplicate_requires_resolution`, for the same reason `contact_history_unavailable`
+is distinct from `attempt_or_wash_restriction`. There is no fallback to the
+caller's object, to "no duplicate known", or to empty state. Suppression still
+outranks it, so a known opt-out is still reported as an opt-out.
+
+### 8.6 What was proven
+
+- **43 offline tests** in `test/acquisition-duplicate-state.test.js`, including
+  one that reproduces the original defect before closing it.
+- **A two-process restart proof**, `scripts/dev/acquisition-duplicate-proof/`:
+  **13/13 and 22/22**. Process A has a human merge one candidate, approve another
+  as distinct, and leave a third undecided, then exits. Process B authorises the
+  canonical business from durable state with no `duplicateResolution` in its
+  context at all, refuses the merged candidate, refuses the undecided one **while
+  being handed a clean caller-supplied resolution**, and refuses a record that
+  exists only in memory.
+- **Zero database residue.** No dev write, and none is needed: the M8H review
+  queue and the M8I decision chain were both already proven against real dev
+  Postgres, and a dev proof here would append permanent review rows to an
+  append-only table to demonstrate a fold.
+
+### 8.7 Limitations
+
+- `summariseDuplicateState` folds the log in memory with the same 5000-row cap
+  `listReviewItems` carries. The gate never calls it.
+- A capped page fails in the **safe** direction: an approval or resolution
+  outside the page is not found, and the gate refuses.
+- Whether materially changed evidence should reopen a rejected identity is
+  **open and unmodelled** — see §8.4.

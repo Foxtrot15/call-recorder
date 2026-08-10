@@ -2413,12 +2413,13 @@ reached must not be reported as a conflict. A genuine stale case needs a target
 the row is not already at. Both readings are now pinned by a test in
 `test/acquisition-lifecycle.test.js` rather than left to be rediscovered.
 
-### 41.9 Known limitations — SNAPSHOT as at M8J, partly superseded
+### 41.9 Known limitations — SNAPSHOT as at M8J, largely superseded
 
-> Two of these have since been closed. **E-3** closed in M8K (§43) and **E-5** in
-> §44; both entries are left as written because this section records what M8J
-> knew. [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md) is the
-> live list and wins wherever it disagrees.
+> Three of these have since been closed. **E-3** closed in M8K (§43), **E-5** in
+> §44 and **caller-supplied duplicate resolution** in §45; the entries are left
+> as written because this section records what M8J knew.
+> [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md) is the live
+> list and wins wherever it disagrees.
 
 - **E-5 — durable batch approval** is still open. `context.batch` is
   caller-supplied and there is no batch table. Not a hard blocker for one
@@ -2427,7 +2428,7 @@ the row is not already at. Both readings are now pinned by a test in
 - **E-3 — durable DNCR wash storage** is still open. The wash store is an
   in-process `Map`; a wash does not survive a restart. **— CLOSED on dev in §43.**
 - **Duplicate resolution** is still caller-supplied, the same shape of gap E-1
-  just closed for history.
+  just closed for history. **— CLOSED in §45, with no SQL.**
 - `listOutcomes` has no explicit limit and inherits PostgREST's page cap. Scoped
   per prospect it is small; the unfiltered call is the one to watch.
 - `listReviewItems` still folds the log in memory with a 5000-row cap (§40.10).
@@ -2942,4 +2943,200 @@ made.
   permanent. E-5 is closed as engineering; the first real approval is a founder
   decision, not a milestone step.
 - Duplicate resolution is still caller-supplied — the last remaining input of
-  that shape, and the natural successor to this work.
+  that shape, and the natural successor to this work. **— CLOSED in §45**, which
+  is exactly what it became.
+
+---
+
+## 45. M8L — durable duplicate resolution, closed with no SQL
+
+**No migration, no new decision event, and no second truth source.** The answer
+M8L needed had been written to `acquisition_decisions` since M8H; nothing was
+reading it at the moment it mattered. Proven across two genuinely separate OS
+processes — see §45.7.
+
+### 45.1 The gap, and why it was not a missing check
+
+`acquisition-dedupe` has been careful since A2: named signals rather than a
+similarity score, no threshold anybody has to take on faith, and only an exact
+duplicate may consolidate without a person looking. Default-deny held as well —
+an absent `duplicateResolution` refused.
+
+The defect was in where the answer came from. `context.duplicateResolution` is
+the output of `resolveDuplicates()` over a record set **the caller chose**, and
+
+```js
+resolveDuplicates([theOneProspect])
+```
+
+is a valid resolution object in which nothing can be a duplicate of anything,
+because there is nothing to compare against. That is the object every test, every
+dry run and both dev proofs actually built, and it cleared the gate. It was the
+same careful module that would have caught the duplicate, pointed at nothing.
+
+A test in `test/acquisition-duplicate-state.test.js` reproduces exactly this
+before closing it: two differently-named businesses publishing one number are
+flagged `possible_duplicate_requires_review` when analysed together, and `unique`
+when either is analysed alone.
+
+None of it was durable either. A founder's judgement about an ambiguous identity
+was recomputed in memory on every run and never consulted at the final gate.
+
+### 45.2 Why the M8H review decisions, and why no new event
+
+The review queue has recorded this since M8H, in the append-only decision log,
+keyed by the candidate's prospect id. Its five outcomes ARE the five states M8L
+has to answer:
+
+| review outcome | durable duplicate state | reported at the gate |
+|---|---|---|
+| open, or `needs_more_information` | unresolved | `duplicate_requires_resolution` |
+| `approve_as_new` | a distinct business | passes |
+| `merge_into_existing` + `mergeTarget` | merged | `duplicate_of_canonical`, canonical named |
+| `reject_duplicate` | rejected as a duplicate | `duplicate_of_canonical` |
+| `reject_not_locksmith` | rejected, not about duplication | `review_decision_rejected` |
+
+A `duplicate_resolved` event alongside them would have been a second truth source
+that could disagree with the review queue, and the disagreement would be
+discovered by a call to the wrong business. So M8L adds no event, no column and
+no table — `acquisition-duplicate-state.js` reads what a human already decided.
+
+### 45.3 The one inference, stated plainly
+
+A prospect with **no** review item is treated as durably cleared — but only if a
+prospect **row** exists for it.
+
+`acquisition-persist` writes a row only for candidates the import did NOT hold. A
+candidate with a duplicate concern is held, a review item opens, and no row is
+written (§39). A row therefore means dedupe ran across the whole import and did
+not flag this business, or a human approved it as new. Either is a real,
+durable clearance.
+
+The converse is what makes it safe. A prospect object that exists only in a
+caller's memory has never been compared against anything and is refused as
+`duplicate_never_assessed`, rather than passing because no review happens to name
+it. **Absence of a review is evidence only when there is a row whose existence
+required one not to be needed.**
+
+This is the one place M8L infers rather than reads, and it is written down here
+because it is load-bearing.
+
+### 45.4 What changed at the M8E gate
+
+`createDialAuthoriser` now performs a **fourth** authoritative read, on the same
+terms as durable suppression (§36), durable contact history (§41) and the durable
+batch approval (§44):
+
+```js
+const { batch: callerBatch = null, duplicateResolution: _callerDuplicates = null, ...callerContext } = context || {};
+// ...
+const duplicateState = await resolveDuplicateStateForProspect({ store, prospectId: prospect.prospectId });
+const eligibility = active.evaluate(prospect, {
+  ...callerContext, at: instant, history: contactHistory, batch: batchApproval, duplicateState,
+});
+```
+
+`duplicateResolution` is captured only so the rest-spread cannot carry it
+through. **No caller hint is accepted and none is needed**: a prospect names
+itself and review items are keyed by that same id, so there is deliberately no
+parameter that could point the lookup somewhere more convenient. A test asserts
+the signature takes exactly `{ store, prospectId }`.
+
+When a durable `duplicateState` is present the engine does not consult
+`duplicateResolution` at all — not as a tiebreak, not merged with. Two sources
+for one question is how they come to disagree.
+
+Decisions now carry `duplicateSource: durable | caller | unavailable | absent`,
+alongside `historySource` and `batchSource`. A ratchet asserts every authorised
+decision reports `durable`, and two more assert the gate contains no
+`resolveDuplicates(` or `duplicateStatusFor(` call of its own.
+
+### 45.5 Merge, distinct, reject
+
+- **Merged.** The candidate never becomes a prospect; what it knew is attached to
+  the canonical business (§39 `attachMergedListing`). The canonical is the only
+  callable identity and the refusal names it. This holds even if a row for the
+  candidate exists anyway and the lifecycle projection has run — a merge moves no
+  lifecycle (§41.1), so the durable merge decision is what refuses.
+- **Approved as new.** The identity question is settled and nothing else is. The
+  record must still be stored, and every other gate still applies.
+- **Rejected.** Not callable. An exact re-import does not resurrect it:
+  `openReviewItem` finds the resolved item and refuses to reopen it, and even if
+  something did persist the row the durable rejection still refuses at the gate.
+  `reject_not_locksmith` is reported as itself rather than dressed up as a
+  duplicate — and it is checked here at all because the lifecycle that would
+  otherwise block it is a PROJECTION of the same decision, and a projection that
+  has not landed must not leave a rejected business callable.
+
+**Whether materially new evidence should reopen a rejected identity is
+deliberately not modelled.** It is a real question; M8L does not pretend to
+answer it.
+
+### 45.6 Fail closed
+
+`duplicate_resolution_store_unavailable` is a new eligibility code, distinct from
+`duplicate_requires_resolution` for the same reason `contact_history_unavailable`
+is distinct from `attempt_or_wash_restriction`: one says a person has to decide,
+the other says we could not find out whether one already had.
+
+There is no fallback to the caller's object, to "no duplicate known", or to empty
+state. Both durable reads — the review decisions and the prospect row — are
+covered, so an unreadable prospects table is `unavailable` and not
+`never_assessed`. It is reported at the duplicate check's own precedence, so a
+suppressed business is still reported as suppressed.
+
+### 45.7 The proof
+
+`scripts/dev/acquisition-duplicate-proof/`, two genuinely separate OS processes.
+**Process A: 13/13. Process B: 22/22.**
+
+Process A stores a canonical business, holds three ambiguous candidates for
+review, has a named human **merge** one and **approve another as new**, leaves a
+third **undecided**, records a founder batch approval so B's gate run is testing
+the duplicate check rather than tripping over E-5, and exits.
+
+Process B never sees a resolution object:
+
+| | |
+|---|---|
+| B1–B6 | the decisions survived, naming the same person, instant and canonical target; the chain verifies |
+| B7–B9 | the canonical business is **authorised** with `duplicateSource: durable` from a context containing no `duplicateResolution`, and only then is a slip minted |
+| B10–B11 | the merged candidate is refused `duplicate_of_canonical`; no slip |
+| B12 | a caller-supplied clean `resolveDuplicates([candidate])` changes **nothing** |
+| B13 | an undecided identity is refused however clean the caller's analysis is |
+| B14 | a record that exists only in memory is refused as never assessed |
+| B15–B17 | an opt-out recorded after the resolution still refuses, the resolution is untouched, no slip |
+| B18–B19b | an unreadable store is `unavailable` with its own code, and still does not outrank a known opt-out |
+| B20 | the founder read model counts every bucket |
+
+**Zero database residue.** The store is a JSON file: what M8L proves is a
+property of the fold over append-only review rows, and the M8H review queue and
+M8I decision chain were both already proven against real dev Postgres. A dev run
+would append permanent review rows to an append-only table to demonstrate a fold.
+
+Probe B19 was wrong first. It asserted the store-unavailable code against the
+business a previous step had just suppressed, and suppression rightly outranks a
+read failure — it failed for the correct reason. It now uses an unsuppressed
+subject, and B19b pins the precedence that caught it.
+
+### 45.8 The operator surface
+
+`node scripts/acquisition-review.js duplicates` — read-only, and deliberately
+part of the review CLI rather than a new command, because these are the same
+decisions that CLI already resolves. It counts unresolved / distinct / merged /
+rejected, names each merge's canonical target, and shows the actor, date and
+reason on every decided one.
+
+### 45.9 Known limitations
+
+- `summariseDuplicateState` folds the log in memory with the same 5000-row cap
+  `listReviewItems` carries (§40.10). The gate never calls it.
+- A capped page fails in the safe direction: a resolution outside the page is not
+  found and the gate refuses.
+- Whether materially changed evidence reopens a rejected identity is open — §45.5.
+- **`context.duplicateResolution` is still accepted by the eligibility engine**
+  for preview surfaces (the batch screen, the queue preview, the read model, the
+  walkthrough and the dry runs). That is deliberate: those answer "what does this
+  list look like", not "may this be called". It is labelled
+  `duplicateSource: "caller"` so nothing can mistake it, and the M8E gate
+  discards it.

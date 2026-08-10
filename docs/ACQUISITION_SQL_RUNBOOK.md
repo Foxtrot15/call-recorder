@@ -9,10 +9,11 @@ a human runs by hand, and every step below was run by hand.
 **Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3 and LAQ4 are applied
 in, how each is verified, and what can and cannot be rolled back.
 
-> **There is no LAQ5.** E-5 (durable founder batch approval) required **no SQL**
-> — every structure it needs was already created by LAQ1 and LAQ3, including an
-> `entity_type` CHECK that has admitted `'batch'` since it was written. It wrote
-> **no row to dev**. See **§12**.
+> **There is no LAQ5.** Neither E-5 (durable founder batch approval) nor M8L
+> (durable duplicate resolution) required **any SQL** — every structure they need
+> was already created by LAQ1 and LAQ3, including an `entity_type` CHECK that has
+> admitted `'batch'` since it was written. Neither wrote **any row to dev**. See
+> **§12** and **§13**.
 
 > **LAQ4 is APPLIED TO DEV** (2026-08-10, by hand) **and NOT applied to
 > production.** Dev holds exactly one permanent fictional wash row from the
@@ -834,3 +835,51 @@ decision rather than an engineering step. Before running
 - the approval names a real person, so it should name the person who actually
   made the decision;
 - `preview` writes nothing and should be run and read first.
+
+---
+
+## 13. M8L — durable duplicate resolution needed NO SQL either
+
+**Still no LAQ5.** M8L makes duplicate resolution durable, attributable and
+restart-safe by READING WHAT WAS ALREADY BEING WRITTEN. It adds no event type, no
+column and no table.
+
+The M8H review queue has stored these decisions in `acquisition_decisions` since
+2026-08-08 — `review_opened` and `review_resolved`, keyed by the candidate's
+prospect id, carrying `reviewDecision` and `mergeTarget` in `detail jsonb`. Those
+five outcomes are exactly the five duplicate states M8L has to answer, so the
+work was a read path, not a schema.
+
+| what M8L needed | what already provides it | applied |
+|---|---|---|
+| durable review decisions | **LAQ1** `acquisition_decisions`, `entity_type` admits `prospect` | dev, 2026-08-07 |
+| structured decision detail | `detail jsonb` | dev, 2026-08-07 |
+| lookup by prospect | `idx_acq_decisions_entity (entity_type, entity_id)` | dev, 2026-08-07 |
+| a stored prospect row | **LAQ1** `acquisition_prospects` | dev, 2026-08-07 |
+| decisions that cannot be edited | trigger `acq_decisions_no_update` | dev, 2026-08-07 |
+
+### 13.1 Residue
+
+**No dev write, and none is needed.** M8L's restart proof
+(`scripts/dev/acquisition-duplicate-proof/`) runs two genuinely separate OS
+processes against a **file-backed store**, because what it proves is a property
+of the fold over append-only review rows — and both the M8H review queue and the
+M8I decision chain were already proven against real dev Postgres (§10). A dev run
+would append **permanent** review rows to an append-only table to demonstrate a
+fold that needs none.
+
+**Dev's fictional row count is unchanged by M8L.** Still 21 rows across nine
+tables; `acquisition_decisions` still 4.
+
+### 13.2 If duplicate reviews are ever resolved on dev
+
+`node scripts/acquisition-review.js resolve …` appends a **permanent** decision
+row, and since M8L that row also decides whether the business can ever be called.
+Two consequences worth knowing before running it:
+
+- the decision cannot be deleted or edited — the trigger refuses;
+- `merge_into_existing` makes the candidate permanently un-callable and names the
+  canonical business; there is no "unmerge" and there should not be one.
+
+`node scripts/acquisition-review.js duplicates` is read-only and creates no
+residue. Run it first.
