@@ -126,7 +126,16 @@ function contextFor(prospect, clock) {
   return {
     evidenceRows,
     duplicateResolution: resolveDuplicates([{ ...prospect, numbers: [{ e164: NUMBER }], evidenceCount: evidenceRows.length, hasOfficialSource: true }]),
-    batch: { approved: true, batchHash: "m8ecrossproc01", approvedBy: "m8e-probe" },
+    // NO `batch` HERE SINCE E-5. This proof used to pass
+    // `{ approved: true, batchHash: "m8ecrossproc01", approvedBy: "m8e-probe" }`
+    // and the gate believed it. It no longer reaches the engine: the durable
+    // approval is read from acquisition_decisions or there is none.
+    //
+    // Every check in this proof asserts a REFUSAL — suppression outranks the
+    // batch gate, so the answers are unchanged — and it deliberately does not
+    // write an approval, because that would be a permanent decision row on dev
+    // for a proof that is read-only by design. The durable approval itself is
+    // proven in scripts/dev/acquisition-batch-approval-proof/.
   };
 }
 
