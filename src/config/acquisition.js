@@ -191,10 +191,19 @@ const CALLING_WINDOWS = Object.freeze({
 // Conservative caps. These are ceilings the engine enforces; a campaign may be
 // stricter, never looser (the same non-weakening rule the receptionist prompt
 // layer uses).
+// The founder-approved caps (A-L6, approval AL6-AL7-AL8-2026-08-10). These are
+// the same values acquisition-attempt-policy.js carries; that module owns the
+// approval metadata and this one only mirrors the numbers for the older
+// calling-policy path.
+//
+// `recentContactCooldownDays: null` is the RETIRED generic post-contact
+// cooldown, not a missing value. It is null rather than 30 so the placeholder
+// cannot come back through config, and every consumer already guards with
+// Number.isFinite, which skips it.
 const DEFAULT_CAPS = Object.freeze({
-  maxAttemptsPerProspect: 3,
+  maxAttemptsPerProspect: 2,
   minDaysBetweenAttempts: 2,
-  recentContactCooldownDays: 30,
+  recentContactCooldownDays: null,
   maxBatchSize: 25, // a founder-approved batch is small by design in the pilot
 });
 

@@ -342,6 +342,48 @@ function describeConsequence(outcome, rule, policy) {
     return Object.freeze({ effect: rule.effect, approved: true, applied: true, message: "No further calls — this prospect has moved past cold outreach." });
   }
 
+  // ── A DECLINE (A-L8) ────────────────────────────────────────────────
+  // Permanent, and enforced WITHOUT writing a suppression row. The refusal is
+  // derived from this outcome in the durable history every time eligibility is
+  // computed, which is why it survives a restart, a re-import and a new process
+  // with nothing else having to remember it.
+  //
+  // It deliberately does NOT become an opt_out suppression: the business
+  // declined our pitch, which is not the same as asking us to stop contacting
+  // them, and recording it as though it were would fabricate a request nobody
+  // made. `enforcedBy` says which mechanism is doing the work so a reader is
+  // never left guessing whether a row was written.
+  if (rule.effect === "no_further_acquisition") {
+    return Object.freeze({
+      effect: rule.effect,
+      approved: true,
+      applied: true,
+      enforcedBy: "durable_outcome_history",
+      suppressionWritten: false,
+      source: rule.source,
+      message:
+        outcome === "not_interested"
+          ? "They said they were not interested. This business is not cold-called for acquisition again — permanently, and without being recorded as having asked us to stop contacting them."
+          : "They declined. This business is not cold-called for acquisition again — permanently, and without being recorded as having asked us to stop contacting them.",
+    });
+  }
+
+  // ── ATTEMPT BOOKKEEPING (A-L7) ──────────────────────────────────────
+  // Not a consequence for the business at all; a statement about whether this
+  // call spent one of the two counted attempts.
+  if (rule.effect === "counts_as_attempt" || rule.effect === "does_not_consume_attempt") {
+    const counts = rule.effect === "counts_as_attempt";
+    return Object.freeze({
+      effect: rule.effect,
+      approved: true,
+      applied: true,
+      source: rule.source,
+      message: counts
+        ? "This call used one of the two attempts we allow for a business."
+        : "Nobody was reached, so this call did not use one of the two attempts we allow. The ordinary spacing still applies before the next one.",
+    });
+  }
+
   // Everything else depends on a duration or a cap.
   //
   // TWO DIFFERENT QUESTIONS, and conflating them was a bug caught in review.

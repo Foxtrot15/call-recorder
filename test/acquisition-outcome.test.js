@@ -229,14 +229,17 @@ describe("the prospect is walked through states that actually happened", () => {
 // ── Unapproved consequences are reported, not invented ──────────────
 
 describe("consequences nobody has approved are stated as such", () => {
-  it("a not-interested cooldown says out loud that its duration is not agreed", async () => {
+  it("a not-interested outcome is permanent, and is NOT recorded as an opt-out", async () => {
     const { rec } = recorder();
     const result = await rec.record({ prospect: prospect("connected"), outcome: "not_interested", ...base, note: "Not right now." });
     assert.strictEqual(result.ok, true);
-    assert.strictEqual(result.consequence.approved, false);
-    assert.strictEqual(result.consequence.applied, false);
-    assert.match(result.consequence.message, /not settled/);
-    assert.ok(result.consequence.source, "it must name where the gap comes from");
+    assert.strictEqual(result.consequence.approved, true, "A-L8 settled this");
+    assert.strictEqual(result.consequence.effect, "no_further_acquisition");
+    assert.strictEqual(result.consequence.enforcedBy, "durable_outcome_history");
+    assert.strictEqual(result.consequence.suppressionWritten, false, "a decline is not a suppression row");
+    assert.strictEqual(result.suppression.applied, false, "and nothing was written to the suppression list");
+    assert.match(result.consequence.message, /not cold-called for acquisition again/);
+    assert.ok(result.consequence.source, "it must name what settled it");
   });
 
   it("records the outcome anyway — the record of what they said is not optional", async () => {
@@ -246,11 +249,12 @@ describe("consequences nobody has approved are stated as such", () => {
     assert.strictEqual(result.prospect.lifecycle, "not_interested");
   });
 
-  it("an approved policy reports the cooldown as in force", async () => {
+  it("a callback reports its honour window as in force under an approved policy", async () => {
     const suppression = createSuppressionList({ now });
     const rec = createOutcomeRecorder({ now, suppression, attemptPolicy: createAttemptPolicy({ approved: true, approvedBy: "Peter Dang" }) });
-    const result = await rec.record({ prospect: prospect("connected"), outcome: "not_interested", ...base, note: "Not right now." });
+    const result = await rec.record({ prospect: prospect("connected"), outcome: "callback", ...base, note: "Call me Thursday." });
     assert.strictEqual(result.consequence.approved, true);
+    assert.strictEqual(result.consequence.effect, "reschedule");
     assert.match(result.consequence.message, /applies/);
   });
 

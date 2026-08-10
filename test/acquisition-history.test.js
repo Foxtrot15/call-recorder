@@ -196,7 +196,9 @@ describe("the policy counts, and durable history wins", () => {
       outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
     ]);
     const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
-    assert.equal(approved().countAttempts(history), 2);
+    // Under the approved A-L7 answer the no-answer is free and the voicemail
+    // is not, so two stored events are one counted attempt.
+    assert.equal(approved().countAttempts(history), 1);
   });
 
   it("an unrecognised outcome is counted, not silently free", () => {
@@ -207,28 +209,27 @@ describe("the policy counts, and durable history wins", () => {
 
   it("a stale caller-supplied attempts count cannot override the durable history", async () => {
     const store = await storeWith([
-      outcome({ id: "o1", outcome: "no_answer" }),
-      outcome({ id: "o2", outcome: "no_answer", recordedAt: "2026-08-02T00:00:00.000Z" }),
-      outcome({ id: "o3", outcome: "no_answer", recordedAt: "2026-08-03T00:00:00.000Z" }),
+      outcome({ id: "o1", outcome: "voicemail" }),
+      outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
     ]);
     const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
 
-    // The caller insists nothing has happened. The database says three.
+    // The caller insists nothing has happened. The database says two voicemails.
     const r = approved().assess({ attempts: 0, lastAttemptAt: null, history }, { now });
     assert.equal(r.ok, false);
-    assert.equal(r.code, "attempt_cap_reached", "the cap is 3; the durable count reached it whatever the caller passed");
+    assert.equal(r.code, "attempt_cap_reached", "the cap is 2; the durable count reached it whatever the caller passed");
   });
 
-  it("last-contact cooldown uses lastReachedAt, not the last event", async () => {
-    // A conversation long ago, unanswered rings since. The recent-contact
-    // cooldown must key off the conversation.
+  it("a durable refusal outranks a clean caller-supplied snapshot", async () => {
+    // The same attack, aimed at the permanent decline rather than the count.
     const store = await storeWith([
       outcome({ id: "o1", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-04T00:00:00.000Z" }),
     ]);
     const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
-    const r = approved().assess({ history }, { now });
+    const r = approved().assess({ attempts: 0, lastOutcome: "no_answer", history }, { now });
     assert.equal(r.ok, false);
-    assert.ok(["outcome_cooldown", "recent_contact_cooldown", "retry_spacing"].includes(r.code), `unexpected ${r.code}`);
+    assert.equal(r.code, "acquisition_declined", "a business that said no stays refused");
+    assert.equal(r.temporary, false);
   });
 });
 
@@ -302,18 +303,19 @@ describe("every real authorisation path uses durable history", () => {
   });
 
   it("a caller-supplied history cannot reach the authoriser's engine", async () => {
-    // Three no-answers are durable, against THIS prospect's real id. The caller
-    // passes a clean history hoping to wash them away.
+    // Two voicemails and a no-answer are durable, against THIS prospect's real
+    // id. Under the approved A-L7 answer that is two counted attempts — the
+    // cap. The caller passes a clean history hoping to wash them away.
     const subject = goodProspect();
     const store = await storeWith([
-      outcome({ id: "o1", prospectId: subject.prospectId }),
-      outcome({ id: "o2", prospectId: subject.prospectId, recordedAt: "2026-08-02T00:00:00.000Z" }),
+      outcome({ id: "o1", prospectId: subject.prospectId, outcome: "voicemail" }),
+      outcome({ id: "o2", prospectId: subject.prospectId, outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
       outcome({ id: "o3", prospectId: subject.prospectId, recordedAt: "2026-08-03T00:00:00.000Z" }),
     ]);
     const authoriser = createDialAuthoriser({ now, store, engineOptions: engineOptions(now) });
     const d = await authoriser.authorise(subject, ctx(subject, { history: { attempts: 0, lastAttemptAt: null, lastContactAt: null, lastOutcome: null } }));
 
-    assert.equal(d.authorised, false, "the durable three reached the cap; the caller's zero was ignored");
+    assert.equal(d.authorised, false, "the durable two voicemails reached the cap; the caller's zero was ignored");
     assert.equal(d.historySource, "durable", "the gate's own read wins");
     assert.equal(d.dial, null);
   });
@@ -330,31 +332,35 @@ describe("every real authorisation path uses durable history", () => {
 // ---------------------------------------------------------------------------
 // ── The A-L7 ratchet ────────────────────────────────────────────────
 
-describe("ratchets: M8J did not decide A-L7", () => {
-  it("no_answer and voicemail are still UNAPPROVED as attempt-consuming", () => {
+describe("ratchets: A-L7 is decided, and the answer cannot drift", () => {
+  // M8J built the machinery to count either way and deliberately answered
+  // nothing. The founder has since answered it (approval AL6-AL7-AL8-2026-08-10)
+  // and these ratchets now pin the ANSWER rather than the silence. Changing
+  // either value is still a policy decision, not a code change.
+  it("a no-answer does not consume an attempt; a voicemail does — both approved", () => {
+    assert.equal(ATTEMPT_CONSUMPTION.no_answer.countsTowardCap, false, "A-L7: ringing out is not an attempt spent");
+    assert.equal(ATTEMPT_CONSUMPTION.voicemail.countsTowardCap, true, "A-L7: a message left is an attempt spent");
     for (const outcomeName of ["no_answer", "voicemail"]) {
-      assert.equal(
-        ATTEMPT_CONSUMPTION[outcomeName].approved,
-        false,
-        `A-L7 asks whether ${outcomeName} consumes an attempt. M8J built the machinery to count it either way and answered nothing. Flipping this to true is a POLICY APPROVAL and needs a recorded decision, not a code change.`
-      );
+      assert.equal(ATTEMPT_CONSUMPTION[outcomeName].approved, true, `${outcomeName} is decided and must say so`);
+      assert.match(ATTEMPT_CONSUMPTION[outcomeName].source, /Founder approval AL6-AL7-AL8/, `${outcomeName} must cite the approval that settled it`);
     }
   });
 
-  it("an unapproved consumption rule keeps the whole policy unapproved and named", () => {
-    const policy = createAttemptPolicy();
-    assert.equal(policy.approved, false);
-    assert.match(policy.describeGap(), /A-L7/);
-    assert.ok(policy.unapprovedConsumption.some((r) => r.outcome === "no_answer"));
-    assert.ok(policy.unapprovedConsumption.some((r) => r.outcome === "voicemail"));
+  it("nothing in the consumption table is left undecided", () => {
+    const policy = createAttemptPolicy({ approved: true, approvedBy: "Peter Dang" });
+    assert.equal(policy.approved, true);
+    assert.deepEqual([...policy.unapprovedConsumption], []);
   });
 
-  it("the eligibility block names the open question a founder has to answer", () => {
+  it("an unnamed policy still blocks, even though the values are settled", () => {
+    // Approved VALUES are not the same as an approved POLICY: somebody still
+    // has to put their name to it.
+    const policy = createAttemptPolicy();
+    assert.equal(policy.approved, false);
     const engine = createEligibilityEngine({ now, counselApproved: true });
     const d = engine.evaluate({ ...{ prospectId: "p", businessName: "B", timezone: "Australia/Melbourne", lifecycle: "review_approved", phones: [{ raw: "(03) 5550 7401" }], sourceRefs: [], history: [] } }, {});
     const policyCheck = d.failedChecks.find((f) => f.check === "policy_approval");
-    assert.ok(policyCheck, "the unapproved policy must still block");
-    assert.match(policyCheck.message, /A-L7/);
+    assert.ok(policyCheck, "an unapproved policy must still block");
   });
 
   it("the history fold contains no attempt counting at all", () => {
@@ -369,21 +375,27 @@ describe("ratchets: M8J did not decide A-L7", () => {
     }
   });
 
-  it("the durable facts answer BOTH possible A-L7 answers without a data change", async () => {
+  it("answering A-L7 changed a predicate, not the stored rows", async () => {
+    // The property M8J was built for, now demonstrated by an actual decision:
+    // the same three durable rows, read by the approved policy, give a
+    // different count than the old proposal did — with no backfill, no
+    // migration and no recount of history.
     const store = await storeWith([
       outcome({ id: "o1", outcome: "no_answer" }),
       outcome({ id: "o2", outcome: "voicemail", recordedAt: "2026-08-02T00:00:00.000Z" }),
       outcome({ id: "o3", outcome: "not_interested", reachedTheBusiness: true, recordedAt: "2026-08-03T00:00:00.000Z" }),
     ]);
     const history = await readContactHistory({ store, prospectId: PROSPECT_ID });
+    assert.equal(history.outcomes.length, 3, "three facts are stored, whatever the policy makes of them");
 
-    // As proposed today: everything counts.
-    assert.equal(createAttemptPolicy().countAttempts(history), 3);
+    // Under the approved answer the no-answer is free; the other two count.
+    assert.equal(createAttemptPolicy().countAttempts(history), 2);
 
-    // And if A-L7 is answered the other way, the SAME stored rows give the
-    // other answer. No backfill, no migration, no recount of history.
-    const counted = history.outcomes.filter((o) => !["no_answer", "voicemail"].includes(o.outcome)).length;
-    assert.equal(counted, 1);
+    // The rows themselves say nothing about attempts — that is the seam.
+    assert.deepEqual(
+      history.outcomes.map((o) => o.outcome),
+      ["no_answer", "voicemail", "not_interested"]
+    );
   });
 
   it("every call outcome has a consumption rule, and every rule is a real outcome", () => {

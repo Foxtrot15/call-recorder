@@ -1,6 +1,8 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-08 (M8J)**.
+**Status of this document:** LIVE. Last recomputed **2026-08-10**, after the
+founder approved the attempt policy (**A-L6 / A-L7 / A-L8 closed**, approval
+`AL6-AL7-AL8-2026-08-10`).
 
 **Owns (source of truth for):** what currently stands between a persisted
 prospect and one authorised outbound acquisition call, and who has to resolve
@@ -34,11 +36,37 @@ below are what would still have to be true *if* one did.
 
 | ID | Blocker | Status | Effect while open |
 |---|---|---|---|
-| **A-L6** | Attempt cap, retry spacing, recent-contact cooldown | **OPEN** | `attempt_policy_unapproved` blocks **every** prospect. Binding. |
-| **A-L7** | Does a no-answer or a voicemail consume an attempt? | **OPEN** | M8J built the counting so it can go either way and **decided nothing**. `ATTEMPT_CONSUMPTION.no_answer/.voicemail` carry `approved: false`; a ratchet fails the build if they flip without a recorded approval. Bundled into A-L6's gate. |
-| **A-L8** | The "not interested" cooldown duration (and `declined`, `callback`) | **OPEN** | Proposed 180 / 90 / 14 days, unapproved. Bundled into A-L6's gate. |
-| **A-L4** | Are the approved A-L6 numbers the intended *commercial* policy? | **OPEN** | Caps applied as ceilings; a campaign may be stricter, never looser. Not blocking. |
+| ~~**A-L6**~~ | Attempt cap, retry spacing, recent-contact cooldown | **CLOSED — founder approved** (`AL6-AL7-AL8-2026-08-10`, Peter Dang). **2 counted attempts** per business; **2 days** minimum between ordinary attempts; the generic **30-day post-contact cooldown is RETIRED**, not re-tuned — a real conversation ends in a specific outcome and that outcome governs. `attempt_policy_unapproved` no longer blocks when the approved policy is supplied. |
+| ~~**A-L7**~~ | Does a no-answer or a voicemail consume an attempt? | **CLOSED — founder approved.** A **no-answer does NOT** consume one of the 2 counted attempts; a **voicemail DOES**. M8J built the counting so it could go either way, and answering it changed a predicate over the stored rows — no backfill, no migration, no recount. The ratchet now pins the ANSWER: changing either value fails the build unless the approval changes with it. |
+| ~~**A-L8**~~ | The "not interested" consequence (and `declined`, `callback`) | **CLOSED — founder approved.** `not_interested` and `declined` are **permanent no-recontact**, not 180-/90-day cooldowns: the business is never cold-acquired again. Both labels stay **distinct** for analytics and audit. Neither is recorded as an `opt_out` — see §2.1. An explicitly requested **callback is honoured for 14 days** and then fails closed. |
+| **A-L10** | Is there a ceiling on repeated *uncounted* no-answer redials? | **OPEN — raised by the A-L6/A-L7/A-L8 closure.** Because a no-answer consumes no counted attempt, the cap alone no longer bounds how often a never-answering business may be rung; only the 2-day spacing does. **Not blocking a FIRST call** (an untried business has no history), but it wants an answer before any repeated campaign. Deliberately left as a decision rather than given an invented number. |
+| **A-L4** | Are the approved A-L6 numbers the intended *commercial* policy? | **OPEN** | Caps applied as ceilings; a campaign may be stricter, never looser — now **enforced**, not merely intended: an override that would loosen an approved rule is clamped back and recorded in `refusedOverrides`. Not blocking. |
 | **A-L9** | Who besides the founder may approve a batch; is a second approver needed above a threshold? | **OPEN** | Single named founder, `maxBatchSize: 25`. Governance, not blocking one call. |
+
+### 2.1 A decline is not an opt-out, and is not stored as one
+
+A-L8 makes `not_interested` and `declined` permanent. It would have been easy to
+implement that by writing an `opt_out` suppression row, because permanent
+suppression already exists and already works. **That would have been a lie in
+the data.**
+
+| | what it means | how it is enforced |
+|---|---|---|
+| `opt_out` | the person **asked us to stop contacting them** | an `opt_out` row on the append-only suppression list, business-wide |
+| `not_interested` / `declined` | the business **said no to being acquired** | derived from the durable outcome row every time eligibility is computed — **no suppression row is written** |
+
+A business declining a pitch has not made a do-not-contact request, and
+recording one on their behalf would fabricate a request nobody made — in an
+append-only table, where it cannot be taken back. So the two stay apart: the
+consequence for cold acquisition is identical, the record of what happened is
+not, and `consequence.enforcedBy` says which mechanism did the work.
+
+The permanence needs no schema of its own. `acquisition_contact_outcomes`
+already stores the outcome, and the refusal is recomputed from it on every read,
+which is why it survives a restart, a re-import and a brand new process. **No
+SQL was required to close A-L8.**
+
+---
 
 ## 3. Engineering
 
@@ -115,41 +143,46 @@ SQL that the milestone explicitly preferred to avoid.
 
 ## 6. First-call readiness matrix
 
-Recomputed 2026-08-08, after M8J.
+Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 
-| # | Gate | Before M8J | After M8J | Why |
+| # | Gate | After M8J | Now | Why |
 |---|---|---|---|---|
 | 1 | Prospect persisted | 🟢 | 🟢 | M8G; proven against real Postgres |
 | 2 | Ambiguous candidates reach a human | 🟢 | 🟢 | M8H queue, M8I concurrency-safe |
 | 3 | Record complete + valid | 🟢 | 🟢 | `assessProspect`; timezone mandatory in code and in `laq1` |
-| 4 | **Reviewed → `review_approved`, durably** | 🔴 | 🟢 | **E-2.** Compare-and-set transition + projection + reconciliation; `approve_as_new` now actually persists the prospect, which it never did |
+| 4 | Reviewed → `review_approved`, durably | 🟢 | 🟢 | **E-2**, proven on dev 2026-08-09 |
 | 5 | Qualified | 🟢 | 🟢 | Ordering only, never permission |
 | 6 | Duplicates resolved | 🟠 | 🟠 | Default-deny, but `duplicateResolution` is caller-supplied |
 | 7 | DNCR-cleared | 🟠 | 🟠 | Port complete and fail-closed. Needs **DNCR-1** and **E-3** |
 | 8 | Permitted day/time | 🟠 | 🟠 | Fully implemented. Needs **A-L1**, **A-L2**, **A-L3** |
-| 9 | **Attempts permitted** | 🟠 | 🟠 | **Engineering input is now genuinely durable (E-1).** Still AMBER, and only because **A-L6 / A-L7 / A-L8** are unapproved — which is a decision, not a defect |
+| 9 | **Attempts permitted** | 🟠 | 🟢 | **A-L6 / A-L7 / A-L8 approved.** The values are decided and cited, the count comes from durable rows, a decline is permanent, and the policy refuses to call itself approved while anything inside it is not. No engineering deficiency remains |
 | 10 | Not suppressed | 🟢 | 🟢 | Append-only, DB-enforced, cross-process proven |
 | 11 | Campaign / kill switch | 🟢 | 🟢 | Own precedence in gate and engine |
 | 12 | Founder batch approval | 🟠 | 🟠 | See §5. AMBER for one attended call; RED beyond that. **E-5**, **A-L9** |
-| 13 | Final M8E authorisation | 🟢 | 🟢 | Durable suppression **and now durable history**; unforgeable slip; fails closed on either read |
+| 13 | Final M8E authorisation | 🟢 | 🟢 | Durable suppression **and** durable history; unforgeable slip; fails closed on either read |
 | 14 | Future dial request | 🔴 | 🔴 | **E-7.** No dialler, by design |
 
-**One RED remains, and it is the one that should be last.** Gate 4 moved
-RED → GREEN. Gate 9's amber is now purely a policy amber: the code counts real
-attempts from real rows and refuses when it cannot read them.
+**Gate 9 moved AMBER → GREEN.** Its amber was always a policy amber rather than
+a defect, and the policy has now been decided. Gate 7 is the one to watch next:
+it is amber for two reasons at once — nobody holds the DNCR account (**DNCR-1**)
+and a wash does not survive a restart (**E-3**).
+
+**One RED remains, and it is the one that should be last.**
 
 ---
 
 ## 7. The shortest honest path to one call
 
 1. **A-L1** — counsel sign-off. Nothing moves without it.
-2. **A-L6 / A-L7 / A-L8** — founder decides the caps and the two open outcome
-   questions. One approval object, named approver.
-3. **DNCR-1** — the account and the attestation procedure; then one imported
+2. **DNCR-1** — the account and the attestation procedure; then one imported
    wash. **E-3** if it must survive a restart.
-4. **A-L2 / A-L3** — the holiday source. Has its own 2027-01-01 deadline.
-5. **E-7** — the dialler, accepting only an `AuthorisedDial`.
+3. **A-L2 / A-L3** — the holiday source. Has its own 2027-01-01 deadline.
+4. **E-7** — the dialler, accepting only an `AuthorisedDial`.
 
-**E-5** sits alongside 5, and **M-5** is not on this path at all.
+**E-5** sits alongside 4, and **M-5** is not on this path at all. **A-L10** is
+not on it either: a business that has never been called has no history for an
+uncounted-redial ceiling to bound.
 
-Items 1–4 are decisions with lead times. Only item 5 is code.
+~~**A-L6 / A-L7 / A-L8**~~ left this list on 2026-08-10, approved.
+
+Items 1–3 are decisions with lead times. Only item 4 is code.

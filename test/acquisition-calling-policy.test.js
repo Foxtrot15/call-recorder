@@ -350,10 +350,12 @@ describe("campaign and attempt-level blocks", () => {
     assert.strictEqual(local.weekday, "fri");
   });
 
-  it("a recent conversation starts a cooldown", () => {
+  it("a bare recent conversation no longer starts a cooldown — the generic rule is retired", () => {
+    // A-L6 retired the generic 30-day post-contact silence: a real conversation
+    // ends in a specific outcome and that outcome governs. `DEFAULT_CAPS`
+    // carries null here, and this gate skips a cap it has no number for.
     const d = gate().evaluate({ timezone: MELBOURNE, history: { attempts: 1, lastContactAt: "2026-07-30T04:00:00Z" } });
-    assert.strictEqual(d.code, POLICY_CODES.RECENT_CONTACT);
-    assert.strictEqual(d.temporary, true);
+    assert.notStrictEqual(d.code, POLICY_CODES.RECENT_CONTACT, "the retired cooldown must not still be blocking");
   });
 
   it("suppression still outranks a campaign block", () => {

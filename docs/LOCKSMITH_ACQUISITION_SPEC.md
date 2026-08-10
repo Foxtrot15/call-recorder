@@ -12,6 +12,18 @@ boundary, the discovery adapter contract, the evidence ledger, the append-only
 decision log, the prospect lifecycle, the human review step, the qualification
 model, the queue boundary and the outcome model.
 
+> **Dated update — 2026-08-10 (A-L6 / A-L7 / A-L8).** The founder has approved
+> the outbound attempt policy (approval `AL6-AL7-AL8-2026-08-10`). **2 counted
+> attempts** per business, **2 days** minimum spacing; a **no-answer does not**
+> consume a counted attempt and a **voicemail does**; `not_interested` and
+> `declined` are **permanent no-recontact** rather than 180-/90-day cooldowns,
+> stay distinct labels, and are **not** recorded as opt-outs; an explicitly
+> requested **callback is honoured for 14 days** and then fails closed; the
+> generic **30-day post-contact cooldown is retired**. **No SQL was required** —
+> the permanence is a predicate over rows `acquisition_contact_outcomes` already
+> stores. `attempt_policy_unapproved` no longer blocks when the approved policy
+> is supplied. See §42; every table below dated earlier is a snapshot.
+>
 > **Dated update — 2026-08-08 (M8J).** Two undocumented first-call blockers are
 > closed. **E-2**: a persisted prospect can now durably reach review_approved
 > through a compare-and-set projection of the durable review decision — before
@@ -638,14 +650,21 @@ and that an approved batch contains no callable behaviour.
 and the eligibility engine treats an unapproved policy as a **blocker**. Reading
 the source documents exactly:
 
+> **SNAPSHOT — SUPERSEDED 2026-08-10.** This is what A2 proposed and what
+> nobody had agreed to at the time. Every "**No**" below was answered by
+> approval `AL6-AL7-AL8-2026-08-10`, and three of these values were **retired
+> rather than approved**. It is kept to show what the placeholders were; it is
+> **not** a record of anything ever being in force. See **§42** for the values
+> actually in force.
+
 | Rule | Value | Approved? | Source |
 |---|---|---|---|
 | DNCR wash validity | 30 days | **Yes** | Statutory — DNC Register Act 2006 / Industry Standard 2017, §2.2 & G4 |
-| Max attempts | 3 | **No** | G9 says *"(e.g. 3)"* — an illustration, not a decision |
-| Retry spacing | 2 days | **No** | **No source at all.** Proposed during A1 |
-| Recent-contact cooldown | 30 days | **No** | G8 says *"within N days"* — N is literally the letter N |
-| "Not interested" cooldown | 180 days | **No** | §9 says "a long cooldown", duration unspecified |
-| Declined cooldown / callback window | 90 / 14 days | **No** | No source |
+| Max attempts | 3 | **No** → superseded, now **2 counted** | G9 says *"(e.g. 3)"* — an illustration, not a decision |
+| Retry spacing | 2 days | **No** → now approved at **2 days** | **No source at all.** Proposed during A1 |
+| Recent-contact cooldown | 30 days | **No** → **RETIRED**, not approved | G8 says *"within N days"* — N is literally the letter N |
+| "Not interested" cooldown | 180 days | **No** → **RETIRED**; now permanent no-recontact | §9 says "a long cooldown", duration unspecified |
+| Declined cooldown / callback window | 90 / 14 days | **No** → decline **RETIRED** (permanent); callback approved at **14 days** | No source |
 
 Outcome handling: `opt_out` → permanent business suppression and `wrong_person`
 → number suppression are **approved** (§5 G5, §9 state them outright). Whether an
@@ -682,9 +701,9 @@ Stated plainly, and enforced rather than promised:
 | **A-L3** | Whether the **AFL Grand Final Friday** and other proclaimed holidays are in scope. | Accuracy of the VIC calendar | Absent, so those dates are treated as ordinary |
 | **A-L4** | Confirmation that the caps (**3 attempts, 2 days apart, 30-day contact cooldown**) are the intended commercial policy. | Campaign design | `DEFAULT_CAPS` applied as ceilings |
 | **A-L5** | Whether calling a business's **1300/1800 number** carries the same obligations as a geographic one. | Wash scope | Treated identically — everything is washed |
-| **A-L6** | **Attempt limits, retry spacing and cooldown durations** — G9's "3" is an illustration, G8's "N days" is unspecified, and retry spacing has no source at all. | Any dialling | Policy defaults to unapproved; the engine blocks every prospect |
-| **A-L7** | Whether an **unanswered call or a voicemail consumes an attempt**. | Attempt accounting | Proposed as "counts as an attempt", unapproved |
-| **A-L8** | The **"not interested" cooldown duration** — §9 says "a long cooldown" without saying how long. | Retry policy | Proposed 180 days, unapproved |
+| ~~**A-L6**~~ | **Attempt limits, retry spacing and cooldown durations** — G9's "3" is an illustration, G8's "N days" is unspecified, and retry spacing has no source at all. | Any dialling | **CLOSED 2026-08-10** — 2 counted attempts, 2 days spacing, generic cooldown retired (§42) |
+| ~~**A-L7**~~ | Whether an **unanswered call or a voicemail consumes an attempt**. | Attempt accounting | **CLOSED 2026-08-10** — no-answer does not, voicemail does (§42) |
+| ~~**A-L8**~~ | The **"not interested" cooldown duration** — §9 says "a long cooldown" without saying how long. | Retry policy | **CLOSED 2026-08-10** — there is no duration; it is permanent no-recontact (§42) |
 | **A-L9** | Who besides the founder may **approve a batch**, and whether a second approver is needed above a size threshold (the architecture's two-person rule, G12). | Batch governance | Single named founder only |
 
 ---
@@ -936,14 +955,17 @@ The path is walked through the same whitelist every other transition uses. If
 any hop is illegal the whole recording is refused and nothing moves — a
 half-applied outcome is worse than a rejected one.
 
+Consequences below are as approved on **2026-08-10** (`AL6-AL7-AL8-2026-08-10`).
+
 | Outcome | Reached the business? | Ends at | Consequence |
 |---|---|---|---|
-| `no_answer`, `voicemail` | no | `attempted` | counts as an attempt (**unapproved**, A-L7) |
-| `wrong_person` | **no** | `attempted` | suppresses the **number** (approved) |
-| `callback` | yes | `callback_requested` | reschedule (**unapproved**) |
-| `not_interested`, `declined` | yes | `not_interested` | cooldown (**unapproved**, A-L8) |
-| `opt_out` | yes | `suppressed` | suppresses the **business** (approved) |
-| `booked`, `qualified` | yes | `interested` | stop calling (approved) |
+| `no_answer` | no | `attempted` | **does NOT consume** a counted attempt (A-L7) |
+| `voicemail` | no | `attempted` | **consumes** a counted attempt (A-L7) |
+| `wrong_person` | **no** | `attempted` | suppresses the **number** |
+| `callback` | yes | `callback_requested` | honour the requested callback for **14 days**, then fail closed (A-L8) |
+| `not_interested`, `declined` | yes | `not_interested` | **permanent no-recontact** for cold acquisition — *not* a cooldown, and *not* an opt-out (A-L8) |
+| `opt_out` | yes | `suppressed` | suppresses the **business** — the only one that writes a suppression row |
+| `booked`, `qualified` | yes | `interested` | stop calling |
 
 `wrong_person` deliberately lands on `attempted`, not `connected`. Somebody
 answered, but not this locksmith — recording it as a connection would put a
@@ -2292,7 +2314,7 @@ be whichever row the query returned last. `lastReachedAt` uses only rows where
 and a recent-contact cooldown that counted them would silence a business nobody
 spoke to.
 
-### 41.5 Facts here, policy there — and why A-L7 is still open
+### 41.5 Facts here, policy there — the seam that let A-L7 be answered later
 
 **The history contains no `attempts` count.**
 
@@ -2402,3 +2424,104 @@ the row is not already at. Both readings are now pinned by a test in
 - `listOutcomes` has no explicit limit and inherits PostgREST's page cap. Scoped
   per prospect it is small; the unfiltered call is the one to watch.
 - `listReviewItems` still folds the log in memory with a 5000-row cap (§40.10).
+
+---
+
+## 42. A-L6 / A-L7 / A-L8 — the founder attempt policy, approved
+
+**Approval `AL6-AL7-AL8-2026-08-10`, Peter Dang.** This section is the values
+actually in force. Every table dated earlier in this document is a snapshot of
+what was proposed before this approval existed, and is labelled as such.
+
+### 42.1 What was decided
+
+| Question | Decision | Was |
+|---|---|---|
+| Maximum **counted** attempts per business | **2** | 3, illustrative |
+| Minimum spacing between ordinary attempts | **2 days** | 2 days, unsourced |
+| Does a **no-answer** consume a counted attempt? | **No** | proposed yes |
+| Does a **voicemail** consume one? | **Yes** | proposed yes |
+| `not_interested` | **permanent** no cold re-acquisition | 180-day cooldown |
+| `declined` | **permanent** no cold re-acquisition | 90-day cooldown |
+| Requested **callback** | honoured **14 days**, then fails closed | 14 days, unsourced |
+| Generic post-contact cooldown | **RETIRED** as a binding rule | 30 days |
+
+The statutory 30-day DNCR wash validity is untouched — it was never the
+founder's to decide.
+
+### 42.2 Counting is a predicate, not a stored number
+
+M8J deliberately kept the attempt COUNT out of the row reader so that A-L7 could
+be answered without touching data. That paid off exactly as designed: answering
+it changed one predicate in `acquisition-attempt-policy.js` and **no stored row
+changed at all**. No backfill, no migration, no recount.
+
+```
+no_answer → no_answer → no_answer          0 counted attempts — still callable
+voicemail → voicemail                      2 counted attempts — cap reached
+no_answer → voicemail → no_answer → voicemail   2 counted attempts — cap reached
+```
+
+The **retry-spacing clock** starts at the last recorded call event of ANY kind,
+including a no-answer. An uncounted attempt still rang somebody's phone, and the
+two days are owed from the ringing rather than from the bookkeeping.
+
+### 42.3 A decline is permanent, and is not an opt-out
+
+`not_interested` and `declined` both mean the business is never cold-acquired
+again. Three properties matter and each is tested:
+
+1. **Permanent.** No `readyAt`, no `temporary: true`, still refused years later.
+2. **Distinct.** The two labels stay separate in the stored vocabulary and in
+   the explanation a human reads, because "they weren't interested" and "they
+   said no" are different facts even when today's consequence is one.
+3. **Not an opt-out.** No suppression row is written. An opt-out is a request
+   the *person* made; a decline is an answer the *business* gave, and recording
+   one as the other would fabricate a do-not-contact request nobody made — in an
+   append-only table, where it could not be taken back.
+
+The refusal is recomputed from the durable outcome row on every read, which is
+why it survives a restart, a re-import and a brand new process without anything
+else having to remember it. **This is why A-L8 needed no SQL.** A new
+suppression *reason* would have needed an `alter … check` against `laq2`; a new
+lifecycle state would have needed one against `laq1`. Neither was necessary.
+
+A refusal is found **anywhere in the history**, not read off the latest outcome.
+Reading only the latest is the failure this shape prevents: one later row — a
+stray no-answer from an in-flight call, a corrected import — would otherwise
+push the refusal off the end and make the business callable again.
+
+### 42.4 An invited callback is not a cold call
+
+A callback the recipient explicitly asked for is honoured despite the ordinary
+2-day spacing and despite the counted-attempt cap, because neither rule is about
+a call the business requested. It is bounded hard by the 14-day honour window;
+past that the request has lapsed and the policy returns
+`callback_window_expired` rather than letting the business fall back into the
+cold-calling pool. An expired invitation is not a permission.
+
+### 42.5 What stops the placeholders coming back
+
+- Retired rules are kept with `value: null` and `retired: true` rather than
+  deleted, and they ignore overrides outright.
+- `DEFAULT_CAPS.maxAttemptsPerProspect` is **2**; the illustrative 3 is gone
+  from config as well as from the policy.
+- A per-campaign override may make a rule **stricter, never looser** (A-L4).
+  An override that would raise the cap or shorten the spacing is clamped back to
+  the approved value and recorded in `refusedOverrides`.
+- The policy refuses to report itself approved while **any** rule, outcome or
+  consumption entry is still unapproved. An approval cannot outrun its contents.
+- A named approver is still required. Approved *values* are not an approved
+  *policy*, and the eligibility engine still defaults to the unapproved one, so
+  a build that forgets to supply the approved policy refuses to call anybody.
+
+### 42.6 What this did NOT decide
+
+**A-L10, raised here and left open:** because a no-answer consumes no counted
+attempt, the cap no longer bounds how many times a never-answering business may
+be rung — only the 2-day spacing does. That wants an answer before any repeated
+campaign. It does not block a first call, since a business that has never been
+called has no history for such a ceiling to bound, and it has deliberately not
+been given an invented number.
+
+**A-L1 is untouched and still binding.** So is **DNCR-1**.

@@ -376,9 +376,12 @@ describe("attempts, retries and washes", () => {
     assert.ok(d.failedChecks.some((f) => f.nextEligibleAt));
   });
 
-  it("blocks during a recent-contact cooldown", () => {
+  it("no longer blocks on a bare recent conversation — the generic cooldown is retired", () => {
+    // A conversation last week with no refusing outcome recorded. Under the
+    // retired 30-day rule this was blocked; under the approved policy a
+    // conversation's OUTCOME governs, and there is none here.
     const d = withHistory({ attempts: 1, lastContactAt: "2026-07-30T04:00:00Z" });
-    assert.strictEqual(d.code, ELIGIBILITY_CODES.ATTEMPTS_BLOCKED);
+    assert.notStrictEqual(d.code, ELIGIBILITY_CODES.ATTEMPTS_BLOCKED, "the retired generic cooldown must not still be blocking");
   });
 
   it("blocks after an outcome that ends calling", () => {
@@ -387,10 +390,11 @@ describe("attempts, retries and washes", () => {
     assert.strictEqual(d.temporary, false);
   });
 
-  it("honours a not-interested cooldown", () => {
+  it("refuses a business that said it was not interested — permanently", () => {
     const d = withHistory({ attempts: 1, lastAttemptAt: "2026-07-01T04:00:00Z", lastOutcome: "not_interested" });
     assert.strictEqual(d.code, ELIGIBILITY_CODES.ATTEMPTS_BLOCKED);
-    assert.strictEqual(d.temporary, true);
+    assert.strictEqual(d.temporary, false, "a decline is permanent, not a cooldown that lifts");
+    assert.strictEqual(d.nextEligibleAt, null, "there is no date on which they become callable again");
   });
 });
 
@@ -425,9 +429,9 @@ describe("policy and founder approval", () => {
     const d = engine.evaluate(p, { evidenceRows: evidenceFor(p, clock), duplicateResolution: resolveDuplicates([{ ...p, numbers: [{ e164: NUMBER }], hasOfficialSource: true }]), batch: { approved: true, batchHash: "x", approvedBy: "P" } });
     assert.strictEqual(d.code, ELIGIBILITY_CODES.POLICY_UNAPPROVED);
     assert.match(d.message, /not been approved/);
-    const detail = d.failedChecks.find((f) => f.check === "policy_approval").detail;
-    assert.ok(detail.unapprovedRules.some((r) => r.key === "maxAttemptsPerProspect"));
-    assert.ok(detail.unapprovedRules.some((r) => r.key === "minDaysBetweenAttempts"));
+    // The VALUES are settled since A-L6/A-L7/A-L8, but a policy nobody has put
+    // their name to is still not in force. That is the property being pinned.
+    assert.ok(d.failedChecks.some((f) => f.check === "policy_approval"));
   });
 
   it("an attempt policy marked approved with nobody named is not in force", () => {
@@ -450,12 +454,22 @@ describe("policy and founder approval", () => {
     assert.match(d.message, /out of date/);
   });
 
-  it("the DNCR 30-day rule is the one approved attempt/wash value", () => {
+  it("the attempt values are settled, and each says what settled it", () => {
     const policy = createAttemptPolicy();
     assert.strictEqual(policy.rules.washValidityDays.approved, true, "statutory");
-    assert.strictEqual(policy.rules.maxAttemptsPerProspect.approved, false, "G9 says '(e.g. 3)'");
-    assert.strictEqual(policy.rules.minDaysBetweenAttempts.approved, false, "no source at all");
-    assert.strictEqual(policy.rules.recentContactCooldownDays.approved, false, "G8 says 'N days'");
+    assert.match(policy.rules.washValidityDays.source, /Act|Standard/i);
+
+    // A-L6/A-L7/A-L8 closed these; each must cite the approval rather than a
+    // document that only illustrated a number.
+    assert.strictEqual(policy.rules.maxAttemptsPerProspect.approved, true);
+    assert.strictEqual(policy.rules.maxAttemptsPerProspect.value, 2);
+    assert.match(policy.rules.maxAttemptsPerProspect.source, /Founder approval AL6-AL7-AL8/);
+    assert.strictEqual(policy.rules.minDaysBetweenAttempts.approved, true);
+    assert.strictEqual(policy.rules.minDaysBetweenAttempts.value, 2);
+
+    // And the generic post-contact cooldown is retired, not re-tuned.
+    assert.strictEqual(policy.rules.recentContactCooldownDays.retired, true);
+    assert.strictEqual(policy.rules.recentContactCooldownDays.value, null);
   });
 });
 
