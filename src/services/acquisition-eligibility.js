@@ -24,7 +24,9 @@
 //   suppression          acquisition-suppression.check
 //   attempts + washes    acquisition-attempt-policy.assess
 //   tz / holiday / hours acquisition-calling-policy.evaluate
-//   counsel approval     carried on the calling policy's decision
+//   calling policy       acquisition-calling-approval — a VERSIONED FOUNDER
+//                        approval (M8M), not a legal opinion. Defaults to
+//                        unapproved, so an un-wired engine refuses everything.
 //   batch approval       acquisition-batch-approval, read from
 //                        acquisition_decisions (E-5). A caller may still supply
 //                        one for a preview screen, and it is labelled
@@ -59,6 +61,7 @@
 // Pure + dep-free. See test/acquisition-eligibility.test.js.
 
 const { assessProspect } = require("./acquisition-prospect");
+const { createCallingPolicyApproval } = require("./acquisition-calling-approval");
 const { normaliseProspectPhones } = require("./acquisition-phone");
 const { duplicateStatusFor } = require("./acquisition-dedupe");
 const { createCallingPolicy } = require("./acquisition-calling-policy");
@@ -113,7 +116,18 @@ const ELIGIBILITY_CODES = Object.freeze({
   CAMPAIGN_BLOCKED: "campaign_blocked",
   KILL_SWITCH: "kill_switch_engaged",
   POLICY_UNAPPROVED: "attempt_policy_unapproved",
-  COUNSEL_UNAPPROVED: "counsel_approval_missing",
+  // M8M replaced COUNSEL_UNAPPROVED ("counsel_approval_missing"). The old code
+  // said an external lawyer had not signed the window off, which was true and
+  // was a blocker only a lawyer could clear. The founder has instead adopted a
+  // versioned operating policy, so the question the gate asks changed: not "has
+  // a lawyer approved this?" but "has a named human adopted a policy, in a
+  // stated version, on a stated basis?".
+  //
+  // The old string is deliberately GONE rather than aliased. An alias would let
+  // a caller keep satisfying the gate the old way, and a reader keep believing
+  // the window was legally cleared. It was not; it was adopted. See
+  // acquisition-calling-approval.js.
+  CALLING_POLICY_UNAPPROVED: "calling_policy_unapproved",
   BATCH_UNAPPROVED: "founder_batch_approval_missing",
   // E-5. Distinct from BATCH_UNAPPROVED for exactly the reason HISTORY_UNAVAILABLE
   // is distinct from ATTEMPTS_BLOCKED: that one says "we looked, and this batch
@@ -149,7 +163,9 @@ function skip(check, message) {
  * @param {object}   [holidays]       holiday provider (passed to calling policy)
  * @param {object}   [attemptPolicy]  defaults to the UNAPPROVED proposed policy
  * @param {object}   [callingPolicy]  built if not supplied
- * @param {boolean}  [counselApproved]
+ * @param {object}   [callingPolicyApproval]  a founder calling policy from
+ *                   acquisition-calling-approval. DEFAULTS TO UNAPPROVED, so an
+ *                   engine built without one refuses every prospect (M8M).
  * @param {string}   [policyVersion]
  */
 function createEligibilityEngine({
@@ -159,7 +175,10 @@ function createEligibilityEngine({
   holidays = null,
   attemptPolicy = null,
   callingPolicy = null,
-  counselApproved = false,
+  // M8M. `counselApproved` is GONE, not renamed: a caller passing it now
+  // supplies an unknown option that changes nothing, which is the intended
+  // outcome — the old boolean must not be able to authorise anything.
+  callingPolicyApproval = null,
   policyVersion = "acq-a2-eligibility-v1",
   // M8J / E-1. A pre-loaded durable contact history index, and whether a
   // durable one is MANDATORY. The authoriser sets both; preview paths may run
@@ -173,6 +192,9 @@ function createEligibilityEngine({
   }
 
   const attempts = attemptPolicy || createAttemptPolicy();
+
+  // Unapproved unless one was handed in. Same default-deny as the attempt policy.
+  const callingApproval = callingPolicyApproval || createCallingPolicyApproval();
 
   // THE COMPOSITION BOUNDARY.
   //
@@ -192,7 +214,7 @@ function createEligibilityEngine({
     createCallingPolicy({
       now,
       holidays,
-      counselApproved,
+      callingPolicyApproval: callingApproval,
       // Caps are deliberately empty: acquisition-attempt-policy owns them, and
       // two components applying the same cap would report it twice.
       caps: {},
@@ -406,12 +428,17 @@ function createEligibilityEngine({
       add(pass("campaign", campaign ? "The campaign permits this business." : "No campaign restrictions apply."));
     }
 
-    // ── 7. Policy approval — counsel and attempt/wash ──────────────
-    if (!counselApproved) {
+    // ── 7. Policy approval — calling policy and attempt/wash ───────
+    //
+    // TWO APPROVALS, ONE CHECK, AND BOTH ARE THE FOUNDER'S (M8M). Neither is a
+    // legal opinion and neither claims to be; `callingPolicy.isLegalAdvice` is
+    // false by construction and travels with every decision.
+    if (!callingApproval.approved) {
       add(
-        fail("policy_approval", ELIGIBILITY_CODES.COUNSEL_UNAPPROVED, "The permitted calling hours have not been signed off by a lawyer. Until they are, nothing may be called.", {
+        fail("policy_approval", ELIGIBILITY_CODES.CALLING_POLICY_UNAPPROVED, callingApproval.describeGap(), {
           temporary: true,
-          requiredFounderAction: "Obtain Australian telecommunications counsel sign-off on the calling window (Phase 0).",
+          requiredFounderAction: "Adopt a versioned calling policy naming who approved it, when, and what it is based on.",
+          detail: { policyVersion: callingApproval.version, kind: callingApproval.kind },
         })
       );
     } else if (!attempts.approved) {
@@ -423,7 +450,13 @@ function createEligibilityEngine({
         })
       );
     } else {
-      add(pass("policy_approval", `Calling hours are counsel-approved and attempt policy "${attempts.version}" was approved by ${attempts.approvedBy}.`));
+      add(
+        pass(
+          "policy_approval",
+          `Calling policy "${callingApproval.version}" was adopted by ${callingApproval.approvedBy} as AIDA's operating policy (not legal advice), and attempt policy "${attempts.version}" was approved by ${attempts.approvedBy}.`,
+          { callingPolicyVersion: callingApproval.version, callingPolicyKind: callingApproval.kind, isLegalAdvice: callingApproval.isLegalAdvice }
+        )
+      );
     }
 
     // ── 8. Founder batch approval ──────────────────────────────────
@@ -572,14 +605,14 @@ function createEligibilityEngine({
       },
       policyVersion,
       attemptPolicyVersion: attempts.version,
-      counselApproved,
+      callingApproval,
       historySource,
       batchSource,
       duplicateSource,
     });
   }
 
-  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, counselApproved: ca = counselApproved, historySource = "absent", batchSource = "absent", duplicateSource = "absent" }) {
+  function assemble({ prospect, results, instant, localTime, canonical = null, windowDecision = null, provenance, policyVersion: pv = policyVersion, attemptPolicyVersion = null, callingApproval: cp = callingApproval, historySource = "absent", batchSource = "absent", duplicateSource = "absent" }) {
     const failures = results.filter((r) => r.ok === false);
     const passed = results.filter((r) => r.ok === true).map((r) => r.check);
 
@@ -624,7 +657,11 @@ function createEligibilityEngine({
 
       policyVersion: pv,
       attemptPolicyVersion,
-      counselApproved: ca,
+      /**
+       * The calling policy this decision was made under (M8M).
+       * Carries kind, version, who adopted it and isLegalAdvice: false.
+       */
+      callingPolicy: cp,
       /** Where the attempt history came from: durable | caller | unavailable | absent. */
       historySource,
       /** Where the batch approval came from: durable | caller | unavailable | absent (E-5). */

@@ -110,7 +110,7 @@ function categoriseDecision(decision, duplicateStatus) {
   if (code === "duplicate_requires_resolution") return "duplicatesNeedingReview";
   if (code === "duplicate_of_canonical") return "duplicatesRemoved";
   if (code === "record_invalid" || code === "record_not_reviewed" || code === "no_usable_number") return "needsManualReview";
-  if (code === "attempt_policy_unapproved" || code === "counsel_approval_missing") return "policyBlocked";
+  if (code === "attempt_policy_unapproved" || code === "calling_policy_unapproved") return "policyBlocked";
   if (code === "founder_batch_approval_missing") return "eligibleLater";
   // E-5. The approval could not be READ, which is not the same as there not
   // being one. It must not appear under a heading a founder can clear by

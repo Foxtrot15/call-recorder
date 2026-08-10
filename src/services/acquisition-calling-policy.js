@@ -22,14 +22,18 @@
 // CALLING_WINDOWS in src/config/acquisition.js. This module reads that; it does
 // not restate it and it does not make one up.
 //
-//   ⚠ THAT POLICY IS DOCUMENTED, NOT COUNSEL-APPROVED. The architecture doc
-//   carries an explicit disclaimer that its compliance content is an
-//   engineering synthesis of public sources, not legal advice, and its Phase 0
-//   states plainly: "Nothing dials until this is signed off." So every decision
-//   this gate returns carries `policy.counselApproved: false`, and it stays
-//   false until an Australian telecommunications lawyer signs the window off.
-//   The flag is in the decision rather than in a comment because a reviewer
-//   reading a PERMITTED verdict needs to see it there.
+//   ⚠ THAT POLICY IS FOUNDER-ADOPTED, NOT LAWYER-APPROVED (M8M). Until M8M
+//   every decision carried `policy.counselApproved: false` and the eligibility
+//   engine refused everything, because the window was documented and nobody had
+//   signed it off. The founder has since ADOPTED it as AIDA's operating policy
+//   rather than obtaining a legal opinion, so the decision now carries the whole
+//   approval artifact — who adopted it, when, under what version, on what basis,
+//   and `isLegalAdvice: false`.
+//
+//   That last field is the point. A reviewer reading a PERMITTED verdict needs
+//   to see, on the verdict, that no lawyer reviewed this. See
+//   acquisition-calling-approval.js, which cannot construct an approval that
+//   claims otherwise.
 //
 // ── FAIL CLOSED, EVERYWHERE ────────────────────────────────────────
 // Every uncertainty resolves to "do not call":
@@ -51,6 +55,7 @@
 
 const { CALLING_WINDOWS, DEFAULT_CAPS } = require("../config/acquisition");
 const { createNullHolidayProvider, describeCoverage } = require("./acquisition-holidays");
+const { createCallingPolicyApproval } = require("./acquisition-calling-approval");
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const WEEKDAY_KEYS = Object.freeze(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]);
@@ -201,9 +206,10 @@ function weekdayKeyFor(dateParts, timeZone) {
  * @param {object}   [suppression] the suppression list. Its matching logic is
  *                                 used, never reimplemented here.
  * @param {object}   [caps]        attempt/cooldown ceilings.
- * @param {boolean}  [counselApproved] whether the window has legal sign-off.
- *                                 Defaults FALSE and must be passed explicitly
- *                                 to become true — see the header.
+ * @param {object}   [callingPolicyApproval] the founder approval artifact from
+ *                                 acquisition-calling-approval. Defaults to an
+ *                                 UNAPPROVED one, so an un-wired gate reports
+ *                                 the window as unadopted — see the header.
  */
 function createCallingPolicy({
   now,
@@ -211,8 +217,8 @@ function createCallingPolicy({
   holidays = null,
   suppression = null,
   caps = DEFAULT_CAPS,
-  counselApproved = false,
-  policySource = "docs/OUTBOUND_BDM_ARCHITECTURE.md §2.2 (G10) via src/config/acquisition.js",
+  callingPolicyApproval = null,
+  policySource = "src/config/acquisition.js CALLING_WINDOWS, adopted by the founder calling policy (M8M)",
 } = {}) {
   if (typeof now !== "function") {
     throw new Error("createCallingPolicy requires an injected now() — a policy that reads the wall clock cannot be tested against a fixed date.");
@@ -220,6 +226,9 @@ function createCallingPolicy({
 
   // No provider means the null provider, not "skip the holiday check".
   const holidayProvider = holidays || createNullHolidayProvider();
+
+  // No approval means an UNAPPROVED one, not an approved default.
+  const callingApproval = callingPolicyApproval || createCallingPolicyApproval();
 
   function decision(fields) {
     return Object.freeze({
@@ -229,7 +238,12 @@ function createCallingPolicy({
       ...fields,
       policy: Object.freeze({
         source: policySource,
-        counselApproved,
+        // The whole approval artifact, not a boolean. It carries who adopted the
+        // policy, when, its version, its basis and isLegalAdvice: false (M8M).
+        approval: callingApproval,
+        approved: callingApproval.approved,
+        version: callingApproval.version,
+        isLegalAdvice: callingApproval.isLegalAdvice,
         windows: policy,
         holidayCalendar: holidayProvider.name,
         holidayCalendarAuthoritative: holidayProvider.authoritative === true,

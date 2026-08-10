@@ -166,7 +166,8 @@ function isAuthorisedDial(value) {
  * @param {function} now
  * @param {object}   store   an acquisition store — the AUTHORITATIVE source
  * @param {object}   [engineOptions] collaborators: washStore, holidays,
- *                   attemptPolicy, callingPolicy, counselApproved, policyVersion.
+ *                   attemptPolicy, callingPolicy, callingPolicyApproval,
+ *                   policyVersion.
  *                   `suppression` is ignored if present — this gate supplies it.
  * @param {object}   [audit] the append-only decision log
  */
