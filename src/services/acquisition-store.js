@@ -49,6 +49,11 @@
 
 const TABLES = Object.freeze({
   suppressions: "acquisition_suppressions",
+  // laq4, WRITTEN BUT NOT APPLIED ANYWHERE (M8K). The durable adapter's wash
+  // methods will fail loudly against a database that has not had laq4 run,
+  // which is correct: a missing wash table must read as an error, never as
+  // "no washes found", because the second would look like a clean list.
+  dncrWashes: "acquisition_dncr_washes",
   leases: "acquisition_call_queue",
   outcomes: "acquisition_contact_outcomes",
   // laq1, applied since M8D and until M8G written to by nothing.
@@ -130,6 +135,21 @@ const STORE_METHODS = Object.freeze([
   // outcomes
   "listOutcomes",
   "appendOutcome",
+  // ── DNCR washes (M8K / E-3) ──
+  //
+  // Append-only, like every other ledger here: a wash is evidence of what the
+  // Register said at an instant, and editing one would be rewriting evidence.
+  //
+  // NOTHING STORES "washed: true". The rows carry `washed_at` and `result`, and
+  // freshness is recomputed from them at read time — so a wash that crosses the
+  // statutory validity window becomes unusable without any row changing, and
+  // without anything having had to notice. See acquisition-dncr.js.
+  "listWashes",
+  "appendWash",
+  // The authoritative single-number read, on the same terms as
+  // lookupSuppression: narrow, targeted, and never served from the hydrated
+  // index. The index may reject cheaply; only this may authorise.
+  "latestWashFor",
   // ── Imported prospects (M8G) ──
   //
   // The laq1 tables, which have existed and been applied since M8D and have had
@@ -267,6 +287,7 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
   const phones = seed && Array.isArray(seed.phones) ? [...seed.phones] : [];
   const evidence = seed && Array.isArray(seed.evidence) ? [...seed.evidence] : [];
   const decisions = seed && Array.isArray(seed.decisions) ? [...seed.decisions] : [];
+  const washes = seed && Array.isArray(seed.washes) ? [...seed.washes] : [];
   const requests = new Map(seed && seed.requests ? Object.entries(seed.requests) : []);
 
   const store = {
@@ -495,6 +516,43 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
     async listOutcomes({ prospectId = null } = {}) {
       return outcomes.filter((o) => !prospectId || o.prospectId === prospectId).map(frozenCopy);
     },
+    // ── DNCR washes (M8K) ──
+    //
+    // The in-memory twin of laq4's ledger, including its idempotency rule: the
+    // natural key is (e164, washedAt, result, batchRef). A repeated import is
+    // reported rather than duplicated, so the two adapters agree about what
+    // "importing the same wash twice" does.
+    async listWashes({ e164 = null } = {}) {
+      return washes.filter((w) => !e164 || w.e164 === e164).map(frozenCopy);
+    },
+    async appendWash(row) {
+      const key = `${row.e164}|${row.washedAt}|${row.result}|${row.batchRef || ""}`;
+      const existing = washes.find((w) => `${w.e164}|${w.washedAt}|${w.result}|${w.batchRef || ""}` === key);
+      if (existing) return { created: false, wash: frozenCopy(existing) };
+      // `authoritative` is DERIVED here exactly as toWashRow derives it for
+      // Postgres and as laq4's CHECK enforces it, rather than copied from the
+      // caller. Only an import — a wash a human really performed against the
+      // real Register — is authoritative, and a fixture never is however it is
+      // labelled. Deriving it in both adapters is what keeps them honest about
+      // the same thing.
+      washes.push({ ...row, authoritative: row.mode === "import" });
+      return { created: true, wash: frozenCopy(washes[washes.length - 1]) };
+    },
+    /**
+     * The most recent wash for one number, by when the wash was PERFORMED.
+     *
+     * Ordered on washedAt, never on recordedAt: importing an old wash today
+     * must not make it outrank a newer one already held. That is the whole
+     * difference between "the latest thing we learned" and "the latest thing
+     * that happened", and only the second is a lawful basis for a call.
+     */
+    async latestWashFor(e164) {
+      const forNumber = washes.filter((w) => w.e164 === e164);
+      if (!forNumber.length) return null;
+      const newest = forNumber.reduce((best, w) => (Date.parse(w.washedAt) > Date.parse(best.washedAt) ? w : best));
+      return frozenCopy(newest);
+    },
+
     async appendOutcome(row) {
       outcomes.push({ ...row });
       return frozenCopy(outcomes[outcomes.length - 1]);
@@ -552,6 +610,37 @@ function uniqueViolation(error) {
 const errorText = (error) => `${(error && error.message) || ""} ${(error && error.details) || ""} ${(error && error.hint) || ""}`;
 const headTakenViolation = (error) => /uq_acq_decisions_prev_hash|\bprev_hash\b/i.test(errorText(error));
 const auditIdViolation = (error) => /audit_id/i.test(errorText(error));
+
+// ── DNCR wash rows (M8K) ────────────────────────────────────────────
+//
+// `authoritative` is derived from the mode rather than carried across from the
+// caller: only an import — a wash a human really performed against the real
+// Register — is authoritative, and a fixture never is, whatever it claims.
+// laq4 enforces the same agreement as a CHECK, so the two cannot drift.
+const toWashRow = (w) => ({
+  e164: w.e164,
+  result: w.result,
+  washed_at: w.washedAt,
+  attested_by: w.attestedBy,
+  mode: w.mode,
+  authoritative: w.mode === "import",
+  batch_ref: w.batchRef || null,
+  source: w.source || null,
+  recorded_at: w.recordedAt,
+});
+
+const fromWashRow = (r) => ({
+  id: r.id,
+  e164: r.e164,
+  result: r.result,
+  washedAt: r.washed_at,
+  attestedBy: r.attested_by,
+  mode: r.mode,
+  authoritative: r.authoritative === true,
+  batchRef: r.batch_ref,
+  source: r.source,
+  recordedAt: r.recorded_at,
+});
 
 function fail(table, verb, error) {
   if (tableMissing(error)) throw provisioningError(table);
@@ -1295,6 +1384,65 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
       const { data, error } = await db().from(TABLES.outcomes).insert(toOutcomeRow(row)).select().single();
       if (error) fail(TABLES.outcomes, "insert", error);
       return fromOutcomeRow(data);
+    },
+
+    // ── DNCR washes (M8K / E-3) ──
+    //
+    // REQUIRES laq4, which is written and NOT APPLIED anywhere. Against a
+    // database without it these throw, and that is the intended behaviour: a
+    // missing table must surface as an error the caller fails closed on, never
+    // as an empty list. "No washes found" and "I could not look" are the two
+    // states this whole module exists to keep apart.
+    async listWashes({ e164 = null } = {}) {
+      let q = db().from(TABLES.dncrWashes).select("*");
+      if (e164) q = q.eq("e164", e164);
+      const { data, error } = await q.order("washed_at", { ascending: true });
+      if (error) fail(TABLES.dncrWashes, "read", error);
+      return (data || []).map(fromWashRow);
+    },
+
+    /**
+     * Append one wash result.
+     *
+     * A 23505 here means exactly one thing — laq4 has a single unique index,
+     * on (e164, washed_at, result, coalesce(batch_ref,'')) — so unlike the
+     * decision log there is no ambiguity to resolve: the same wash has been
+     * imported twice. That is idempotent, not an error, and it is reported as
+     * `created: false` with the row already held.
+     */
+    async appendWash(row) {
+      const { data, error } = await db().from(TABLES.dncrWashes).insert(toWashRow(row)).select().single();
+      if (!error) return { created: true, wash: fromWashRow(data) };
+      if (!uniqueViolation(error)) fail(TABLES.dncrWashes, "insert", error);
+
+      const { data: held, error: readErr } = await db()
+        .from(TABLES.dncrWashes)
+        .select("*")
+        .eq("e164", row.e164)
+        .eq("washed_at", row.washedAt)
+        .eq("result", row.result)
+        .limit(1);
+      if (readErr) fail(TABLES.dncrWashes, "read", readErr);
+      return { created: false, wash: held && held.length ? fromWashRow(held[0]) : null };
+    },
+
+    /**
+     * The most recent wash for one number, ordered by when the wash was
+     * PERFORMED rather than when it was recorded.
+     *
+     * Importing a two-month-old wash today must not let it outrank a fresher
+     * one already held — the ledger is a record of events, and the newest event
+     * is the one that decides, whatever order the paperwork arrived in.
+     */
+    async latestWashFor(e164) {
+      const { data, error } = await db()
+        .from(TABLES.dncrWashes)
+        .select("*")
+        .eq("e164", e164)
+        .order("washed_at", { ascending: false })
+        .limit(1);
+      if (error) fail(TABLES.dncrWashes, "read", error);
+      return data && data.length ? fromWashRow(data[0]) : null;
     },
   };
 

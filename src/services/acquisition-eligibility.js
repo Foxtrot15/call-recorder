@@ -79,6 +79,12 @@ const ELIGIBILITY_CODES = Object.freeze({
   DNCR_LISTED: "dncr_listed",
   DNCR_UNKNOWN: "dncr_not_checked",
   DNCR_STALE: "dncr_wash_stale",
+  // M8K. "We could not read the wash ledger" is a THIRD state, kept apart from
+  // "this number has never been checked". Both veto, so the call is refused
+  // either way — but one is a fact about the number and the other is a fault in
+  // this system, and a founder reading "never checked" would go and wash a
+  // number that may already have been washed.
+  DNCR_UNAVAILABLE: "dncr_store_unavailable",
   DUPLICATE_REVIEW: "duplicate_requires_resolution",
   DUPLICATE_OF_CANONICAL: "duplicate_of_canonical",
   CAMPAIGN_BLOCKED: "campaign_blocked",
@@ -252,12 +258,19 @@ function createEligibilityEngine({
       if (wash.result === "listed") {
         add(fail("dncr", ELIGIBILITY_CODES.DNCR_LISTED, `This number is on the Do Not Call Register, so it must not be called. ${wash.reason}`, { temporary: false, detail: { washedAt: wash.washedAt, mode: wash.mode } }));
       } else if (!wash.usable) {
-        const stale = wash.priorResult !== undefined;
+        // Three reasons a wash is unusable, and they are not the same reason.
+        const unavailable = wash.unavailable === true;
+        const stale = !unavailable && wash.priorResult !== undefined;
+        const code = unavailable ? ELIGIBILITY_CODES.DNCR_UNAVAILABLE : stale ? ELIGIBILITY_CODES.DNCR_STALE : ELIGIBILITY_CODES.DNCR_UNKNOWN;
         add(
-          fail("dncr", stale ? ELIGIBILITY_CODES.DNCR_STALE : ELIGIBILITY_CODES.DNCR_UNKNOWN, wash.reason, {
+          fail("dncr", code, wash.reason, {
             temporary: true,
-            requiredFounderAction: stale ? "Wash this number against the Do Not Call Register again." : "Wash this number against the Do Not Call Register.",
-            detail: { washedAt: wash.washedAt, ageDays: wash.ageDays, mode: wash.mode },
+            requiredFounderAction: unavailable
+              ? "Restore access to the Do Not Call Register wash records. Nothing may be called until they can be read."
+              : stale
+                ? "Wash this number against the Do Not Call Register again."
+                : "Wash this number against the Do Not Call Register.",
+            detail: { washedAt: wash.washedAt, ageDays: wash.ageDays, mode: wash.mode, unavailable },
           })
         );
       } else {

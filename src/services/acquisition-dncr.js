@@ -94,7 +94,7 @@ function validateImportRecord(record) {
  * @param {object}   [audit] the append-only decision log
  * @param {object}   [env]
  */
-function createWashStore({ now, mode = null, audit = null, env = process.env } = {}) {
+function createWashStore({ now, mode = null, audit = null, env = process.env, initialRecords = null } = {}) {
   if (typeof now !== "function") {
     throw new Error("createWashStore requires an injected now() — wash freshness must be deterministic in tests.");
   }
@@ -104,6 +104,35 @@ function createWashStore({ now, mode = null, audit = null, env = process.env } =
 
   // e164 → the most recent wash record for that number.
   const records = new Map();
+
+  // ── Hydration from durable rows (M8K) ────────────────────────────
+  //
+  // Pre-loaded at the async boundary and handed in, the same shape M8E used for
+  // durable suppression and M8J for durable contact history: assess() stays
+  // synchronous because the eligibility engine is synchronous by design.
+  //
+  // "Most recent" is by when the wash was PERFORMED, not when it was recorded.
+  // Importing an old wash today must not displace a fresher one already held.
+  if (Array.isArray(initialRecords)) {
+    for (const row of initialRecords) {
+      if (!row || typeof row.e164 !== "string" || !isIsoInstant(row.washedAt)) continue;
+      const held = records.get(row.e164);
+      if (held && Date.parse(held.washedAt) >= Date.parse(row.washedAt)) continue;
+      records.set(
+        row.e164,
+        Object.freeze({
+          e164: row.e164,
+          result: row.result,
+          washedAt: row.washedAt,
+          mode: row.mode || activeMode,
+          batchRef: row.batchRef || null,
+          importedFrom: row.attestedBy || null,
+          authoritative: row.authoritative === true,
+          recordedAt: row.recordedAt || null,
+        })
+      );
+    }
+  }
 
   function store(e164, result, { batchRef, washedAt, authoritative, importedFrom = null }) {
     const row = Object.freeze({
@@ -336,6 +365,9 @@ function createWashStore({ now, mode = null, audit = null, env = process.env } =
 
   return Object.freeze({
     mode: activeMode,
+    // Whether this store could actually read what it is supposed to know.
+    // TRUE here; the only false comes from unavailableWashStore().
+    available: true,
     faults: Object.freeze(resolved.faults || []),
     wash,
     washAll,
@@ -347,8 +379,205 @@ function createWashStore({ now, mode = null, audit = null, env = process.env } =
   });
 }
 
+// ── Durable storage (M8K / E-3) ─────────────────────────────────────
+
+/**
+ * The canonical key for a wash.
+ *
+ * A wash is recorded against a TELEPHONE, not against a spelling of one.
+ * "(03) 5550 1042", "03 5550 1042" and "+61355501042" are the same number, and
+ * if they produced three keys then washing one spelling would leave the others
+ * reading as never-checked — which vetoes, so it fails safe, but it also means
+ * a real wash would silently fail to authorise anything.
+ */
+function canonicalNumber(raw) {
+  const { normalisePhone } = require("./acquisition-phone");
+  const parsed = normalisePhone(raw);
+  return parsed && parsed.ok && parsed.e164 ? parsed.e164 : null;
+}
+
+/**
+ * A wash store that COULD NOT BE READ.
+ *
+ * Deliberately not "an empty store". An empty store answers "unknown" for every
+ * number, which is the same answer this gives — but it answers it as a FACT
+ * ("we have not washed this"), and the difference matters the moment somebody
+ * reads a report or writes a retry. Not knowing whether we hold a wash is a
+ * system failure and says so, with `unavailable: true`, so eligibility can name
+ * it as `dncr_store_unavailable` rather than as "never checked".
+ *
+ * It cannot be written to. A store that failed to read must not accept an
+ * import and appear to have worked.
+ */
+function unavailableWashStore(reason, { mode = "import" } = {}) {
+  const refuse = () => ({ ok: false, code: "wash_store_unavailable", message: reason });
+  return Object.freeze({
+    mode,
+    available: false,
+    reason,
+    faults: Object.freeze([{ code: "wash_store_unavailable", message: reason }]),
+    wash: refuse,
+    washAll: () => ({ washed: 0, listed: 0, unknown: 0, results: [] }),
+    importResults: refuse,
+    count: () => 0,
+    assess() {
+      return Object.freeze({
+        result: "unknown",
+        resultLabel: S.DNCR_RESULT_LABELS.unknown,
+        usable: false,
+        fresh: false,
+        unavailable: true,
+        washedAt: null,
+        ageDays: null,
+        mode,
+        authoritative: false,
+        reason: `The Do Not Call Register wash records could not be read, so it is unknown whether this number has been checked. ${reason}`.trim(),
+      });
+    },
+    assertLiveWashUnavailable: () => assertExternalAccessAllowed("dncr_api", "wash numbers against the Do Not Call Register"),
+  });
+}
+
+/**
+ * Build a wash store from durable rows — the production path.
+ *
+ * Loads every wash the store holds and hands them to createWashStore as
+ * hydration, so assess() can stay synchronous inside the eligibility engine.
+ *
+ * FAILS CLOSED. If the read throws — no table, no credentials, no network —
+ * this returns unavailableWashStore rather than an empty one. The distinction
+ * is the entire point of the function: an empty Map presented as a successful
+ * read is indistinguishable from "nobody is on the Register", and that mistake
+ * authorises calls.
+ */
+async function hydrateWashStore({ store, now, mode = "import", audit = null, env = process.env } = {}) {
+  if (typeof now !== "function") throw new Error("hydrateWashStore requires an injected now().");
+  if (!store || typeof store.listWashes !== "function") {
+    return unavailableWashStore("No durable wash store was supplied.", { mode });
+  }
+  let rows;
+  try {
+    rows = await store.listWashes({});
+  } catch (err) {
+    return unavailableWashStore(`The wash ledger could not be read: ${err.message}`, { mode });
+  }
+  if (!Array.isArray(rows)) {
+    return unavailableWashStore("The wash ledger returned no readable rows.", { mode });
+  }
+  return createWashStore({ now, mode, audit, env, initialRecords: rows });
+}
+
+/**
+ * Persist the results of a wash a human performed against the real Register.
+ *
+ * Validates the WHOLE batch before writing any of it, on the same reasoning as
+ * the in-memory importResults: a half-applied import leaves some numbers washed
+ * and some not, with nothing recording which.
+ *
+ * Numbers are canonicalised on the way in, so a file that spells the same
+ * number two ways lands on one key.
+ *
+ * @param {object} batch.washedAt    when the wash was actually performed
+ * @param {string} batch.batchRef    the operator's reference for it
+ * @param {string} batch.attestedBy  who attests these are the real results
+ * @param {Array}  batch.results     [{ e164, result }]
+ */
+async function importWashResults({ store, batch, now, audit = null, source = null } = {}) {
+  if (typeof now !== "function") throw new Error("importWashResults requires an injected now().");
+  if (!store || typeof store.appendWash !== "function") {
+    return { ok: false, code: "store_unavailable", message: "There is no durable wash store to import into." };
+  }
+  if (!batch || typeof batch !== "object") {
+    return { ok: false, code: "batch_invalid", message: "An import needs a batch object." };
+  }
+  if (!isIsoInstant(batch.washedAt)) {
+    return { ok: false, code: "washed_at_invalid", message: "An import must say when the wash was actually performed — the timestamp is the evidence." };
+  }
+  if (new Date(batch.washedAt).getTime() > now().getTime()) {
+    return { ok: false, code: "washed_at_future", message: "A wash cannot have been performed in the future." };
+  }
+  if (typeof batch.attestedBy !== "string" || !batch.attestedBy.trim()) {
+    return { ok: false, code: "attestation_missing", message: "An import must record who attests that these are the results of a real wash." };
+  }
+  if (!Array.isArray(batch.results) || batch.results.length === 0) {
+    return { ok: false, code: "results_missing", message: "An import must contain at least one result." };
+  }
+
+  // Validate everything, canonicalise everything, write nothing yet.
+  const problems = [];
+  const prepared = [];
+  batch.results.forEach((record, i) => {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      problems.push({ index: i, message: "Each wash result must be an object." });
+      return;
+    }
+    const e164 = canonicalNumber(record.e164);
+    if (!e164) {
+      problems.push({ index: i, message: `"${String(record.e164).slice(0, 30)}" is not a number we can record a wash against.` });
+      return;
+    }
+    if (record.result !== "listed" && record.result !== "not_listed") {
+      problems.push({ index: i, message: `A wash result must be "listed" or "not_listed", not "${String(record.result).slice(0, 30)}".` });
+      return;
+    }
+    prepared.push({
+      e164,
+      result: record.result,
+      washedAt: new Date(batch.washedAt).toISOString(),
+      attestedBy: batch.attestedBy.trim(),
+      mode: "import",
+      batchRef: batch.batchRef || null,
+      source: source || batch.source || null,
+      recordedAt: now().toISOString(),
+    });
+  });
+
+  if (problems.length) {
+    return { ok: false, code: "results_invalid", message: `${problems.length} of ${batch.results.length} results could not be read; nothing was imported.`, problems };
+  }
+
+  let imported = 0;
+  let duplicates = 0;
+  for (const row of prepared) {
+    const written = await store.appendWash(row);
+    if (written && written.created === false) duplicates += 1;
+    else imported += 1;
+  }
+
+  if (audit) {
+    audit.record({
+      entityType: "system",
+      entityId: batch.batchRef || "dncr-import",
+      event: "dncr_results_imported",
+      decision: "record",
+      actor: batch.attestedBy.trim(),
+      actorKind: "human",
+      reason: `Imported ${imported} Do Not Call Register wash results performed on ${batch.washedAt}${duplicates ? ` (${duplicates} already held)` : ""}.`,
+      detail: {
+        washedAt: batch.washedAt,
+        count: prepared.length,
+        imported,
+        duplicates,
+        listed: prepared.filter((r) => r.result === "listed").length,
+      },
+    });
+  }
+
+  return {
+    ok: true,
+    imported,
+    duplicates,
+    total: prepared.length,
+    listed: prepared.filter((r) => r.result === "listed").length,
+  };
+}
+
 module.exports = {
   createWashStore,
+  hydrateWashStore,
+  importWashResults,
+  unavailableWashStore,
+  canonicalNumber,
   validateImportRecord,
   FIXTURE_REGISTER,
   DNCR_WASH_VALIDITY_DAYS,
