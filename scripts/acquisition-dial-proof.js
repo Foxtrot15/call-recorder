@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AIDA Locksmith Acquisition — the dial execution proof (E-7A).
+// AIDA Locksmith Acquisition — the dial execution proof (E-7A + E-7B1).
 //
 //   node scripts/acquisition-dial-proof.js
 //   node scripts/acquisition-dial-proof.js --verbose
@@ -9,8 +9,22 @@
 // ── WHAT THIS RUNS ──────────────────────────────────────────────────
 // One fictional locksmith, through the real modules: evidence, dedupe, DNCR
 // wash, durable batch approval, the founder calling policy, the M8E pre-dial
-// gate, and then the E-7A execution seam. The prospect is invented here, in
-// this file. It is not read from anywhere and it belongs to nobody.
+// gate, and then the execution seam. The prospect is invented here, in this
+// file. It is not read from anywhere and it belongs to nobody.
+//
+// E-7B1 added four things to the walkthrough, and each is worth watching:
+//
+//   * the durable emergency stop, BLOCKING before it is bootstrapped, because
+//     an absent row is never permission;
+//   * a second worker with a brand-new authorisation for the same business,
+//     refused by the durable lock even though the first dispatch's provider
+//     already accepted — provider completion is not resolution;
+//   * a founder pausing mid-flight, and the next dispatch stopping;
+//   * an operator resolving the dispatch by name, which is one of only two
+//     things in the system that can release a lock.
+//
+// The store is IN-MEMORY. Against a real database these would be laq5 rows —
+// and laq5 has not been applied to dev or production.
 //
 // ── WHAT IT CANNOT DO ───────────────────────────────────────────────
 //   * place a call — the only providers that exist are a fake and a disabled one
@@ -44,6 +58,9 @@ const { FOUNDER_CALLING_POLICY } = S("acquisition-calling-approval");
 const { createDialAuthoriser } = S("acquisition-authorisation");
 const { executeAuthorisedDial, createAcquisitionDialExecutor, EXECUTION_CODES } = S("acquisition-dial-execution");
 const { createFakeDialProvider, createDisabledDialProvider } = S("acquisition-dial-provider");
+const { readCallingState, enableAcquisitionCalling, pauseAcquisitionCalling } = S("acquisition-calling-state");
+const { listUnresolvedDispatches } = S("acquisition-dispatch-store");
+const { resolveAbnormalDispatch } = S("acquisition-dispatch-resolution");
 
 const VERBOSE = process.argv.includes("--verbose");
 
@@ -153,6 +170,27 @@ async function main() {
   console.log(`  holiday calendar                          ⚠  ${describeCoverage(holidays)}`);
   console.log(`  calling policy                            ✔  ${FOUNDER_CALLING_POLICY.version} (founder policy, NOT legal advice)`);
 
+  // ── E-7B1: the durable emergency stop ────────────────────────────
+  //
+  // The in-memory store starts with NO calling-state row, exactly as a database
+  // where laq5 has not been applied would. That BLOCKS, and the proof shows it
+  // blocking before enabling anything.
+  head("2b. The durable emergency stop (E-7B1)");
+
+  const beforeBootstrap = await readCallingState({ store });
+  console.log(`  no state row yet          : permitted=${beforeBootstrap.permitted}  (${beforeBootstrap.code})`);
+  console.log(`                              ${beforeBootstrap.message}`);
+
+  await store.writeCallingState({ state: "paused", revision: 1, changedBy: "laq5-migration", changedAt: now().toISOString(), reason: "Paused on creation." });
+  const bootstrapped = await readCallingState({ store });
+  console.log(`  after laq5 bootstrap      : permitted=${bootstrapped.permitted}  (state=${bootstrapped.state})`);
+
+  const enabled = await enableAcquisitionCalling({ store, changedBy: "Peter Dang", reason: "E-7A/E-7B1 offline proof against fictional data.", audit, now });
+  const live = await readCallingState({ store });
+  console.log(`  founder enables           : permitted=${live.permitted}  revision=${live.revision}  by ${live.changedBy}`);
+  console.log(`                              ${enabled.message}`);
+  console.log(`  NOTE: enabling this does NOT make a call possible — there is still no live provider.`);
+
   head("3. M8E — the final pre-dial authorisation gate");
 
   const duplicateResolution = resolveDuplicates([
@@ -192,13 +230,15 @@ async function main() {
   console.log("");
   console.log(`  A permission slip was minted:`);
   console.log(`    authorisationId : ${decision.dial.authorisationId}`);
+  console.log(`    dispatchId      : ${decision.dial.dispatchId}   ← RANDOM, the durable key`);
+  console.log(`    batchKey        : ${decision.dial.batchKey}`);
   console.log(`    destination     : ${decision.dial.e164}   ← the number the GATE cleared`);
   console.log(`    authorisedAt    : ${decision.dial.authorisedAt}`);
 
   head("4. E-7A — what WOULD be dialled (fake provider)");
 
   const fake = createFakeDialProvider();
-  const executed = await executeAuthorisedDial({ authorisedDial: decision.dial, provider: fake, now, audit });
+  const executed = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: fake, now, audit });
 
   console.log(`  ok               : ${executed.ok}`);
   console.log(`  status           : ${executed.status}`);
@@ -216,7 +256,7 @@ async function main() {
 
   head("5. Replaying the same authorisation");
 
-  const replay = await executeAuthorisedDial({ authorisedDial: decision.dial, provider: fake, now });
+  const replay = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: fake, now });
   console.log(`  status           : ${replay.status}`);
   console.log(`  submissions made : ${fake.submissionCount()}   ← still one`);
   console.log("  One authorisation permits at most one submission.");
@@ -225,6 +265,7 @@ async function main() {
 
   const second = await authoriser.authorise(prospect, { evidenceRows, duplicateResolution });
   const substituted = await executeAuthorisedDial({
+    store,
     authorisedDial: second.dial,
     provider: fake,
     now,
@@ -234,10 +275,58 @@ async function main() {
   console.log(`  submissions made : ${fake.submissionCount()}   ← still one`);
   console.log("  The caller does not choose the number. The gate does.");
 
+  // ── E-7B1: the durable locks ─────────────────────────────────────
+  head("6b. A SECOND worker, a brand new authorisation (E-7B1)");
+
+  const rival = await authoriser.authorise(prospect, { evidenceRows, duplicateResolution });
+  console.log(`  new dispatchId   : ${rival.dial.dispatchId}`);
+  console.log(`  same fingerprint : ${rival.dial.authorisationId === decision.dial.authorisationId}   ← authorisationId collides, and cannot arbitrate`);
+
+  const rivalProvider = createFakeDialProvider();
+  const conflicted = await executeAuthorisedDial({ store, authorisedDial: rival.dial, provider: rivalProvider, now, claimedBy: "worker-b" });
+  console.log(`  status           : ${conflicted.status}  (${conflicted.conflictScope})`);
+  console.log(`  submissions made : ${rivalProvider.submissionCount()}   ← worker B reached no provider`);
+  console.log("  The first dispatch is UNRESOLVED, so it still holds this business");
+  console.log("  and this number — even though its provider already accepted.");
+
+  head("6c. The stop, mid-flight");
+
+  const stopped = await pauseAcquisitionCalling({ store, changedBy: "Peter Dang", reason: "Demonstrating the emergency stop.", audit, now });
+  console.log(`  founder pauses   : ${stopped.message}`);
+  const afterPause = await authoriser.authorise(prospect, { evidenceRows, duplicateResolution });
+  const pausedProvider = createFakeDialProvider();
+  const blocked = await executeAuthorisedDial({ store, authorisedDial: afterPause.dial, provider: pausedProvider, now });
+  console.log(`  status           : ${blocked.status}`);
+  console.log(`  submissions made : ${pausedProvider.submissionCount()}`);
+  await enableAcquisitionCalling({ store, changedBy: "Peter Dang", reason: "Resuming the proof.", audit, now });
+  console.log("  (re-enabled for the rest of the proof; enabling dispatches nothing)");
+
+  head("6d. Unresolved dispatches — a READ-ONLY report");
+
+  const report = await listUnresolvedDispatches({ store, olderThanMs: 0, now });
+  console.log(`  unresolved       : ${report.count}`);
+  for (const d of report.dispatches) {
+    console.log(`    ${d.dispatchId}  ${d.destinationE164}  provider=${d.providerStatus}  holdsLocks=${d.holdsProspectLock}`);
+  }
+  console.log(`  ${report.note}`);
+
+  head("6e. An operator resolves it — the ONLY thing that releases a lock here");
+
+  const closed = await resolveAbnormalDispatch({
+    store,
+    dispatchId: decision.dial.dispatchId,
+    resolvedBy: "Peter Dang",
+    reason: "Offline proof against a fictional business. The provider was a fake and no call was placed.",
+    now,
+  });
+  console.log(`  ${closed.message}`);
+  const after = await listUnresolvedDispatches({ store, olderThanMs: 0, now });
+  console.log(`  unresolved now   : ${after.count}`);
+
   head("7. The DEFAULT executor — what production does today");
 
   const third = await authoriser.authorise(prospect, { evidenceRows, duplicateResolution });
-  const executor = createAcquisitionDialExecutor({ now, audit });
+  const executor = createAcquisitionDialExecutor({ now, store, audit });
   const refused = await executor.execute(third.dial);
 
   console.log(`  provider         : ${executor.providerName}  (live: ${executor.providerLive})`);
@@ -255,6 +344,8 @@ async function main() {
   console.log(`  suppressions written      : ${suppressions.length}`);
   console.log(`  rows written to dev       : 0   (this store is in-memory)`);
   console.log(`  rows written to production: 0`);
+  const dispatches = await store.listDialExecutions({});
+  console.log(`  dispatch rows (in-memory) : ${dispatches.length}   ← would be laq5 rows against a real database`);
   console.log(`  networks reached          : 0`);
   console.log(`  people contacted          : 0`);
 
