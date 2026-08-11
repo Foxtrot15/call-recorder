@@ -23,7 +23,7 @@ const path = require("node:path");
 
 const { createInMemoryAcquisitionStore, assertStoreContract } = require("../src/services/acquisition-store");
 const { createDurableSuppression } = require("../src/services/acquisition-durable");
-const { createDialAuthoriser, isAuthorisedDial, AUTHORISATION_CODES } = require("../src/services/acquisition-authorisation");
+const { createDialAuthoriser, isAuthorisedDial, isGenuineAuthorisedDial, AUTHORISATION_CODES } = require("../src/services/acquisition-authorisation");
 const { ELIGIBILITY_CODES } = require("../src/services/acquisition-eligibility");
 const { createSuppressionList } = require("../src/services/acquisition-suppression");
 const { createWashStore } = require("../src/services/acquisition-dncr");
@@ -582,11 +582,56 @@ describe("a future dialler cannot quietly skip the gate", () => {
     assert.deepStrictEqual(offenders, [], `these can execute a call without importing the authoriser: ${offenders.join(", ")}`);
   });
 
-  /** And today, plainly: nothing can execute a call at all. */
-  it("no execution verb exists anywhere in the acquisition tree yet", () => {
-    const offenders = files
+  /**
+   * ── CHANGED BY E-7A, ON PURPOSE ─────────────────────────────────────
+   *
+   * This assertion used to read "no execution verb exists anywhere in the
+   * acquisition tree yet", and it was true through M8M. E-7A builds the
+   * execution seam, so it is deliberately no longer true.
+   *
+   * It is RESTATED rather than deleted, and rather than side-stepped by
+   * choosing a function name the old regex happened to miss. The invariant that
+   * matters was never "no verb exists" — it was "there is no way to reach a
+   * provider that has not been through this gate". That is what is asserted
+   * now, and it is a stronger claim than the one it replaces.
+   *
+   * The E-7A-specific ratchets — one execution file, no live provider, no
+   * network, no retry — live in test/acquisition-dial-execution.test.js.
+   */
+  it("only the E-7A executor may execute, and only with an authorisation from this gate", () => {
+    const executors = files
       .filter((f) => f.startsWith("acquisition-"))
-      .filter((f) => /\bfunction\s+(dial|placeCall|dispatchCall|startCall|ringProspect)\s*\(/.test(read(f)));
-    assert.deepStrictEqual(offenders, [], `M8E does not build a dialler: ${offenders.join(", ")}`);
+      .filter((f) => /\bfunction\s+(dial|placeCall|dispatchCall|startCall|ringProspect)\s*\(/.test(read(f)) || /\.submit\s*\(/.test(read(f)));
+
+    assert.deepStrictEqual(
+      executors.filter((f) => f !== "acquisition-dial-execution.js" && f !== "acquisition-dial-provider.js"),
+      [],
+      `execution belongs to the E-7A seam alone: ${executors.join(", ")}`
+    );
+
+    // And that seam cannot act without this gate.
+    assert.match(read("acquisition-dial-execution.js"), /require\("\.\/acquisition-authorisation"\)/);
+  });
+
+  /**
+   * The slip is genuine by IDENTITY, not by shape (E-7A).
+   *
+   * The brand is an exported symbol and object spread copies own symbols, so a
+   * clone of a real slip passes `isAuthorisedDial`. That was always true; it
+   * only became dangerous when something existed to spend a slip on.
+   */
+  it("a copy of a genuine slip is not a genuine slip", async () => {
+    const store = createInMemoryAcquisitionStore();
+    const { clock, prospect, engineOptions, context } = harness();
+    await approveBatchIn(store, prospect, clock);
+    const decision = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
+    assert.strictEqual(decision.authorised, true, JSON.stringify(decision.failedChecks));
+
+    assert.strictEqual(isGenuineAuthorisedDial(decision.dial), true);
+    for (const copy of [{ ...decision.dial }, Object.assign({}, decision.dial), JSON.parse(JSON.stringify(decision.dial))]) {
+      assert.strictEqual(isGenuineAuthorisedDial(copy), false, "a copy must never be genuine");
+    }
+    assert.strictEqual(isGenuineAuthorisedDial({ kind: "authorised-dial", e164: NUMBER }), false);
+    assert.strictEqual(isGenuineAuthorisedDial(null), false);
   });
 });
