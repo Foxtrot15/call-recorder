@@ -109,6 +109,11 @@ const FORBIDDEN_OPTION_KEYS = Object.freeze([
   "number",
   "to",
   "prospectId",
+  // E-7B1. The durable identity and the approval it was granted under are not
+  // the caller's to state either — both come off the slip and nowhere else.
+  "dispatchId",
+  "batchKey",
+  "batch_key",
   "suppressed",
   "suppression",
   "dncr",
@@ -129,9 +134,16 @@ const FORBIDDEN_OPTION_KEYS = Object.freeze([
  */
 const CONSUMED = new WeakSet();
 
+/**
+ * One execution id per DISPATCH, not per authorisation fingerprint (E-7B1).
+ *
+ * It used to hash `authorisationId`, which is itself derived from (prospect,
+ * number, instant, decision) — so two distinct authorisations at the same
+ * millisecond produced the same execution id. Keying off the random dispatchId
+ * makes an execution id name one attempt and only one.
+ */
 function executionIdFor(slip) {
-  const body = [slip.authorisationId || "", slip.prospectId || "", slip.e164 || "", slip.authorisedAt || ""].join("|");
-  return `ex_${createHash("sha256").update(body).digest("hex").slice(0, 20)}`;
+  return `ex_${createHash("sha256").update(String(slip.dispatchId || "")).digest("hex").slice(0, 20)}`;
 }
 
 function result({ ok, code, message, slip, provider, executionId, executedAt, providerRef = null, providerStatus = null }) {

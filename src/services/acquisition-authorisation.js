@@ -75,7 +75,7 @@
 //
 // Pure except for the store read. See test/acquisition-authorisation.test.js.
 
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 
 const { createEligibilityEngine, ELIGIBILITY_CODES, assessmentFingerprint } = require("./acquisition-eligibility");
 const { createSuppressionList } = require("./acquisition-suppression");
@@ -172,16 +172,47 @@ function authorisationIdFor({ prospectId, e164, authorisedAt, decision }) {
   return `ad_${createHash("sha256").update(body).digest("hex").slice(0, 20)}`;
 }
 
-function mintAuthorisedDial({ prospectId, businessName, e164, authorisedAt, decision }) {
+function mintAuthorisedDial({ prospectId, businessName, e164, authorisedAt, decision, batchKey }) {
   const slip = Object.freeze({
     [AUTHORISED_DIAL]: true,
     kind: "authorised-dial",
-    /** Correlation only. See authorisationIdFor: it is not a bearer token. */
+
+    /**
+     * ── THE DURABLE IDENTITY (E-7B1) ────────────────────────────────
+     *
+     * Freshly random per genuine mint, and derived from NOTHING. Not the
+     * prospect, not the number, not the clock, not the authorisationId, not the
+     * batch. That is the whole point: `authorisationId` is a hash of
+     * (prospect, number, instant, decision), so two genuinely distinct
+     * authorisations at the same millisecond collide on it — measured, and
+     * asserted in the tests below this file. A colliding key cannot arbitrate a
+     * durable claim, because the second legitimate authorisation would be
+     * refused as a replay of the first.
+     *
+     * NOT A BEARER CREDENTIAL. Holding this string authorises nothing:
+     * execution still requires the object itself, which MINTED gates. Somebody
+     * who learns a dispatchId can burn an authorisation by claiming it first —
+     * a denial of service on one call, never a way to place one.
+     */
+    dispatchId: randomUUID(),
+
+    /** Correlation and fingerprint only. See authorisationIdFor. */
     authorisationId: authorisationIdFor({ prospectId, e164, authorisedAt, decision }),
     prospectId,
     businessName,
     /** The number the gate cleared. Whatever dials must use THIS one. */
     e164,
+    /**
+     * The DURABLE founder approval that permitted this, carried onto the slip
+     * so a dispatch row can bind it (E-7B1).
+     *
+     * Never null on a minted slip: the engine's batch check is unconditional
+     * (`!batch || batch.approved !== true` fails), and the gate discards
+     * `context.batch` and binds the durable read itself — so an authorised
+     * decision without a durable batchKey does not exist. That is why the
+     * column is NOT NULL rather than nullable-and-hoped-for.
+     */
+    batchKey,
     authorisedAt,
     decision,
     note: "Permission to attempt one call, as at authorisedAt. It expires the moment anything changes; re-authorise rather than storing this.",
@@ -280,6 +311,23 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
 
     if (!authorised) return Object.freeze({ ...base, dial: null });
 
+    /**
+     * ── A SLIP WITHOUT A DURABLE APPROVAL MUST NOT EXIST (E-7B1) ──────
+     *
+     * `base.batchKey` comes from `resolveBatchApprovalForProspect`, which on
+     * this branch returned `approved: true` from a durable read — the engine
+     * refuses otherwise, unconditionally. So this can only fire if a future
+     * refactor lets an authorised decision through without one, and it should
+     * be loud rather than silently minting a slip that a NOT NULL column will
+     * later reject at the worst possible moment.
+     */
+    if (!base.batchKey) {
+      throw new Error(
+        "Refusing to mint a dial permission with no durable founder batch approval. " +
+          "An authorised decision must carry the batchKey it was approved under."
+      );
+    }
+
     return Object.freeze({
       ...base,
       dial: mintAuthorisedDial({
@@ -288,6 +336,7 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
         e164: base.e164,
         authorisedAt: base.authorisedAt,
         decision: code,
+        batchKey: base.batchKey,
       }),
     });
   }

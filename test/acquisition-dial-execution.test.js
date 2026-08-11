@@ -859,15 +859,60 @@ describe("E-7A reports authorisation, execution and provider outcomes as differe
     }
   });
 
-  it("the execution id is deterministic for one authorisation", async () => {
+  /**
+   * ── CHANGED BY E-7B1, ON PURPOSE ────────────────────────────────────
+   *
+   * This test used to assert that the EXECUTION id was deterministic, and it
+   * was — because it was derived from `authorisationId`, which is a hash of
+   * (prospect, number, instant, decision).
+   *
+   * That determinism is exactly why it could never arbitrate a durable claim:
+   * two genuinely distinct authorisations at the same millisecond collide, so a
+   * `unique` key on it would refuse the second legitimate authorisation as a
+   * replay of the first. E-7B1 therefore splits the two ideas apart, and this
+   * test now pins BOTH halves — the derived one that stayed derived, and the
+   * random one that must never be.
+   */
+  it("authorisationId stays deterministic, and dispatchId must not be", async () => {
     const a = await mintGenuineSlip();
     const b = await mintGenuineSlip();
-    // Same fictional prospect, same instant, same number → same authorisation identity.
-    assert.strictEqual(a.decision.dial.authorisationId, b.decision.dial.authorisationId);
 
+    // Same fictional prospect, same instant, same number → the SAME derived
+    // fingerprint. Unchanged from E-7A, and still what a transcript compares.
+    assert.strictEqual(
+      a.decision.dial.authorisationId,
+      b.decision.dial.authorisationId,
+      "the derived fingerprint must still collide — that is what makes it a fingerprint"
+    );
+
+    // And the durable identity must NOT collide, or the claim cannot arbitrate.
+    assert.notStrictEqual(
+      a.decision.dial.dispatchId,
+      b.decision.dial.dispatchId,
+      "two distinct authorisations must never share a dispatchId"
+    );
+    for (const slip of [a.decision.dial, b.decision.dial]) {
+      assert.match(slip.dispatchId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, "a v4 UUID");
+    }
+  });
+
+  it("dispatchId is derived from nothing — not the prospect, number, clock, batch or authorisationId", async () => {
+    const seen = new Set();
+    for (let i = 0; i < 25; i += 1) {
+      const { decision } = await mintGenuineSlip();
+      assert.strictEqual(seen.has(decision.dial.dispatchId), false, "a repeat would mean it is derived");
+      seen.add(decision.dial.dispatchId);
+    }
+    assert.strictEqual(seen.size, 25);
+  });
+
+  it("the execution id still correlates one authorisation to its transcript", async () => {
+    const a = await mintGenuineSlip();
+    const b = await mintGenuineSlip();
     const ra = await executeAuthorisedDial({ authorisedDial: a.decision.dial, provider: createFakeDialProvider(), now: a.clock });
     const rb = await executeAuthorisedDial({ authorisedDial: b.decision.dial, provider: createFakeDialProvider(), now: b.clock });
-    assert.strictEqual(ra.executionId, rb.executionId, "deterministic, so a proof transcript is comparable");
+    assert.strictEqual(ra.authorisationId, rb.authorisationId, "the fingerprint is comparable across runs");
+    assert.notStrictEqual(ra.executionId, rb.executionId, "but the execution is not the same execution");
   });
 });
 
