@@ -962,6 +962,35 @@ impossible rather than merely discouraged.
 **Neither option was written, applied, or approved in E-7A.** They are stated
 here so the schema conversation can happen before the code exists, not after.
 
+> ## ⚠ SUPERSEDED 2026-08-11 — THIS SKETCH IS WRONG. See [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md).
+>
+> The E-7B1 design review found two defects in the proposal above, and both were
+> measured rather than argued:
+>
+> **1. `authorisation_id` cannot be the unique key.** It is a sha256 of
+> `(prospectId, e164, authorisedAt, decision)`, so two *genuinely distinct*
+> authorisations of the same prospect at the same millisecond produce the **same
+> id** — E-7A's own suite asserts that collision as a feature, because it makes
+> proof transcripts comparable. As a correlation id that is fine; as a
+> uniqueness key it would refuse a valid authorisation and record two
+> authorisations as one. The durable key must be a **random** `dispatch_id`
+> minted per authorisation, with `authorisation_id` kept, non-unique, for
+> correlation.
+>
+> **2. Uniqueness on the authorisation does not stop the double call.** It
+> prevents replay of *one* authorisation. It does not prevent two workers each
+> minting *their own* authorisation for the same business seconds apart — both
+> get different ids, both claim, both dial. The attempt policy cannot catch it
+> either: `minDaysBetweenAttempts` is computed from
+> `acquisition_contact_outcomes`, and neither worker has recorded an outcome
+> yet, so both read "never contacted".
+>
+> The corrected design closes **both** threats: `primary key (dispatch_id)` for
+> replay, and `unique (prospect_id) where completed_at is null` for concurrent
+> duplicate authorisation. **Option B is rejected outright** — a lease is not a
+> dispatch, and `on delete cascade` is wrong for a record that a business may
+> have been rung.
+
 ### 14.4 Also outstanding for E-7B
 
 A **durable kill switch**. Today the emergency stop is a context field a caller
