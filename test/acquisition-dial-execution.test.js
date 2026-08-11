@@ -30,6 +30,7 @@ const { createProspect, transitionProspect, identityFingerprint } = require("../
 const { canonicalBatchIdentity, recordBatchApproval } = require("../src/services/acquisition-batch-approval");
 const { FOUNDER_CALLING_POLICY } = require("../src/services/acquisition-calling-approval");
 const { createAuditLog } = require("../src/services/acquisition-audit");
+const { pauseAcquisitionCalling, enableAcquisitionCalling, readCallingState, STATE_CODES } = require("../src/services/acquisition-calling-state");
 
 const {
   executeAuthorisedDial,
@@ -107,11 +108,25 @@ async function approveBatchIn(store, prospect, clock) {
  * statement about the executor — it is not that it refuses, it is that there is
  * nothing to hand it.
  */
-async function mintGenuineSlip({ iso = WEDNESDAY_2PM, washed = true, holidays = null, approveBatch = true, suppress = false, persistProspect = true, killSwitchEngaged = false } = {}) {
+async function mintGenuineSlip({ iso = WEDNESDAY_2PM, washed = true, holidays = null, approveBatch = true, suppress = false, persistProspect = true, killSwitchEngaged = false, calling = "enabled" } = {}) {
   const clock = now(iso);
   const store = createInMemoryAcquisitionStore();
   const prospect = goodProspect();
   const evidenceRows = evidenceFor(prospect, clock);
+
+  // E-7B1. The durable emergency stop. An in-memory store starts with NO
+  // calling-state row at all, modelling a database where laq5 has not run — and
+  // the executor blocks on that. A test that wants a call to proceed has to say
+  // so, which is the right way round.
+  if (calling !== "missing") {
+    await store.writeCallingState({
+      state: calling,
+      revision: 1,
+      changedBy: "e7b1 test harness",
+      changedAt: new Date(iso).toISOString(),
+      reason: `Calling ${calling} for this test.`,
+    });
+  }
 
   const washStore = createWashStore({ now: clock, mode: "fixture" });
   if (washed) washStore.wash(NUMBER);
@@ -157,7 +172,7 @@ async function mintGenuineSlip({ iso = WEDNESDAY_2PM, washed = true, holidays = 
 
 describe("E-7A end to end: a genuine authorisation reaches a fake provider, and nothing else happens", () => {
   it("1-7. an eligible fictional prospect is authorised, executed once, and contacts nobody", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
 
     // 1-3. M8E minted a genuine slip against durable state.
     assert.strictEqual(decision.authorised, true, JSON.stringify(decision.failedChecks));
@@ -169,7 +184,7 @@ describe("E-7A end to end: a genuine authorisation reaches a fake provider, and 
 
     // 4-5. The executor accepts it and the provider sees exactly one destination.
     const provider = createFakeDialProvider();
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     assert.strictEqual(result.ok, true, result.message);
     assert.strictEqual(result.status, EXECUTION_CODES.SUBMITTED);
@@ -193,9 +208,9 @@ describe("E-7A end to end: a genuine authorisation reaches a fake provider, and 
   });
 
   it("the provider is handed nothing it could reinterpret as permission", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
-    await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     const submitted = provider.submissions[0];
     assert.deepStrictEqual(
@@ -227,10 +242,12 @@ describe("E-7A refuses anything that is not a slip M8E minted", () => {
   };
 
   it("8. every forged capability is refused", async () => {
-    const clock = now();
+    // A fully permitted world — durable stop enabled, nothing in flight — so a
+    // forgery is refused on its own merits and not incidentally by some other gate.
+    const { clock, store } = await mintGenuineSlip();
     for (const [label, forged] of Object.entries(forgeries())) {
       const provider = createFakeDialProvider();
-      const result = await executeAuthorisedDial({ authorisedDial: forged, provider, now: clock });
+      const result = await executeAuthorisedDial({ store, authorisedDial: forged, provider, now: clock });
       assert.strictEqual(result.ok, false, `${label} must not execute`);
       assert.strictEqual(result.status, EXECUTION_CODES.AUTHORISATION_INVALID, label);
       assert.strictEqual(provider.submissionCount(), 0, `${label} must not reach a provider`);
@@ -246,7 +263,7 @@ describe("E-7A refuses anything that is not a slip M8E minted", () => {
    * destination could be rewritten. E-7A executes on identity instead.
    */
   it("9. copies of a genuine slip are refused — spread, assign, JSON, structuredClone", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const genuine = decision.dial;
 
     const copies = {
@@ -268,7 +285,7 @@ describe("E-7A refuses anything that is not a slip M8E minted", () => {
     for (const [label, copy] of Object.entries(copies)) {
       assert.strictEqual(isGenuineAuthorisedDial(copy), false, `${label} must not be genuine`);
       const provider = createFakeDialProvider();
-      const result = await executeAuthorisedDial({ authorisedDial: copy, provider, now: clock });
+      const result = await executeAuthorisedDial({ store, authorisedDial: copy, provider, now: clock });
       assert.strictEqual(result.status, EXECUTION_CODES.AUTHORISATION_INVALID, label);
       assert.strictEqual(provider.submissionCount(), 0, `${label} must not reach a provider`);
     }
@@ -276,11 +293,11 @@ describe("E-7A refuses anything that is not a slip M8E minted", () => {
     // And the genuine one still works, so this is a real distinction rather
     // than a check that refuses everything.
     const provider = createFakeDialProvider();
-    assert.strictEqual((await executeAuthorisedDial({ authorisedDial: genuine, provider, now: clock })).ok, true);
+    assert.strictEqual((await executeAuthorisedDial({ store, authorisedDial: genuine, provider, now: clock })).ok, true);
   });
 
   it("the brand check still means what it always meant, and is no longer the authority", async () => {
-    const { decision } = await mintGenuineSlip();
+    const { decision, store } = await mintGenuineSlip();
     const clone = { ...decision.dial };
     // Documented honestly: the brand survives a copy...
     assert.strictEqual(isAuthorisedDial(clone), true, "spread does copy own symbols — this is why identity is checked");
@@ -295,7 +312,7 @@ describe("E-7A refuses anything that is not a slip M8E minted", () => {
 
 describe("E-7A binds the destination to the authorisation", () => {
   it("10. a caller cannot substitute the destination", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
 
     const result = await executeAuthorisedDial({
@@ -311,7 +328,7 @@ describe("E-7A binds the destination to the authorisation", () => {
   });
 
   it("the genuine slip is frozen, so its destination cannot be rewritten in place", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     assert.ok(Object.isFrozen(decision.dial));
 
     assert.throws(() => {
@@ -320,15 +337,15 @@ describe("E-7A binds the destination to the authorisation", () => {
     }, TypeError);
 
     const provider = createFakeDialProvider();
-    await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
     assert.strictEqual(provider.submissions[0].destination, NUMBER, "the cleared number is the only one dialled");
   });
 
   it("every compliance answer a caller might assert is refused, not ignored", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     for (const key of FORBIDDEN_OPTION_KEYS) {
       const provider = createFakeDialProvider();
-      const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock, [key]: true });
+      const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock, [key]: true });
       assert.strictEqual(result.status, EXECUTION_CODES.CALLER_OVERRIDE_REJECTED, `${key} must be refused`);
       assert.strictEqual(provider.submissionCount(), 0);
     }
@@ -347,11 +364,11 @@ describe("E-7A binds the destination to the authorisation", () => {
 
 describe("E-7A spends an authorisation exactly once", () => {
   it("11. the same capability executed twice is refused the second time", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
 
-    const first = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
-    const second = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    const first = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
+    const second = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     assert.strictEqual(first.ok, true);
     assert.strictEqual(second.ok, false);
@@ -360,14 +377,14 @@ describe("E-7A spends an authorisation exactly once", () => {
   });
 
   it("a refusal still spends it — a disabled provider is not a free retry", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
 
-    const refused = await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createDisabledDialProvider(), now: clock });
+    const refused = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createDisabledDialProvider(), now: clock });
     assert.strictEqual(refused.status, EXECUTION_CODES.PROVIDER_REFUSED);
 
     // Somebody enables a fake provider and retries the same slip.
     const provider = createFakeDialProvider();
-    const retried = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    const retried = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
     assert.strictEqual(retried.status, EXECUTION_CODES.AUTHORISATION_CONSUMED);
     assert.strictEqual(provider.submissionCount(), 0);
   });
@@ -380,12 +397,12 @@ describe("E-7A spends an authorisation exactly once", () => {
    * so exactly one can find the slip unclaimed.
    */
   it("12. two concurrent executions of one slip produce at most one submission", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
 
     const [a, b] = await Promise.all([
-      executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock }),
-      executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock }),
+      executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock }),
+      executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock }),
     ]);
 
     const ok = [a, b].filter((r) => r.ok);
@@ -396,11 +413,11 @@ describe("E-7A spends an authorisation exactly once", () => {
   });
 
   it("ten concurrent executions still produce one submission", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
 
     const results = await Promise.all(
-      Array.from({ length: 10 }, () => executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock }))
+      Array.from({ length: 10 }, () => executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock }))
     );
 
     assert.strictEqual(results.filter((r) => r.ok).length, 1);
@@ -408,23 +425,63 @@ describe("E-7A spends an authorisation exactly once", () => {
   });
 
   /**
-   * THE LIMITATION, PINNED AS A TEST RATHER THAN LEFT AS A COMMENT.
+   * ── THE LIMITATION E-7A PINNED, NOW CLOSED BY E-7B1 ─────────────────
    *
-   * Single-consumption is a WeakSet in one module in one process. A second
-   * process has its own. This test does not assert that double-spend is fine —
-   * it asserts that the guarantee is exactly as wide as the docs say, so that
-   * nobody reads the passing suite above and concludes it is durable.
+   * This assertion used to say single-consumption was PROCESS-LOCAL and demand
+   * the source say so. That was true and honest for E-7A, and it is now wrong:
+   * the durable claim in acquisition-dispatch-store is arbitrated by Postgres,
+   * so a second process loses to a 23505 rather than to anything this process
+   * remembers.
+   *
+   * It is restated rather than deleted, because the in-process WeakSet is still
+   * there and still doing the cheap half of the job — and somebody reading it
+   * should be told it is no longer the only half.
    */
-  it("13. single-use is PROCESS-LOCAL — an E-7A limitation, stated in code", async () => {
+  it("13. single use is enforced in TWO layers, one of which survives a restart", async () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "src", "services", "acquisition-dial-execution.js"), "utf8");
-    assert.match(src, /PROCESS-LOCAL, AND THAT IS AN E-7A LIMITATION/, "the limitation must be stated where somebody will read it");
-    assert.match(src, /E-7B/, "the file must name the milestone that fixes it");
-    assert.match(src, /new WeakSet\(\)/, "consumption is in-process state, not durable state");
 
-    // And there is no durable consumption call anywhere in it.
-    for (const durable of ["appendDecision", "recordRequest", "upsertProspect", "appendOutcome", "supabase"]) {
-      assert.ok(!src.includes(durable), `E-7A must not write durable state (${durable})`);
+    // The cheap layer, unchanged.
+    assert.match(src, /new WeakSet\(\)/, "the in-process claim is still there");
+    assert.match(src, /SYNCHRONOUSLY BEFORE ANY AWAIT|SYNCHRONOUSLY, BEFORE ANY AWAIT/i);
+
+    // The durable layer, and the file must say the old limitation is closed.
+    assert.match(src, /claimAuthorisedDial/, "the executor must make a durable claim");
+    assert.match(src, /E-7A's process-local limitation is CLOSED by the durable half/);
+
+    // The executor still writes no business state of its own: the only durable
+    // writes it makes are the dispatch claim and the provider status on it.
+    for (const forbidden of ["appendDecision", "appendOutcome", "upsertProspect", "appendSuppression", "supabase"]) {
+      assert.ok(!src.includes(forbidden), `the executor must not write ${forbidden}`);
     }
+  });
+
+  /**
+   * The durable half, exercised. This is the case E-7A could not close: two
+   * SEPARATE executor instances, each with its own module state, both handed
+   * their own genuine authorisation for the same business.
+   */
+  it("14. two different authorisations for one prospect — only one may claim", async () => {
+    const { decision, clock, store, prospect, engineOptions, context } = await mintGenuineSlip();
+
+    // A second, genuinely distinct authorisation of the same business. Same
+    // millisecond, so the derived fingerprints collide and only the random
+    // dispatchId tells them apart.
+    const second = await createDialAuthoriser({ now: clock, store, engineOptions }).authorise(prospect, context);
+    assert.strictEqual(second.authorised, true);
+    assert.strictEqual(second.dial.authorisationId, decision.dial.authorisationId, "same fingerprint");
+    assert.notStrictEqual(second.dial.dispatchId, decision.dial.dispatchId, "different durable identity");
+
+    const p1 = createFakeDialProvider();
+    const p2 = createFakeDialProvider();
+    const first = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: p1, now: clock });
+    const rival = await executeAuthorisedDial({ store, authorisedDial: second.dial, provider: p2, now: clock });
+
+    assert.strictEqual(first.ok, true, first.message);
+    assert.strictEqual(rival.ok, false);
+    assert.strictEqual(rival.status, EXECUTION_CODES.DISPATCH_CONFLICT);
+    assert.strictEqual(rival.conflictScope, "prospect");
+    assert.strictEqual(p1.submissionCount(), 1);
+    assert.strictEqual(p2.submissionCount(), 0, "the second authorisation must never reach a provider");
   });
 });
 
@@ -434,18 +491,18 @@ describe("E-7A spends an authorisation exactly once", () => {
 
 describe("E-7A does not let an authorisation become a long-lived permission token", () => {
   it("a slip executed immediately is accepted", async () => {
-    const { decision } = await mintGenuineSlip();
+    const { decision, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: now(WEDNESDAY_2PM) });
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: now(WEDNESDAY_2PM) });
     assert.strictEqual(result.ok, true);
   });
 
   it("a stale slip is refused, and says so as an expiry rather than a compliance failure", async () => {
-    const { decision } = await mintGenuineSlip();
+    const { decision, store } = await mintGenuineSlip();
     const later = () => new Date(Date.parse(WEDNESDAY_2PM) + DEFAULT_MAX_AGE_MS + 1000);
     const provider = createFakeDialProvider();
 
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: later });
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: later });
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.status, EXECUTION_CODES.AUTHORISATION_EXPIRED);
@@ -457,19 +514,19 @@ describe("E-7A does not let an authorisation become a long-lived permission toke
     const at = (ms) => () => new Date(Date.parse(WEDNESDAY_2PM) + ms);
 
     const justInside = await mintGenuineSlip();
-    assert.strictEqual((await executeAuthorisedDial({ authorisedDial: justInside.decision.dial, provider: createFakeDialProvider(), now: at(DEFAULT_MAX_AGE_MS) })).ok, true);
+    assert.strictEqual((await executeAuthorisedDial({ store: justInside.store, authorisedDial: justInside.decision.dial, provider: createFakeDialProvider(), now: at(DEFAULT_MAX_AGE_MS) })).ok, true);
 
     const justOutside = await mintGenuineSlip();
     assert.strictEqual(
-      (await executeAuthorisedDial({ authorisedDial: justOutside.decision.dial, provider: createFakeDialProvider(), now: at(DEFAULT_MAX_AGE_MS + 1) })).status,
+      (await executeAuthorisedDial({ store: justOutside.store, authorisedDial: justOutside.decision.dial, provider: createFakeDialProvider(), now: at(DEFAULT_MAX_AGE_MS + 1) })).status,
       EXECUTION_CODES.AUTHORISATION_EXPIRED
     );
   });
 
   it("a slip from the future is refused rather than treated as fresh", async () => {
-    const { decision } = await mintGenuineSlip();
+    const { decision, store } = await mintGenuineSlip();
     const earlier = () => new Date(Date.parse(WEDNESDAY_2PM) - 5000);
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createFakeDialProvider(), now: earlier });
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createFakeDialProvider(), now: earlier });
     assert.strictEqual(result.status, EXECUTION_CODES.AUTHORISATION_EXPIRED);
   });
 
@@ -484,8 +541,8 @@ describe("E-7A does not let an authorisation become a long-lived permission toke
 
 describe("E-7A cannot place a live call", () => {
   it("14. the disabled provider refuses explicitly, and is distinct from a compliance refusal", async () => {
-    const { decision, clock } = await mintGenuineSlip();
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createDisabledDialProvider(), now: clock });
+    const { decision, clock, store } = await mintGenuineSlip();
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createDisabledDialProvider(), now: clock });
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.status, EXECUTION_CODES.PROVIDER_REFUSED);
@@ -509,12 +566,17 @@ describe("E-7A cannot place a live call", () => {
     assert.strictEqual(executor.providerLive, false);
   });
 
-  it("the default executor refuses a genuine slip", async () => {
-    const { decision, clock } = await mintGenuineSlip();
-    const executor = createAcquisitionDialExecutor({ now: clock });
+  it("the default executor refuses a genuine slip even with everything else permitted", async () => {
+    const { decision, clock, store } = await mintGenuineSlip();
+    const executor = createAcquisitionDialExecutor({ now: clock, store });
     const result = await executor.execute(decision.dial);
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.status, EXECUTION_CODES.PROVIDER_REFUSED);
+    assert.strictEqual(result.dispatchClaimed, true, "it got all the way to the provider, and the provider said no");
+  });
+
+  it("the default executor is not live-capable", () => {
+    assert.strictEqual(createAcquisitionDialExecutor({ now: now() }).liveCapable, false);
   });
 
   /**
@@ -637,10 +699,10 @@ describe("E-7A reaches no network", () => {
 
 describe("E-7A never retries", () => {
   it("19. a provider exception becomes an explicit uncertain failure, submitted once", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider({ behaviour: "throw" });
 
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.status, EXECUTION_CODES.PROVIDER_FAILED);
@@ -650,9 +712,9 @@ describe("E-7A never retries", () => {
   });
 
   it("a provider refusal is not retried either", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider({ behaviour: "refuse" });
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     assert.strictEqual(result.status, EXECUTION_CODES.PROVIDER_REFUSED);
     assert.strictEqual(provider.submissionCount(), 1);
@@ -672,22 +734,47 @@ describe("E-7A never retries", () => {
 // ---------------------------------------------------------------------------
 
 describe("E-7A honours an emergency stop at execution time", () => {
-  it("a kill switch engaged AFTER authorisation still stops the call", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+  /**
+   * ── CHANGED BY E-7B1 ────────────────────────────────────────────────
+   *
+   * The stop used to be a function a CALLER passed in, which meant a caller who
+   * omitted it got no emergency stop at all. It is now read from the store by
+   * the executor itself, twice, and a caller who still passes one is REFUSED
+   * rather than quietly ignored — because silently dropping it would look
+   * exactly like it being honoured.
+   */
+  it("a caller can no longer supply the emergency stop at all", async () => {
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
 
-    // The slip is genuine and current. The stop was thrown a moment later.
     const result = await executeAuthorisedDial({
+      store,
       authorisedDial: decision.dial,
       provider,
       now: clock,
-      killSwitch: () => ({ engaged: true, reason: "Founder stopped the pilot." }),
+      killSwitch: () => ({ engaged: false }),
     });
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.status, EXECUTION_CODES.CALLER_OVERRIDE_REJECTED);
+    assert.strictEqual(provider.submissionCount(), 0);
+  });
+
+  it("a durable stop engaged AFTER authorisation still stops the call", async () => {
+    const { decision, clock, store } = await mintGenuineSlip();
+    const provider = createFakeDialProvider();
+
+    // The slip is genuine and current. The founder pauses a moment later.
+    const paused = await pauseAcquisitionCalling({ store, changedBy: "Peter Dang", reason: "Founder stopped the pilot.", now: clock });
+    assert.strictEqual(paused.ok, true, paused.message);
+
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.status, EXECUTION_CODES.KILL_SWITCH);
     assert.strictEqual(provider.submissionCount(), 0, "a stop must be enforced BEFORE the provider");
     assert.match(result.message, /Founder stopped the pilot/);
+    assert.match(result.message, /No authorisation was spent/);
   });
 
   it("it reuses the engine's own kill-switch code rather than inventing a second one", () => {
@@ -695,16 +782,84 @@ describe("E-7A honours an emergency stop at execution time", () => {
     assert.strictEqual(EXECUTION_CODES.KILL_SWITCH, "kill_switch_engaged");
   });
 
-  it("a disengaged switch permits execution, so the check is real", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+  it("an enabled durable state permits execution, so the check is real", async () => {
+    const { decision, clock, store } = await mintGenuineSlip();
     const provider = createFakeDialProvider();
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock, killSwitch: () => false });
-    assert.strictEqual(result.ok, true);
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
+    assert.strictEqual(result.ok, true, result.message);
     assert.strictEqual(provider.submissionCount(), 1);
   });
 
+  /**
+   * THE ONE THAT MATTERS MOST, AND THE REASON THE STOP IS READ TWICE.
+   *
+   * Enabled at the preflight, paused before the final read. The claim has
+   * already been made durably by then, so the dispatch stays claimed and
+   * unresolved — holding its locks — and no provider is reached.
+   */
+  it("paused BETWEEN the preflight and the final read — no call, and the claim stays held", async () => {
+    const { decision, clock, store } = await mintGenuineSlip();
+
+    // A provider that pauses calling the instant it is asked to submit would be
+    // too late; the pause has to land between the two state reads. So the
+    // store itself does it: the second readCallingState sees a paused row.
+    let reads = 0;
+    const racing = {
+      ...store,
+      async readCallingState() {
+        reads += 1;
+        const row = await store.readCallingState();
+        if (reads === 1) return row; // preflight: enabled
+        return { ...row, state: "paused", reason: "Founder hit stop mid-dispatch." };
+      },
+    };
+
+    const provider = createFakeDialProvider();
+    const result = await executeAuthorisedDial({ store: racing, authorisedDial: decision.dial, provider, now: clock });
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.status, EXECUTION_CODES.KILL_SWITCH);
+    assert.strictEqual(provider.submissionCount(), 0, "NO CALL");
+    assert.strictEqual(result.dispatchClaimed, true, "the claim was already made and is not rolled back");
+    assert.strictEqual(reads, 2, "the stop must be read twice");
+
+    // And the lock is still held: the row is unresolved.
+    const open = await store.listDialExecutions({ unresolvedOnly: true });
+    assert.strictEqual(open.length, 1);
+    assert.strictEqual(open[0].resolvedAt, null);
+  });
+
+  it("a missing calling-state row BLOCKS, and is reported as our failure not a decision", async () => {
+    const { decision, clock, store } = await mintGenuineSlip({ calling: "missing" });
+    const provider = createFakeDialProvider();
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.status, EXECUTION_CODES.CALLING_STATE_UNAVAILABLE);
+    assert.notStrictEqual(result.status, EXECUTION_CODES.KILL_SWITCH, "absence is not a decision somebody made");
+    assert.strictEqual(provider.submissionCount(), 0);
+  });
+
+  it("an unreadable calling state BLOCKS", async () => {
+    const { decision, clock, store } = await mintGenuineSlip();
+    const broken = { ...store, async readCallingState() { throw new Error("connection reset"); } };
+    const provider = createFakeDialProvider();
+
+    const result = await executeAuthorisedDial({ store: broken, authorisedDial: decision.dial, provider, now: clock });
+    assert.strictEqual(result.status, EXECUTION_CODES.CALLING_STATE_UNAVAILABLE);
+    assert.strictEqual(provider.submissionCount(), 0);
+  });
+
+  it("no store at all BLOCKS", async () => {
+    const { decision, clock } = await mintGenuineSlip();
+    const provider = createFakeDialProvider();
+    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+    assert.strictEqual(result.status, EXECUTION_CODES.CALLING_STATE_UNAVAILABLE);
+    assert.strictEqual(provider.submissionCount(), 0);
+  });
+
   it("and M8E already refuses to mint at all while the switch is engaged", async () => {
-    const { decision } = await mintGenuineSlip({ killSwitchEngaged: true });
+    const { decision, store } = await mintGenuineSlip({ killSwitchEngaged: true });
     assert.strictEqual(decision.authorised, false);
     assert.strictEqual(decision.code, ELIGIBILITY_CODES.KILL_SWITCH);
     assert.strictEqual(decision.dial, null, "no slip may exist while calling is stopped");
@@ -727,14 +882,14 @@ describe("E-7A has nothing to execute when compliance refuses", () => {
 
   for (const [label, over] of Object.entries(cases)) {
     it(`${label} → no AuthorisedDial is minted, so there is nothing to execute`, async () => {
-      const { decision, clock } = await mintGenuineSlip(over);
+      const { decision, clock, store } = await mintGenuineSlip(over);
 
       assert.strictEqual(decision.authorised, false, `${label} must not authorise`);
       assert.strictEqual(decision.dial, null, "a refused decision carries no slip");
 
       // And the executor cannot be talked into acting on the refusal.
       const provider = createFakeDialProvider();
-      const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+      const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
       assert.strictEqual(result.status, EXECUTION_CODES.AUTHORISATION_INVALID);
       assert.strictEqual(provider.submissionCount(), 0);
     });
@@ -760,7 +915,7 @@ describe("E-7A records no contact and consumes no attempt", () => {
     const outcomesBefore = (await store.listOutcomes({ prospectId: decision.prospectId })).length;
     const suppressionsBefore = (await store.listSuppressions()).length;
 
-    await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock });
+    await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock });
 
     assert.strictEqual((await store.listOutcomes({ prospectId: decision.prospectId })).length, outcomesBefore);
     assert.strictEqual((await store.listSuppressions()).length, suppressionsBefore);
@@ -779,7 +934,7 @@ describe("E-7A records no contact and consumes no attempt", () => {
     const { readContactHistory } = require("../src/services/acquisition-history");
 
     const before = await readContactHistory({ store, prospectId: decision.prospectId });
-    await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock });
+    await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock });
     const after = await readContactHistory({ store, prospectId: decision.prospectId });
 
     assert.strictEqual(after.totalOutcomes, before.totalOutcomes);
@@ -792,10 +947,10 @@ describe("E-7A records no contact and consumes no attempt", () => {
   });
 
   it("an audit entry, when one is kept, says dispatch and not contact", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const audit = createAuditLog({ now: clock });
 
-    await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock, audit });
+    await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock, audit });
 
     const rows = audit.forEntity("prospect", decision.prospectId);
     assert.strictEqual(rows.length, 1);
@@ -806,10 +961,10 @@ describe("E-7A records no contact and consumes no attempt", () => {
   });
 
   it("a provider failure is audited as an error that was not retried", async () => {
-    const { decision, clock } = await mintGenuineSlip();
+    const { decision, clock, store } = await mintGenuineSlip();
     const audit = createAuditLog({ now: clock });
 
-    await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createFakeDialProvider({ behaviour: "throw" }), now: clock, audit });
+    await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createFakeDialProvider({ behaviour: "throw" }), now: clock, audit });
 
     const rows = audit.forEntity("prospect", decision.prospectId);
     assert.strictEqual(rows[0].event, "dial_execution_failed");
@@ -835,8 +990,8 @@ describe("E-7A reports authorisation, execution and provider outcomes as differe
   });
 
   it("every result is frozen and carries the full correlation set", async () => {
-    const { decision, clock } = await mintGenuineSlip();
-    const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock });
+    const { decision, clock, store } = await mintGenuineSlip();
+    const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider: createFakeDialProvider(), now: clock });
 
     assert.ok(Object.isFrozen(result));
     for (const key of ["ok", "status", "reason", "executionId", "prospectId", "destination", "authorisationId", "authorisedAt", "executedAt", "provider", "providerLive", "providerStatus", "providerRef"]) {
@@ -853,8 +1008,8 @@ describe("E-7A reports authorisation, execution and provider outcomes as differe
       [createFakeDialProvider({ behaviour: "throw" }), false],
     ];
     for (const [provider, expected] of outcomes) {
-      const { decision, clock } = await mintGenuineSlip();
-      const result = await executeAuthorisedDial({ authorisedDial: decision.dial, provider, now: clock });
+      const { decision, clock, store } = await mintGenuineSlip();
+      const result = await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
       assert.strictEqual(result.ok, expected, `${provider.name} → ok should be ${expected}`);
     }
   });
@@ -899,7 +1054,7 @@ describe("E-7A reports authorisation, execution and provider outcomes as differe
   it("dispatchId is derived from nothing — not the prospect, number, clock, batch or authorisationId", async () => {
     const seen = new Set();
     for (let i = 0; i < 25; i += 1) {
-      const { decision } = await mintGenuineSlip();
+      const { decision, store } = await mintGenuineSlip();
       assert.strictEqual(seen.has(decision.dial.dispatchId), false, "a repeat would mean it is derived");
       seen.add(decision.dial.dispatchId);
     }
@@ -909,8 +1064,8 @@ describe("E-7A reports authorisation, execution and provider outcomes as differe
   it("the execution id still correlates one authorisation to its transcript", async () => {
     const a = await mintGenuineSlip();
     const b = await mintGenuineSlip();
-    const ra = await executeAuthorisedDial({ authorisedDial: a.decision.dial, provider: createFakeDialProvider(), now: a.clock });
-    const rb = await executeAuthorisedDial({ authorisedDial: b.decision.dial, provider: createFakeDialProvider(), now: b.clock });
+    const ra = await executeAuthorisedDial({ store: a.store, authorisedDial: a.decision.dial, provider: createFakeDialProvider(), now: a.clock });
+    const rb = await executeAuthorisedDial({ store: b.store, authorisedDial: b.decision.dial, provider: createFakeDialProvider(), now: b.clock });
     assert.strictEqual(ra.authorisationId, rb.authorisationId, "the fingerprint is comparable across runs");
     assert.notStrictEqual(ra.executionId, rb.executionId, "but the execution is not the same execution");
   });
