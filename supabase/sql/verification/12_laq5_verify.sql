@@ -87,9 +87,17 @@ select count(*) as dial_executions_after_migration
 -- Adds ONE PERMANENT ROW to acquisition_dial_executions. The table refuses
 -- DELETE, so it cannot be cleaned up -- that is the point of the probe.
 --
--- It needs a prospect to reference (ON DELETE RESTRICT). Dev already holds the
--- fictional M8G prospects; substitute a real dev prospect_id below. The
--- destination is +61355509999, the same fictional number laq4's probe used.
+-- The prospect ids below are the REAL fictional dev rows, filled in rather than
+-- left as placeholders:
+--   pr_3740207ebbc0a379910f  M8D Restart Probe Locksmiths (Preston, VIC)
+--   pr_0b9f51cfe79018067bf1  M8G Persist Probe Locksmiths (Coburg, VIC)
+-- Both are invented businesses. The destination is +61355509999, the same
+-- fictional number laq4's probe used.
+--
+-- PREFER THE SCRIPTED PROOF. scripts/dev/acquisition-dispatch-proof/ runs the
+-- same probes through the ACTUAL dispatch-store code, including a genuine
+-- two-process race, and asserts the constraint-name mapping this file can only
+-- show you by eye. Use section 6 only if you want to see the raw SQL fail.
 --
 -- Run inside a transaction and ROLLBACK if you only want to see the refusals
 -- without leaving the row. The refusals are what matters; the surviving row is
@@ -103,7 +111,7 @@ select count(*) as dial_executions_after_migration
 --   (dispatch_id, authorisation_id, prospect_id, destination_e164, batch_key,
 --    authorised_at, claimed_by, provider, provider_live)
 -- values
---   (gen_random_uuid(), 'ad_laq5verify', '<DEV_PROSPECT_ID>', '+61355509999',
+--   (gen_random_uuid(), 'ad_laq5verify', 'pr_3740207ebbc0a379910f', '+61355509999',
 --    'ba_laq5verify', now(), 'laq5-verify', 'disabled', false);
 --
 -- -- 6b. ONE PROSPECT -> ONE UNRESOLVED DISPATCH.
@@ -112,7 +120,7 @@ select count(*) as dial_executions_after_migration
 --   (dispatch_id, authorisation_id, prospect_id, destination_e164, batch_key,
 --    authorised_at, claimed_by, provider, provider_live)
 -- values
---   (gen_random_uuid(), 'ad_laq5verify_b', '<DEV_PROSPECT_ID>', '+61355509998',
+--   (gen_random_uuid(), 'ad_laq5verify_b', 'pr_3740207ebbc0a379910f', '+61355509998',
 --    'ba_laq5verify', now(), 'laq5-verify', 'disabled', false);
 --
 -- -- 6c. ONE DESTINATION -> ONE UNRESOLVED DISPATCH.
@@ -122,7 +130,7 @@ select count(*) as dial_executions_after_migration
 --   (dispatch_id, authorisation_id, prospect_id, destination_e164, batch_key,
 --    authorised_at, claimed_by, provider, provider_live)
 -- values
---   (gen_random_uuid(), 'ad_laq5verify_c', '<OTHER_DEV_PROSPECT_ID>', '+61355509999',
+--   (gen_random_uuid(), 'ad_laq5verify_c', 'pr_0b9f51cfe79018067bf1', '+61355509999',
 --    'ba_laq5verify', now(), 'laq5-verify', 'disabled', false);
 --
 -- -- 6d. THE POINT OF THE WHOLE MIGRATION.
@@ -164,7 +172,7 @@ select count(*) as dial_executions_after_migration
 --   (dispatch_id, authorisation_id, prospect_id, destination_e164, batch_key,
 --    authorised_at, claimed_by, provider, provider_live, resolved_at)
 -- values
---   (gen_random_uuid(), 'ad_bad', '<DEV_PROSPECT_ID>', '+61355509997',
+--   (gen_random_uuid(), 'ad_bad', 'pr_3740207ebbc0a379910f', '+61355509997',
 --    'ba_x', now(), 'laq5-verify', 'disabled', false, now());
 --
 -- --     Expect: 23514 on acq_dial_exec_submission_consistent.
@@ -172,7 +180,7 @@ select count(*) as dial_executions_after_migration
 --   (dispatch_id, authorisation_id, prospect_id, destination_e164, batch_key,
 --    authorised_at, claimed_by, provider, provider_live, provider_status)
 -- values
---   (gen_random_uuid(), 'ad_bad2', '<DEV_PROSPECT_ID>', '+61355509996',
+--   (gen_random_uuid(), 'ad_bad2', 'pr_3740207ebbc0a379910f', '+61355509996',
 --    'ba_x', now(), 'laq5-verify', 'disabled', false, 'submitted');
 --
 -- rollback;   -- or commit, if you intend to keep the one residue row
