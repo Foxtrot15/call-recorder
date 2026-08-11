@@ -3311,3 +3311,141 @@ write.**
   attributed but it is not append-only, so a future change is a commit rather
   than a durable event. That is acceptable while the policy is a constant and one
   person adopts it; it would want revisiting alongside **A-L9**.
+
+---
+
+## 47. E-7A — the provider-disabled dial execution seam
+
+**Status: ENGINEERING SEAM BUILT / LIVE PROVIDER DISABLED.**
+**E-7 remains OPEN. This is not permission to call anybody, and it cannot.**
+
+> The authoritative status for every blocker named here is
+> [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md) §10. This
+> section is the milestone snapshot.
+
+### 47.1 The question E-7A exists to answer
+
+Since M8E the repository could mint an `AuthorisedDial` — a permission slip
+produced only by a gate that had just read durable suppression, contact history,
+batch approval and duplicate resolution. Nothing could consume one, because
+nothing existed that consumed one. The comments said "a future dialler", and the
+ratchets asserted no such thing had been built.
+
+That left a real question unanswered: **what would consume it, and could that
+thing be tricked?** E-7A answers it, and answers it while the answer is still
+cheap — before a provider exists, when getting it wrong costs nothing.
+
+### 47.2 What was built
+
+| file | what it is |
+|---|---|
+| `src/services/acquisition-dial-execution.js` | the one execution entry point |
+| `src/services/acquisition-dial-provider.js` | the provider interface, plus a **disabled** and a **fake** implementation |
+| `scripts/acquisition-dial-proof.js` | the offline founder proof |
+| `test/acquisition-dial-execution.test.js` | 57 offline tests |
+
+### 47.3 The authenticity model had to change first
+
+M8E authenticated a slip by a **branded symbol property**. The symbol is
+exported from the module, and **object spread copies own symbol properties**, so
+a spread clone of a genuine slip passed the check — and, being a fresh object,
+was **not frozen**, so its destination could then be rewritten.
+
+That was harmless while nothing consumed a slip. It would not have been harmless
+afterwards, so E-7A fixed it before building the consumer:
+
+- the mint step registers each frozen slip in a module-private `WeakSet`
+- `isGenuineAuthorisedDial(value)` asks whether this is **that object**
+- a forgery, a spread clone, an `Object.assign` copy, a JSON round-trip, a
+  `structuredClone` and a hand-copied property set are all refused
+- `isAuthorisedDial` is unchanged and still means what it always meant; it is
+  simply no longer the check that may authorise execution
+
+**Nothing in M8E was relaxed.** The gate reads exactly what it read before and
+refuses exactly what it refused before.
+
+### 47.4 The pipeline
+
+```
+M8E authoritative reads  ->  genuine AuthorisedDial  ->  AcquisitionDialExecutor
+                                                              |
+                                                     provider interface
+                                                              |
+                                 DisabledDialProvider  |  FakeDialProvider
+```
+
+No provider call is reachable from eligibility, review, batch or import code — a
+ratchet asserts that exactly one acquisition module contains a provider
+submission, and that it imports the authorisation gate.
+
+### 47.5 What the executor refuses
+
+`caller_override_rejected`, `authorisation_invalid`, `authorisation_consumed`,
+`authorisation_expired`, `kill_switch_engaged`, `provider_refused`,
+`provider_failed` — and `provider_accepted` when a provider took it.
+
+These are **deliberately distinct states**. Authorised is not called. A disabled
+provider is not a compliance refusal. A provider failure is not a refusal at all;
+it is an unknown.
+
+### 47.6 The provider contract
+
+A provider receives `executionId`, `destination`, `prospectId`, `businessName`,
+`authorisedAt` and an inert `metadata` object — frozen, and nothing else. It gets
+no eligibility context, no permission booleans, no second number, and no batch,
+duplicate, DNCR or suppression authority. **It is an execution mechanism, not a
+policy engine.**
+
+Every provider must state `live` as a boolean, and a ratchet asserts every
+provider this repository can construct states `false`. A future real adapter must
+either declare itself live and **fail that test**, or lie in source — which is a
+visible change somebody has to make on purpose.
+
+### 47.7 Single use, and the limitation that comes with it
+
+One slip, at most one submission. The claim is made against object identity
+**synchronously before the first await**, so ten concurrent executions produce
+one submission. A refusal still spends the slip.
+
+**This is process-local.** A second process has its own `WeakSet`. Durable
+cross-process single-consumption requires a uniquely-constrained row, which
+requires SQL, which is **E-7B**. It is acceptable in E-7A for one reason only:
+no live provider exists. See the blocker register §10.5 for the full statement.
+
+### 47.8 Expiry
+
+A slip older than **60 seconds** is refused. The slip always described itself as
+permission "as at `authorisedAt`", and E-7A is the first thing able to enforce
+that. A slip dated in the future is refused too.
+
+### 47.9 No retry
+
+A provider failure returns an explicit uncertain state and stops. An ambiguous
+timeout may mean the call was placed; retrying is how one authorisation becomes
+two calls to one business. A ratchet asserts the execution path contains no
+retry, backoff, timer or loop.
+
+### 47.10 Nothing here is contact
+
+A fake submission records no outcome, consumes no attempt, and leaves the derived
+contact history at zero. The executor does not import the outcome recorder and
+cannot reach `appendOutcome`. **Dispatch requested is not prospect contacted**,
+and the result object says so on every result.
+
+### 47.11 What did not happen
+
+No SQL was written or applied. Nothing was written to dev or production — the
+proof uses an in-memory store. No provider, prospect, Register, Outscraper,
+Retell or Twilio was contacted. No call, SMS or email. `acquisition_decisions`
+is still 4 rows and dev's fictional residue is still 21.
+
+### 47.12 Honest limitations
+
+- **Single-consumption is process-local** (§47.7). The headline one.
+- **There is no durable kill switch.** The executor re-reads an injected one
+  immediately before the provider, but the switch is still a caller-supplied
+  context field. E-7B needs a stop no caller can decline to pass in.
+- **The 60-second window is a judgement**, not a derived constant. It is short
+  because the slip asserts the world has not changed, and the world can change.
+- **The seam has never run against a real provider**, by design. Everything
+  known about its behaviour under a live adapter is inference.

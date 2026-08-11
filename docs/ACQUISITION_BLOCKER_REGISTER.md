@@ -1,10 +1,12 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-10**, after **M8L**
-closed the caller-supplied duplicate-resolution gap and **E-5** closed durable
-founder batch approval — **neither needed SQL** — and after the founder approved
-the attempt policy (**A-L6 / A-L7 / A-L8 closed**, approval
-`AL6-AL7-AL8-2026-08-10`).
+**Status of this document:** LIVE. Last recomputed **2026-08-11**, after **E-7A**
+built the **provider-disabled dial execution seam** (§10) — **no SQL, no network,
+no live provider, and E-7 still OPEN**. Before that, on 2026-08-10: **M8L** closed
+the caller-supplied duplicate-resolution gap, **E-5** closed durable founder batch
+approval — **neither needed SQL** — the founder approved the attempt policy
+(**A-L6 / A-L7 / A-L8 closed**, approval `AL6-AL7-AL8-2026-08-10`), and **M8M**
+closed **A-L1** and **A-L3** by founder operating policy.
 
 **Owns (source of truth for):** what currently stands between a persisted
 prospect and one authorised outbound acquisition call, and who has to resolve
@@ -18,9 +20,16 @@ each item.
 > a snapshot disagree, **this register is right**.
 
 **Nothing in this repository can place a call.** `EXTERNAL_SYSTEMS.telephony` is
-a hardcoded `false` with no environment override, no execution verb exists in
-the acquisition tree, and four ratchets fail the build if one appears. The items
-below are what would still have to be true *if* one did.
+a hardcoded `false` with no environment override.
+
+**E-7A changed one clause of that sentence and no more.** An execution verb now
+exists — exactly one, in `acquisition-dial-execution.js` — and it can be reached
+only with a genuine M8E authorisation. It still cannot call anybody: the default
+provider **refuses**, the only other provider is an offline **fake**, no adapter
+reaches a network, and a ratchet fails the build if any provider declares itself
+live. So the statement holds, and it now holds for a tested reason rather than
+for want of anything to test. The items below are what would still have to be
+true *if* a real provider existed.
 
 ---
 
@@ -40,7 +49,7 @@ below are what would still have to be true *if* one did.
 | **A-L2** | An authoritative public-holiday source, and which state calendars are carried | **OPEN — and NOT closed by A-L3** | Hand-compiled fixture, national + VIC, `authoritative: false`, covering **2026 only**. From **2027-01-01 the gate refuses every date.** Choosing not to call on holidays does not tell us which days those are. Also **M-6**. |
 | ~~**A-L3**~~ | Should AIDA call on public holidays at all? | **CLOSED — founder decision.** **No cold acquisition call on a public holiday applicable to the recipient**, and none when holiday coverage is unknown. The published rules leave a holiday window technically available; AIDA declines to use it. This settles the POLICY only — the DATA question is **A-L2**, still open, and AFL Grand Final Friday is still absent from the fixture rather than guessed. |
 | **A-L5** | Do 1300/1800 numbers carry the same DNCR obligations as geographic ones? | **OPEN** | Treated identically — everything is washed. Conservative. |
-| **DNCR-1** | Who holds the DNCR account, performs the wash, and may attest an import | **OPEN** | No wash can enter the system, so `dncr_not_checked` blocks every prospect. |
+| **DNCR-1** | Who holds the DNCR account, performs the wash, and may attest an import | **OPEN — account activation + first real wash + attestation outstanding.** A DNCR **Access Seeker account application has been submitted**; activation approval has not yet come back, so no real wash has been performed and nothing has been attested. The engineering to store one is done and proven (**E-3**). | No real wash can enter the system, so `dncr_not_checked` blocks every prospect. |
 
 ## 2. Founder / commercial
 
@@ -85,7 +94,7 @@ SQL was required to close A-L8.**
 | ~~**M-1**~~ | Apply LAQ1, LAQ2, verify RLS | **DONE on dev.** LAQ1+LAQ2 M8D 2026-08-07; **LAQ3 M8I 2026-08-08**. **Production: none applied.** |
 | ~~**M-2**~~ | Replace in-memory stores with the tables | **DONE.** M8C built the adapters, M8D applied the schema, M8G/M8H wrote through them. |
 | ~~**M-3**~~ | Lease reaper | **DONE, dormant.** No timer and no scheduler; `sweep()` runs when a human runs it. |
-| **M-4** | Re-run eligibility at the moment of dialling | **MECHANISM DONE (M8E), NO CALLER.** `createDialAuthoriser` re-runs the whole engine at the authorisation instant against durable suppression (M8E) and durable contact history (M8J). It has no caller because there is no dialler. Closes when **E-7** lands and uses it. |
+| **M-4** | Re-run eligibility at the moment of dialling | **MECHANISM DONE (M8E), CALLER IS NOW E-7A — STILL OPEN.** `createDialAuthoriser` re-runs the whole engine at the authorisation instant against durable suppression (M8E) and durable contact history (M8J). Since E-7A it **has** a caller: the executor accepts nothing else, and refuses a slip older than **60 seconds** so an authorisation cannot become a standing permission. It stays open because the caller cannot yet place a call. Closes with **E-7B**. |
 | **M-5** | `service_area` / `operating_status` capture path | **OPEN.** The discovery contract derives neither. |
 | ~~**M-6**~~ | Authoritative public-holiday source | **OPEN** — tracked as **A-L2**, because the blocker is the source decision, not the code. |
 | ~~**M-7**~~ | Cross-process suppression visibility | **CLOSED in M8E.** Proven across two real processes against dev Postgres. |
@@ -95,7 +104,7 @@ SQL was required to close A-L8.**
 | ~~**E-5**~~ | Durable batch approval | **CLOSED in E-5, offline — no SQL required.** A founder approval is now an append-only row in `acquisition_decisions` (`entity_type: 'batch'`, which the laq1 CHECK has admitted since it was written), keyed by `ba_<membershipHash>` — an identity derived from the membership itself. `acquisition-authorisation` destructures `context.batch` off the caller's context and **discards** it; the approval is read from the store or it does not exist. Proven across two genuinely separate OS processes, 9/9 and 26/26, **zero database residue**. See §5. |
 | ~~**M8L**~~ | Durable duplicate resolution | **CLOSED — no SQL.** `context.duplicateResolution` is no longer authority anywhere a call can be decided. The M8E gate destructures it off the caller's context and reads the **M8H review decision** instead — the same rows a human already wrote. Proven across two separate OS processes, 13/13 and 22/22, **zero database residue**. See §8. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
-| **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **ABSENT BY DESIGN.** Nothing to fix; nothing to build until §1 and §2 close. |
+| **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **PARTIAL — E-7A COMPLETE, LIVE PROVIDER ABSENT BY DESIGN.** The execution **seam** is built, provider-disabled: `acquisition-dial-execution.js` is the only thing that may consume a slip, the default provider **refuses**, and the only other provider is an offline fake. **No real provider adapter exists, no network path exists, and no live call is possible.** E-7 does **not** close until a later founder-authorised milestone (**E-7B**) connects a real provider after DNCR operational readiness. See §10. |
 
 ---
 
@@ -270,7 +279,7 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 11 | Campaign / kill switch | 🟢 | 🟢 | Own precedence in gate and engine |
 | 12 | Founder batch approval | 🟠 | 🟢 | **E-5 closed.** Durable, restart-safe and proven across two OS processes. `context.batch` is discarded by the gate; the approval is read from `acquisition_decisions` or it does not exist. Membership-bound, so a compliance change does not fake staleness. **A-L9** is still open but is governance, not a defect |
 | 13 | Final M8E authorisation | 🟢 | 🟢 | Durable suppression **and** durable history; unforgeable slip; fails closed on either read |
-| 14 | Future dial request | 🔴 | 🔴 | **E-7.** No dialler, by design |
+| 14 | Future dial request | 🔴 | 🔴 | **E-7 — still RED, and correctly so. E-7A built the seam; there is no live provider.** The executor exists, refuses everything that is not a genuine M8E slip, spends each slip once, and reaches an offline provider that is disabled by default. **Nothing here can call anybody.** Turns AMBER only when a real adapter lands under **E-7B** |
 
 **Gate 6 moved AMBER → GREEN.** M8L closed it. The amber was never "we do not
 detect duplicates" — `acquisition-dedupe` has been careful since A2. It was that
@@ -295,19 +304,29 @@ Postgres. It stays AMBER for the remaining reason, which is not engineering —
 **DNCR-1**, nobody holds a Register account, so there is no real wash to store.
 **Every engineering item behind gate 7 is now done on dev.**
 
+**Gate 14 stays RED after E-7A, and that is the honest reading.** E-7A built the
+execution seam and deliberately left it incapable of calling anybody: the default
+provider refuses, the only alternative is an offline fake, and a ratchet fails the
+build if any provider declares itself live. A seam that cannot dial is not a
+dialler, so the gate does not move. What E-7A removed is the *engineering unknown*
+— "what would consume a slip, and could it be tricked?" now has a tested answer.
+
 **One RED remains, and it is the one that should be last.**
 
 ---
 
 ## 7. The shortest honest path to one call
 
-1. **DNCR-1** — the account and the attestation procedure; then one imported
-   wash. Somewhere durable to put it already exists (**E-3**, closed on dev),
-   and `scripts/acquisition-dncr-import.js` loads it. **This is now the only
+1. **DNCR-1** — **account activation, then the first real wash and its
+   attestation.** The Access Seeker application is in; activation has not come
+   back. Somewhere durable to put a wash already exists (**E-3**, closed on dev),
+   and `scripts/acquisition-dncr-import.js` loads it. **This is still the only
    blocker that stops the first call outright.**
 2. **A-L2** — an authoritative holiday source. Has its own 2027-01-01 deadline,
    and until then the fixture covers the pilot period.
-3. **E-7** — the dialler, accepting only an `AuthorisedDial`.
+3. **E-7B** — a real provider adapter behind the E-7A seam, and an explicitly
+   founder-authorised live proof. **E-7A is done**: the seam, its refusals, its
+   single-use rule and its ratchets are built and tested offline (§10).
 
 **M-5** is not on this path at all. **A-L10** is not on it either: a business
 that has never been called has no history for an uncounted-redial ceiling to
@@ -514,3 +533,185 @@ and M8K all still apply, and only the M8E gate mints an `AuthorisedDial`.
 **53 offline tests** in `test/acquisition-calling-approval.test.js`, including
 boundary sweeps at 09:00/08:59, 19:59/20:00, Saturday 16:59/17:00, and every hour
 of a Melbourne Sunday.
+
+---
+
+## 10. E-7A — the provider-disabled dial execution seam
+
+**Status: ENGINEERING SEAM BUILT / LIVE PROVIDER DISABLED. E-7 remains OPEN.**
+
+E-7A answers one question that had never been answered: *if M8E mints a genuine
+`AuthorisedDial`, what exactly is allowed to consume it and ask for a call?*
+
+It answers it while remaining **incapable of calling anybody**. That is not a
+side effect of being unfinished — it is the deliverable. The seam is built in
+production shape, wired to a provider that refuses.
+
+### 10.1 What E-7A does NOT mean
+
+- It does **not** close E-7.
+- There is **no real provider adapter** in this repository — no Retell, no
+  Twilio, no HTTP, no webhook, no generic transport.
+- There is **no network path**. The two execution files import nothing but each
+  other, the authorisation gate, and `node:crypto`.
+- No environment variable, credential or config value can turn calling on.
+  There is deliberately no "if credentials exist, go live" branch.
+- Nothing was written to dev. Nothing was written to production. **No SQL was
+  written or applied.** No prospect, provider, Register or person was contacted.
+
+Enabling a live provider is **E-7B**: a separate, founder-authorised milestone,
+after DNCR operational readiness.
+
+### 10.2 The security model changed, because the old one proved less than it claimed
+
+M8E's slip was authenticated by a **brand** — a symbol property. The symbol was
+exported, and **object spread copies own symbol properties**. So:
+
+| attempt | old `isAuthorisedDial` |
+|---|---|
+| hand-forged with the exported symbol | **passed** |
+| a spread clone of a genuine slip | **passed**, and the copy was **not frozen** |
+| the same clone with a rewritten number | **passed** |
+| `Object.assign` copy | **passed** |
+| JSON round-trip / `structuredClone` | refused |
+
+A caller could take a slip for a number the gate cleared, clone it, point it at
+a different number, and hold something the check called genuine. Nothing dialled,
+so nothing happened — but E-7A gives a slip somewhere to be spent, and it must
+not inherit that.
+
+**E-7A authenticates by IDENTITY.** The mint step registers each frozen slip in a
+module-private `WeakSet`, and `isGenuineAuthorisedDial` asks whether this is
+*that object* — not whether it looks like one. A copy is a different object and
+fails. `isAuthorisedDial` keeps its old meaning and its old callers; it is simply
+no longer the check that may authorise execution.
+
+**M8E was strengthened, not weakened, and nothing about the gate was relaxed to
+make E-7A easier.**
+
+### 10.3 The execution contract
+
+```
+M8E .authorise()  ->  genuine slip  ->  executeAuthorisedDial()  ->  provider
+                                            |
+                       DisabledDialProvider (default) | FakeDialProvider (tests)
+```
+
+`executeAuthorisedDial({ authorisedDial, provider, now, killSwitch, maxAgeMs, audit })`
+refuses, in order:
+
+| code | means |
+|---|---|
+| `caller_override_rejected` | the caller supplied a destination or a compliance answer |
+| `authorisation_invalid` | not a slip M8E minted — forged, cloned, or JSON-revived |
+| `authorisation_consumed` | already spent |
+| `authorisation_expired` | older than `maxAgeMs` (default **60s**) |
+| `kill_switch_engaged` | an emergency stop was active **at execution time** |
+| `provider_refused` | compliance said yes; the mechanism said no |
+| `provider_failed` | the provider threw. Outcome **unknown**, and not retried |
+| `provider_accepted` | a provider took it. **Still not evidence anybody was called** |
+
+**AUTHORISED is not CALLED. PROVIDER-DISABLED is not COMPLIANCE-REFUSED.** Those
+are separate states because collapsing them is how a founder reads "blocked" and
+believes a business refused them.
+
+### 10.4 What a provider may and may not see
+
+A provider receives exactly `executionId`, `destination`, `prospectId`,
+`businessName`, `authorisedAt` and an inert `metadata` object, frozen. It never
+receives eligibility context, permission booleans, a second number, or batch /
+duplicate / DNCR / suppression authority. **A provider is an execution mechanism,
+not a policy engine**, and it cannot dial a number it was not given.
+
+### 10.5 Single use — and exactly how far that guarantee reaches
+
+One slip may be handed to a provider **at most once**. The claim is made against
+object identity **synchronously, before the first await**, so concurrent
+executions cannot both pass. Ten concurrent attempts produce one submission.
+A refusal still spends the slip: "at most one submission" is the invariant worth
+having, and un-spending on refusal would let a caller poll a disabled provider.
+
+> ### ⚠ THIS IS PROCESS-LOCAL, AND IT IS AN E-7A LIMITATION
+>
+> Consumption lives in a `WeakSet` in one module in one process. **A second
+> process knows nothing about the first.** Durable cross-process single-use needs
+> a uniquely-constrained row, which needs SQL, which is **E-7B**.
+>
+> It is safe today for exactly one reason: **no live provider exists**, so the
+> worst a double-spend can do is record a second fake submission. **It would not
+> be safe the day a real adapter lands.**
+
+### 10.6 TOCTOU and expiry
+
+The slip always described itself as permission "as at authorisedAt...
+re-authorise rather than storing this". Nothing enforced it. E-7A enforces it at
+execution: a slip older than **60 seconds** is refused as `authorisation_expired`.
+
+Sixty seconds because the honest window is "long enough to hand a slip to a
+provider, and no longer". The queue's 5-minute lease is the wrong comparison — a
+lease reserves a prospect so nobody else takes it, while this asserts the world
+has not changed, and **somebody can opt out in four minutes**. A slip dated in
+the future is refused too, rather than treated as fresh.
+
+### 10.7 No automatic retry, ever
+
+A provider timeout is genuinely ambiguous: rejected, or accepted with the answer
+lost. Retrying resolves it in the one direction that cannot be undone — two calls
+to one business. So a provider failure returns `provider_failed` with an
+**unknown** provider status and **stops**. A ratchet asserts the execution path
+contains no retry, backoff, timer or loop of any kind.
+
+### 10.8 It records no contact and consumes no attempt
+
+A fake submission is **not** an attempt, a voicemail, a no-answer or a connected
+call. The executor does not import `acquisition-outcome`, cannot reach
+`appendOutcome`, and leaves the derived contact history reading zero. The attempt
+policy (a no-answer does not consume a counted attempt, a voicemail does) is
+untouched and unreachable from here. Audit entries, when a log is supplied, say
+`dial_execution_submitted` with the reason "**NOT evidence that anybody was
+contacted**".
+
+### 10.9 Kill switch
+
+The engine already evaluates `campaign.killSwitchEngaged` at authorisation time,
+and M8E mints no slip while a stop is engaged. E-7A reads an injected
+`killSwitch()` **again, immediately before the provider**, so a stop thrown
+*after* a slip was minted still stops the call. It is not a second kill-switch
+system: no state is kept and the refusal reuses the engine's own
+`kill_switch_engaged`.
+
+**Known gap, recorded rather than papered over:** there is no *durable,
+authoritative* kill-switch source in this repository — the switch is a context
+field a caller supplies. Absent an injected reader, the only kill-switch
+authority is the one M8E applied, bounded by the 60-second expiry. **E-7B needs a
+durable stop that no caller can decline to pass in.**
+
+### 10.10 Proof
+
+`node scripts/acquisition-dial-proof.js` — offline, fictional, in-memory. Prints
+**DRY EXECUTION / NO CALL SENT**, shows the exact submission a provider would
+receive, then demonstrates replay refusal, destination-substitution refusal, and
+the default disabled executor's refusal. It reads no credentials, contacts
+nothing, and writes nothing anywhere.
+
+**57 offline tests** in `test/acquisition-dial-execution.test.js`, covering the
+forgery matrix, replay, concurrency, expiry, the provider contract, the network
+ratchets and the live-call impossibility ratchet.
+
+### 10.11 What E-7B still needs
+
+1. **Durable single-consumption** — the one thing E-7A genuinely cannot do
+   in-process. Needs SQL (see below).
+2. **A durable kill switch** the executor reads rather than is handed.
+3. **A real provider adapter**, marked live, which will deliberately fail the
+   live-call ratchet until somebody updates it on purpose.
+4. **DNCR-1 operational readiness** — activation, a real wash, an attestation.
+5. **An explicitly founder-authorised live proof**, to one number, once.
+
+**The SQL E-7B will need, stated so it can be reviewed before it is written:** a
+uniquely-constrained dispatch record — either a new `acquisition_dial_executions`
+table with `unique (authorisation_id)`, or `acquisition_call_queue` gaining
+`dispatched_at` and `execution_id` with a partial unique index on `execution_id`.
+The invariant either way: **an INSERT that violates uniqueness is the second
+dispatch being refused by the database**, not by application memory. **None of
+this was written or applied in E-7A.**

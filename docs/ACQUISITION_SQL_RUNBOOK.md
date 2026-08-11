@@ -885,3 +885,89 @@ Two consequences worth knowing before running it:
 
 `node scripts/acquisition-review.js duplicates` is read-only and creates no
 residue. Run it first.
+
+---
+
+## 14. E-7A — the dial execution seam needed NO SQL, and applied none
+
+**E-7A added no table, no column, no constraint, no function and no migration.
+Nothing was applied to dev. Nothing was applied to production.**
+
+### 14.1 Why it needed none
+
+E-7A builds the seam that consumes an M8E `AuthorisedDial` and asks a provider
+for one call. The only piece of that which genuinely wants durable state is
+**single-consumption** — "this authorisation has already been spent" — and E-7A
+does not claim durable single-consumption. It claims a **process-local** one, in
+a `WeakSet`, and says so in the code, in the tests and in the register.
+
+Everything else the seam does is a pure function of the slip it was handed:
+identity verification, expiry, the caller-override guard, the provider contract
+and the result vocabulary. None of that is state.
+
+So there was nothing to migrate, and inventing a table to look thorough would
+have created exactly the thing the milestone is careful about: a durable record
+implying a guarantee the code does not make.
+
+### 14.2 What E-7A wrote to dev
+
+Nothing.
+
+| check | after E-7A |
+|---|---|
+| `acquisition_decisions` | **4 rows** — unchanged |
+| total dev fictional residue | **21 rows across nine tables** — unchanged |
+| `acquisition_call_queue` | **0 rows** — untouched, and not used by E-7A |
+| migrations applied | **none** |
+| production | **untouched — still no acquisition schema at all** |
+
+The proof (`node scripts/acquisition-dial-proof.js`) uses an **in-memory** store
+that dies with the process. It reads no `.env`, constructs no Supabase client,
+and cannot reach Postgres.
+
+### 14.3 The SQL E-7B WILL need — stated now so it can be reviewed before it is written
+
+Durable cross-process single-consumption is the one thing E-7A cannot honestly
+provide, and it is a hard requirement before any live provider. Two options,
+both additive:
+
+**Option A — a dedicated execution ledger (preferred).**
+
+```
+create table public.acquisition_dial_executions (
+  id                uuid primary key default gen_random_uuid(),
+  authorisation_id  text not null unique,        -- THE invariant
+  execution_id      text not null unique,
+  prospect_id       text not null references public.acquisition_prospects (prospect_id),
+  e164              text not null check (e164 ~ '^\+61[0-9]{6,12}$'),
+  provider          text not null,
+  provider_live     boolean not null,
+  status            text not null,
+  provider_ref      text,
+  authorised_at     timestamptz not null,
+  executed_at       timestamptz not null default now()
+);
+```
+
+**Option B — extend `acquisition_call_queue`** with `dispatched_at`,
+`execution_id` and `authorisation_id`, plus a unique index on
+`authorisation_id`. Cheaper, but it overloads a table that currently models
+*reservations*, and a lease is not a dispatch.
+
+**The invariant either way:** the second dispatch of one authorisation is refused
+by a **unique-constraint violation in the database**, not by application memory.
+Same shape as `laq3`'s `unique (prev_hash)` — a fork made structurally
+impossible rather than merely discouraged.
+
+**Neither option was written, applied, or approved in E-7A.** They are stated
+here so the schema conversation can happen before the code exists, not after.
+
+### 14.4 Also outstanding for E-7B
+
+A **durable kill switch**. Today the emergency stop is a context field a caller
+supplies; the executor re-reads an injected one immediately before the provider,
+which closes the window between minting and dispatch but still depends on the
+caller passing a reader in. Before a live call, the stop must be something the
+executor reads for itself and that no caller can decline to provide. Whether that
+is a row, a flag table or a campaign record is an open design question — and it
+is a **blocker on E-7B, not on E-7A**, because nothing can currently dial.
