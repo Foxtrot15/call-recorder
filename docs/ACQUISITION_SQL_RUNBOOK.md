@@ -6,8 +6,9 @@
 repository applies SQL, and a test asserts that — every step below is something
 a human runs by hand, and every step below was run by hand.
 
-**Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3 and LAQ4 are applied
-in, how each is verified, and what can and cannot be rolled back.
+**Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3, LAQ4 and LAQ5 are
+applied in, how each is verified, and what can and cannot be rolled back.
+**LAQ5 is written and applied nowhere** — see §15.
 
 > **There is no LAQ5.** Neither E-5 (durable founder batch approval) nor M8L
 > (durable duplicate resolution) required **any SQL** — every structure they need
@@ -1000,3 +1001,37 @@ caller passing a reader in. Before a live call, the stop must be something the
 executor reads for itself and that no caller can decline to provide. Whether that
 is a row, a flag table or a campaign record is an open design question — and it
 is a **blocker on E-7B, not on E-7A**, because nothing can currently dial.
+
+
+---
+
+## 15. LAQ5 — written, verified statically, APPLIED NOWHERE
+
+**`supabase/sql/laq5_create_dispatch_authority.sql`** and
+**`supabase/sql/verification/12_laq5_verify.sql`** exist as of 2026-08-11.
+
+| | state |
+|---|---|
+| dev | **NOT APPLIED** |
+| production | **NOT APPLIED** |
+| rows it would create on dev | **2** (one bootstrap `paused` state row, one dispatch claim if section 6 of the verification script is committed) |
+| `acquisition_decisions` | **unchanged at 4** — laq5 writes none |
+
+It creates two tables, two guard functions, two triggers, five indexes and one
+bootstrap row. Nothing existing is altered.
+
+**The two load-bearing constraints** are partial unique indexes on
+`(prospect_id)` and `(destination_e164)`, both `where resolved_at is null`.
+`test/acquisition-laq5-migration.test.js` fails the build if either disappears,
+or if either predicate is changed to something a provider result can flip.
+
+**Applying it does not enable calling.** The bootstrap row is `paused`, a test
+asserts the migration never writes `enabled` anywhere, and there is still no
+provider in the repository that declares itself `live`.
+
+**Until it is applied**, the durable claim throws against dev and the executor
+refuses with `dispatch_store_unavailable`. That is the correct direction to
+fail: no ledger means no dispatch.
+
+See [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md) for the full
+rationale, and §14.3 above for the superseded sketch it corrects.

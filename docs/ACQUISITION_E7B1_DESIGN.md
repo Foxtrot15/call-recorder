@@ -1,11 +1,23 @@
 # E-7B1 — Durable dispatch authority and durable emergency stop
 
-**Status of this document:** DESIGN READY — **SQL AWAITING FOUNDER APPROVAL.**
-Revision 2, 2026-08-11 (Phase 1A), after founder review of revision 1.
+**Status of this document:** **IMPLEMENTED OFFLINE — LAQ5 NOT APPLIED.**
+Revision 3, 2026-08-11 (Phase 2A), after founder approval of revision 2.
 
-**Nothing in this document has been applied.** No `.sql` file exists for it, no
-migration has been run, no dev row has been written, and no live provider has
+**The code exists and its tests are green. The SQL exists and has been applied
+nowhere.** `supabase/sql/laq5_create_dispatch_authority.sql` is written and
+statically verified; it has **not** been run against dev or production. Dev
+still holds **21** rows and neither laq5 table exists there. No live provider has
 been built. E-7 remains **OPEN**.
+
+| piece | state |
+|---|---|
+| `dispatchId` + `batchKey` on the slip | **implemented**, tested |
+| `acquisition-dispatch-store.js` (atomic claim) | **implemented**, tested |
+| `acquisition-calling-state.js` (durable stop) | **implemented**, tested |
+| `acquisition-dispatch-resolution.js` (outcome→release) | **implemented**, tested |
+| executor wiring (preflight → claim → recheck) | **implemented**, tested |
+| `laq5` migration + `12_laq5_verify.sql` | **written, NOT APPLIED** |
+| live provider | **absent by design** |
 
 **Owns (source of truth for):** the proposed durable schema that must exist
 before any live acquisition provider can be added, and why.
@@ -727,15 +739,45 @@ five indexes, one bootstrap row.
 
 ---
 
-## 18. Status
+## 18. Status after Phase 2A
 
 | item | status |
 |---|---|
-| **E-7A** | **COMPLETE** — pushed, provider-disabled seam |
-| **E-7B1** | **DESIGN READY (rev 2) — SQL AWAITING FOUNDER APPROVAL** |
+| **E-7A** | **COMPLETE** — pushed |
+| **E-7B1** | **IMPLEMENTED OFFLINE — LAQ5 NOT APPLIED** |
 | **E-7** | **OPEN** |
 | **DNCR-1** | **OPEN** — application submitted; activation, first real wash and attestation outstanding |
 | **A-L2** | **OPEN** — authoritative holiday data |
 
-No SQL file created. Nothing applied. No dev row written. No live provider
-exists. Nothing contacted.
+### 18.1 What is true right now
+
+- `dispatchId` (random UUID) and `batchKey` are on every genuine slip.
+- The executor reads the durable stop **twice** — once before spending anything,
+  once immediately before the provider — and `killSwitch` is a **forbidden**
+  caller option, so code still passing one is refused rather than ignored.
+- The claim is one INSERT the database arbitrates. Two workers with their own
+  authorisations for one business: one claims, one conflicts. Two prospects on
+  one handset: same.
+- **No provider result can set `resolved_at`.** `recordProviderResult` has no
+  such parameter, and a ratchet asserts it never gains one.
+- Outcome first, lock second. **Lock released with outcome missing is
+  unreachable.** No RPC was added.
+- **1463 acquisition tests green**, including 45 E-7B1 proofs and 37 static
+  proofs about the migration text.
+
+### 18.2 What is NOT true yet
+
+- **LAQ5 has not been applied.** Against dev today the durable claim throws and
+  `dispatch_store_unavailable` blocks — the correct direction to fail, and the
+  reason nothing can dispatch until a founder applies it.
+- **No live provider exists.** Enabling the durable state opens one of two locks;
+  the second stays shut because every constructible provider reports
+  `live: false`.
+- **DNCR-1 is unchanged.** No real wash, no attestation.
+
+### 18.3 The two locks, stated plainly
+
+A call needs **`state = enabled`** *and* **a provider with `live: true`**.
+Phase 2A built neither an enable path into production nor a live adapter, so
+**live acquisition calling remains impossible by construction**, exactly as it
+was before this milestone.

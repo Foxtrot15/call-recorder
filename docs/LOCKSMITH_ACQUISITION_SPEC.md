@@ -3449,3 +3449,114 @@ is still 4 rows and dev's fictional residue is still 21.
   because the slip asserts the world has not changed, and the world can change.
 - **The seam has never run against a real provider**, by design. Everything
   known about its behaviour under a live adapter is inference.
+
+
+---
+
+## 48. E-7B1 — durable dispatch authority and a durable emergency stop
+
+**Status: IMPLEMENTED OFFLINE. LAQ5 WRITTEN, APPLIED NOWHERE. E-7 remains OPEN.**
+
+> Authoritative status: [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md).
+> Full design and the exact SQL: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md).
+
+### 48.1 What E-7A left open, and why it mattered
+
+E-7A said its single-consumption guarantee was a `WeakSet` in one module in one
+process, and that it was safe only because no live provider existed. E-7B1 closes
+that, and two design reviews changed the answer twice before any code was written.
+
+### 48.2 The identity had to change first
+
+`authorisationId` is `sha256(prospectId|e164|authorisedAt|decision)`. Two
+**genuinely distinct** authorisations of one business at the same millisecond
+produce the **same value** — measured, and asserted by E-7A own suite as a
+feature, because it makes proof transcripts comparable. A colliding key cannot
+arbitrate a claim: the second legitimate authorisation would be refused as a
+replay of the first.
+
+So every genuine slip now carries **`dispatchId`**, a `crypto.randomUUID()`
+derived from nothing, alongside the unchanged fingerprint. It is **not a bearer
+credential** — execution still requires the object the module-private WeakSet
+gates, and knowing a dispatchId lets somebody burn an authorisation, never place
+a call.
+
+The slip also carries **`batchKey`**, taken from the durable approval, which is
+why `batch_key` is `NOT NULL`: no authorised decision exists without one, and
+the mint throws rather than produce a slip a NOT NULL column would later reject.
+
+### 48.3 Two locks, because one is not enough
+
+```
+unique (prospect_id)      where resolved_at is null
+unique (destination_e164) where resolved_at is null
+```
+
+The first stops two workers each minting their own authorisation for one
+business — which the attempt policy cannot catch, because
+`minDaysBetweenAttempts` reads `acquisition_contact_outcomes` and neither
+worker has recorded an outcome yet.
+
+The second stops the same handset being rung via two prospect rows.
+`acquisition_prospect_phones` is `unique (prospect_id, raw)`, stores the number
+*as published*, and has **no normalised e164 column at all**; `resolveDuplicates`
+only compares the records it is handed. Two fictional locksmiths sharing one
+number were **both measured as authorised** to it. This index is the only place
+in the schema where a normalised E.164 carries a uniqueness rule.
+
+It intentionally blocks two genuinely separate businesses on a shared answering
+service from simultaneous unresolved dispatches. Accepted for the pilot: the
+person picking up is the same person.
+
+### 48.4 `resolved_at`, and why provider completion is not it
+
+> **`resolved_at` is set only when the business-level question — did we contact
+> this business, and what happened — has a durable answer the M8J attempt policy
+> can take over from.**
+
+Two ways, and only two: `outcome_recorded` and `operator_closed`.
+`recordProviderResult` has **no such parameter**, and a ratchet asserts it never
+gains one. A provider that accepted, refused, threw or vanished writes a status
+and releases **nothing**.
+
+### 48.5 The executor ordering
+
+```
+identity -> expiry -> DURABLE STOP (preflight) -> in-process claim
+         -> DURABLE CLAIM -> DURABLE STOP (again) -> provider
+```
+
+The stop is read **twice**. A pause landing between the two reads stops the call
+and **leaves the dispatch claimed and unresolved** — releasing it automatically
+would mean a paused system quietly re-arming itself when unpaused.
+`killSwitch` is now a **forbidden** caller option: code still passing one is
+refused, because silently dropping it would look exactly like it being honoured.
+
+### 48.6 Outcome then lock, never the other way
+
+There are no cross-table transactions (`acquisition-durable.js:302`, since M8C).
+So the outcome is written first and the lock released second. A failed outcome
+leaves the lock held; a failed release leaves the lock held with the business
+properly accounted for. **Lock released with outcome missing is unreachable.**
+**No RPC was added** — it would optimise away the failure mode that was
+deliberately chosen as acceptable.
+
+### 48.7 What is still impossible
+
+Applying LAQ5 does **not** enable calling. A call needs `state = enabled`
+**and** a provider with `live: true`. The bootstrap row is `paused`, a test
+asserts the migration never writes `enabled`, and every constructible provider
+reports `live: false`. **Both locks remain shut.**
+
+### 48.8 Honest limitations
+
+- **LAQ5 is applied nowhere.** Until it is, the durable claim throws and
+  `dispatch_store_unavailable` blocks — the correct direction to fail.
+- **The in-memory store MODELS laq5 rather than substituting for it.** The static
+  proofs that the real indexes exist and are predicated on `resolved_at` live in
+  `test/acquisition-laq5-migration.test.js`; neither file is sufficient alone.
+- **Nothing has run against real Postgres.** Every concurrency guarantee here is
+  proven against a model plus the migration text, not against a database.
+- **A resolved dispatch is releasable only by a human or an outcome**, so an
+  abandoned dispatch holds a business until somebody acts. That is intended, and
+  it is real operational work.

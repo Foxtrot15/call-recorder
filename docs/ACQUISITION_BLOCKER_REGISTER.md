@@ -1,8 +1,10 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-11**, after **E-7A**
-built the **provider-disabled dial execution seam** (§10) — **no SQL, no network,
-no live provider, and E-7 still OPEN**. Before that, on 2026-08-10: **M8L** closed
+**Status of this document:** LIVE. Last recomputed **2026-08-11**, after **E-7B1**
+implemented **durable dispatch authority and a durable emergency stop, OFFLINE**
+— **LAQ5 is written and APPLIED NOWHERE**, dev is unchanged at 21 rows, there is
+still **no live provider**, and **E-7 remains OPEN**. Earlier that day **E-7A**
+built the provider-disabled dial execution seam (§10). Before that, on 2026-08-10: **M8L** closed
 the caller-supplied duplicate-resolution gap, **E-5** closed durable founder batch
 approval — **neither needed SQL** — the founder approved the attempt policy
 (**A-L6 / A-L7 / A-L8 closed**, approval `AL6-AL7-AL8-2026-08-10`), and **M8M**
@@ -104,7 +106,7 @@ SQL was required to close A-L8.**
 | ~~**E-5**~~ | Durable batch approval | **CLOSED in E-5, offline — no SQL required.** A founder approval is now an append-only row in `acquisition_decisions` (`entity_type: 'batch'`, which the laq1 CHECK has admitted since it was written), keyed by `ba_<membershipHash>` — an identity derived from the membership itself. `acquisition-authorisation` destructures `context.batch` off the caller's context and **discards** it; the approval is read from the store or it does not exist. Proven across two genuinely separate OS processes, 9/9 and 26/26, **zero database residue**. See §5. |
 | ~~**M8L**~~ | Durable duplicate resolution | **CLOSED — no SQL.** `context.duplicateResolution` is no longer authority anywhere a call can be decided. The M8E gate destructures it off the caller's context and reads the **M8H review decision** instead — the same rows a human already wrote. Proven across two separate OS processes, 13/13 and 22/22, **zero database residue**. See §8. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
-| **E-7B1** | Durable dispatch authority + durable emergency stop | **DESIGN READY (rev 2) — SQL AWAITING FOUNDER APPROVAL.** No `.sql` file exists, nothing applied, no dev row written. Two tables proposed (`acquisition_dial_executions`, `acquisition_calling_state`). Rev 1 corrected runbook §14.3 (`authorisation_id` is a derived hash that legitimately collides). **Rev 2 corrected rev 1 twice more:** the lock predicate is `resolved_at`, meaning a durable *business* outcome — **provider completion never releases it** — and a per-prospect lock alone is **insufficient**, because two prospects can hold the same number and be authorised simultaneously (measured), so an unresolved-**destination** index is required too. Full design and exact SQL: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). **After that migration, calling is still `paused` by default and no live provider exists.** |
+| **E-7B1** | Durable dispatch authority + durable emergency stop | **IMPLEMENTED OFFLINE — LAQ5 WRITTEN, NOT APPLIED.** `dispatchId` (random UUID) and `batchKey` now travel on every genuine slip; the atomic claim is one INSERT the database arbitrates; the emergency stop is read from the store **twice** per dispatch and `killSwitch` is a forbidden caller option. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator. `supabase/sql/laq5_create_dispatch_authority.sql` and `verification/12_laq5_verify.sql` exist and have been **applied nowhere**; dev is unchanged at 21 rows and neither table exists there. Until it is applied the durable claim fails and `dispatch_store_unavailable` blocks, which is the correct direction. Design and exact SQL: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **PARTIAL — E-7A COMPLETE, LIVE PROVIDER ABSENT BY DESIGN.** The execution **seam** is built, provider-disabled: `acquisition-dial-execution.js` is the only thing that may consume a slip, the default provider **refuses**, and the only other provider is an offline fake. **No real provider adapter exists, no network path exists, and no live call is possible.** E-7 does **not** close until a later founder-authorised milestone (**E-7B**) connects a real provider after DNCR operational readiness. See §10. |
 
 ---
