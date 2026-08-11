@@ -61,6 +61,12 @@ const TABLES = Object.freeze({
   prospectPhones: "acquisition_prospect_phones",
   evidence: "acquisition_evidence",
   decisions: "acquisition_decisions",
+  // laq5, WRITTEN BUT NOT APPLIED ANYWHERE (E-7B1). Against a database without
+  // it these throw — which is exactly right for both tables. A missing dispatch
+  // ledger must read as "we cannot claim", never as "nothing is in flight"; and
+  // a missing calling-state row must read as BLOCK, never as permission.
+  dialExecutions: "acquisition_dial_executions",
+  callingState: "acquisition_calling_state",
 });
 
 // The migration that creates all three.
@@ -288,6 +294,12 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
   const evidence = seed && Array.isArray(seed.evidence) ? [...seed.evidence] : [];
   const decisions = seed && Array.isArray(seed.decisions) ? [...seed.decisions] : [];
   const washes = seed && Array.isArray(seed.washes) ? [...seed.washes] : [];
+  // E-7B1. Dispatch claims, and the durable emergency stop.
+  const dialExecutions = seed && Array.isArray(seed.dialExecutions) ? [...seed.dialExecutions] : [];
+  // NULL, not 'paused' — an unbootstrapped store models a database where laq5
+  // has not run, and the reader must BLOCK on absence rather than read it as
+  // permission. A test that wants calling permitted has to say so explicitly.
+  let callingState = seed && seed.callingState ? { ...seed.callingState } : null;
   const requests = new Map(seed && seed.requests ? Object.entries(seed.requests) : []);
 
   const store = {
@@ -558,6 +570,118 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
       return frozenCopy(outcomes[outcomes.length - 1]);
     },
 
+    // ── Dial executions (E-7B1 / laq5) ────────────────────────────
+    //
+    // THIS IS A MODEL OF THE DATABASE, NOT A SUBSTITUTE FOR IT. The two
+    // uniqueness rules below exist to make the in-memory store behave the way
+    // Postgres will, so a test can exercise ALREADY_CLAIMED and CONFLICT
+    // without a database. Production safety comes from laq5's partial unique
+    // indexes; if these two checks and those two indexes ever disagree, the
+    // indexes are right.
+    //
+    // The errors are shaped like PostgREST's — code 23505 and the constraint
+    // name in the message — because that is what acquisition-dispatch-store
+    // matches on, and a fake that reports failure differently would let a real
+    // mapping bug pass every test.
+    async appendDialExecution(row) {
+      const dup = (message, constraint) => {
+        const err = new Error(`duplicate key value violates unique constraint "${constraint}" — ${message}`);
+        err.code = "23505";
+        err.constraint = constraint;
+        err.details = `Key (${constraint}) already exists.`;
+        return err;
+      };
+
+      if (dialExecutions.some((d) => d.dispatchId === row.dispatchId)) {
+        throw dup("this authorisation was already claimed", "acquisition_dial_executions_pkey");
+      }
+      if (dialExecutions.some((d) => d.prospectId === row.prospectId && !d.resolvedAt)) {
+        throw dup("another unresolved dispatch holds this prospect", "idx_acq_dial_exec_unresolved_prospect");
+      }
+      if (dialExecutions.some((d) => d.destinationE164 === row.destinationE164 && !d.resolvedAt)) {
+        throw dup("another unresolved dispatch holds this destination", "idx_acq_dial_exec_unresolved_destination");
+      }
+
+      dialExecutions.push({
+        providerStatus: "pending",
+        submittedAt: null,
+        providerRef: null,
+        errorCode: null,
+        resolvedAt: null,
+        resolution: null,
+        resolvedBy: null,
+        resolutionNote: null,
+        ...row,
+      });
+      return frozenCopy(dialExecutions[dialExecutions.length - 1]);
+    },
+
+    /**
+     * The laq5 trigger, modelled: identity immutable, resolution terminal,
+     * provider status forward-only, no delete anywhere in the contract.
+     */
+    async updateDialExecution(dispatchId, patch) {
+      const row = dialExecutions.find((d) => d.dispatchId === dispatchId);
+      if (!row) throw new Error(`No dispatch ${dispatchId} exists.`);
+
+      for (const frozen of ["dispatchId", "authorisationId", "prospectId", "destinationE164", "batchKey", "authorisedAt", "claimedAt", "claimedBy"]) {
+        if (frozen in patch && patch[frozen] !== row[frozen]) {
+          throw new Error("acquisition_dial_executions identity is immutable");
+        }
+      }
+      if (row.resolvedAt) {
+        throw new Error(`this dispatch was resolved at ${row.resolvedAt} and cannot be reopened`);
+      }
+      if ("providerStatus" in patch && row.providerStatus !== "pending" && patch.providerStatus !== row.providerStatus) {
+        throw new Error(`provider status is already terminal (${row.providerStatus})`);
+      }
+      if (("resolvedAt" in patch) !== ("resolution" in patch)) {
+        throw new Error("a resolution must set resolvedAt, resolution and resolvedBy together");
+      }
+      Object.assign(row, patch);
+      return frozenCopy(row);
+    },
+
+    async listDialExecutions({ prospectId = null, unresolvedOnly = false } = {}) {
+      return dialExecutions
+        .filter((d) => (prospectId ? d.prospectId === prospectId : true))
+        .filter((d) => (unresolvedOnly ? !d.resolvedAt : true))
+        .map(frozenCopy);
+    },
+
+    // ── Calling state (E-7B1 / laq5) ──────────────────────────────
+    //
+    // A MISSING ROW IS NOT AN EMPTY ANSWER. `callingState` starts null here on
+    // purpose: an in-memory store that has never been bootstrapped models a
+    // database where the migration has not run, and the reader must BLOCK on
+    // it rather than read absence as permission.
+    async readCallingState() {
+      return callingState ? frozenCopy(callingState) : null;
+    },
+
+    /**
+     * Compare-and-set on `revision`, which is how laq5's trigger behaves and
+     * how two operators racing to pause cannot silently overwrite each other.
+     */
+    async writeCallingState(next, { expectedRevision = null } = {}) {
+      if (callingState && expectedRevision !== null && callingState.revision !== expectedRevision) {
+        const err = new Error(`calling state has moved on (expected revision ${expectedRevision}, found ${callingState.revision})`);
+        err.code = "REVISION_CONFLICT";
+        throw err;
+      }
+      if (callingState && next.revision !== callingState.revision + 1) {
+        throw new Error(`calling state revision must increment by exactly one (was ${callingState.revision}, got ${next.revision})`);
+      }
+      if (!String(next.changedBy || "").trim() || !String(next.reason || "").trim()) {
+        throw new Error("a calling state change must name who made it and why");
+      }
+      if (!["enabled", "paused"].includes(next.state)) {
+        throw new Error(`"${next.state}" is not a calling state`);
+      }
+      callingState = { scope: "global", ...next };
+      return frozenCopy(callingState);
+    },
+
     /**
      * Everything, so a test can hand the same state to a freshly built set of
      * services. This is the seam the restart proof turns on: it is what a
@@ -640,6 +764,38 @@ const fromWashRow = (r) => ({
   batchRef: r.batch_ref,
   source: r.source,
   recordedAt: r.recorded_at,
+});
+
+// ── laq5 row mappers (E-7B1) ────────────────────────────────────────
+const fromDialExecutionRow = (r) => ({
+  dispatchId: r.dispatch_id,
+  authorisationId: r.authorisation_id,
+  prospectId: r.prospect_id,
+  destinationE164: r.destination_e164,
+  batchKey: r.batch_key,
+  authorisedAt: r.authorised_at,
+  claimedAt: r.claimed_at,
+  claimedBy: r.claimed_by,
+  provider: r.provider,
+  providerLive: r.provider_live === true,
+  providerStatus: r.provider_status,
+  submittedAt: r.submitted_at,
+  providerRef: r.provider_ref,
+  errorCode: r.error_code,
+  resolvedAt: r.resolved_at,
+  resolution: r.resolution,
+  resolvedBy: r.resolved_by,
+  resolutionNote: r.resolution_note,
+  createdAt: r.created_at,
+});
+
+const fromCallingStateRow = (r) => ({
+  scope: r.scope,
+  state: r.state,
+  revision: r.revision,
+  changedBy: r.changed_by,
+  changedAt: r.changed_at,
+  reason: r.reason,
 });
 
 function fail(table, verb, error) {
@@ -1384,6 +1540,108 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
       const { data, error } = await db().from(TABLES.outcomes).insert(toOutcomeRow(row)).select().single();
       if (error) fail(TABLES.outcomes, "insert", error);
       return fromOutcomeRow(data);
+    },
+
+    // ── Dial executions and calling state (E-7B1 / laq5) ──
+    //
+    // REQUIRES laq5, which is written and NOT APPLIED anywhere.
+    //
+    // The insert below is THE arbitration. It is one statement, and the error
+    // it may return is the answer — `fail()` is deliberately NOT used, because
+    // it would wrap the PostgREST error and lose the constraint name that
+    // tells a replay apart from a lost race. The raw error is thrown so
+    // acquisition-dispatch-store can read `code` and `constraint` off it.
+    async appendDialExecution(row) {
+      const { data, error } = await db()
+        .from(TABLES.dialExecutions)
+        .insert({
+          dispatch_id: row.dispatchId,
+          authorisation_id: row.authorisationId,
+          prospect_id: row.prospectId,
+          destination_e164: row.destinationE164,
+          batch_key: row.batchKey,
+          authorised_at: row.authorisedAt,
+          claimed_at: row.claimedAt,
+          claimed_by: row.claimedBy,
+          provider: row.provider,
+          provider_live: row.providerLive,
+          provider_status: row.providerStatus || "pending",
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      return fromDialExecutionRow(data);
+    },
+
+    async updateDialExecution(dispatchId, patch) {
+      const columns = {};
+      if ("providerStatus" in patch) columns.provider_status = patch.providerStatus;
+      if ("submittedAt" in patch) columns.submitted_at = patch.submittedAt;
+      if ("providerRef" in patch) columns.provider_ref = patch.providerRef;
+      if ("errorCode" in patch) columns.error_code = patch.errorCode;
+      if ("resolvedAt" in patch) columns.resolved_at = patch.resolvedAt;
+      if ("resolution" in patch) columns.resolution = patch.resolution;
+      if ("resolvedBy" in patch) columns.resolved_by = patch.resolvedBy;
+      if ("resolutionNote" in patch) columns.resolution_note = patch.resolutionNote;
+
+      const { data, error } = await db()
+        .from(TABLES.dialExecutions)
+        .update(columns)
+        .eq("dispatch_id", dispatchId)
+        .select()
+        .single();
+      if (error) fail(TABLES.dialExecutions, "update", error);
+      return fromDialExecutionRow(data);
+    },
+
+    async listDialExecutions({ prospectId = null, unresolvedOnly = false } = {}) {
+      let q = db().from(TABLES.dialExecutions).select("*");
+      if (prospectId) q = q.eq("prospect_id", prospectId);
+      if (unresolvedOnly) q = q.is("resolved_at", null);
+      const { data, error } = await q.order("claimed_at", { ascending: true });
+      if (error) fail(TABLES.dialExecutions, "read", error);
+      return (data || []).map(fromDialExecutionRow);
+    },
+
+    /**
+     * The emergency stop, read straight from the database.
+     *
+     * A missing row returns null and the reader BLOCKS on it. An unreadable
+     * table throws and the reader BLOCKS on that too. There is no third
+     * outcome, and neither of the two is permission.
+     */
+    async readCallingState() {
+      const { data, error } = await db()
+        .from(TABLES.callingState)
+        .select("*")
+        .eq("scope", "global")
+        .maybeSingle();
+      if (error) fail(TABLES.callingState, "read", error);
+      return data ? fromCallingStateRow(data) : null;
+    },
+
+    async writeCallingState(next, { expectedRevision = null } = {}) {
+      // Compare-and-set on revision, so two operators racing cannot silently
+      // overwrite one another — the same shape as the M8J lifecycle CAS.
+      let q = db()
+        .from(TABLES.callingState)
+        .update({
+          state: next.state,
+          revision: next.revision,
+          changed_by: next.changedBy,
+          reason: next.reason,
+        })
+        .eq("scope", "global");
+      if (expectedRevision !== null) q = q.eq("revision", expectedRevision);
+
+      const { data, error } = await q.select().maybeSingle();
+      if (error) fail(TABLES.callingState, "update", error);
+      if (!data) {
+        const err = new Error(`calling state has moved on (expected revision ${expectedRevision}) or no row exists`);
+        err.code = "REVISION_CONFLICT";
+        throw err;
+      }
+      return fromCallingStateRow(data);
     },
 
     // ── DNCR washes (M8K / E-3) ──
