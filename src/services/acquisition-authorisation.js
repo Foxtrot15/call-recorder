@@ -75,6 +75,8 @@
 //
 // Pure except for the store read. See test/acquisition-authorisation.test.js.
 
+const { createHash } = require("node:crypto");
+
 const { createEligibilityEngine, ELIGIBILITY_CODES, assessmentFingerprint } = require("./acquisition-eligibility");
 const { createSuppressionList } = require("./acquisition-suppression");
 const { assertStoreContract } = require("./acquisition-store");
@@ -129,10 +131,53 @@ const AUTHORISATION_CODES = Object.freeze({
  */
 const AUTHORISED_DIAL = Symbol("acquisition.authorisedDial");
 
+/**
+ * ── WHY THE BRAND IS NOT THE AUTHENTICITY MODEL (E-7A) ──────────────
+ *
+ * `AUTHORISED_DIAL` is exported, and a branded property is copied by object
+ * spread. Both were true from the day this file was written, and together they
+ * meant the brand proved less than the comment above it claimed:
+ *
+ *   { [AUTHORISED_DIAL]: true, e164 }   passed — the symbol is importable
+ *   { ...genuineSlip }                  passed — spread copies own symbols,
+ *                                       AND the copy is not frozen, so its
+ *                                       destination could then be rewritten
+ *
+ * Only JSON and structuredClone stripped it, because those drop symbols. So a
+ * caller could take a real slip for a number the gate cleared, clone it, point
+ * it at a different number, and hold something indistinguishable from
+ * permission. Nothing dialled, so nothing happened — but E-7A is the milestone
+ * that gives a slip somewhere to be spent, and it must not inherit that.
+ *
+ * IDENTITY, NOT SHAPE. A slip is genuine because it is THE OBJECT this module
+ * froze, not because it looks like one. The WeakSet holds no strong reference,
+ * so a slip nobody kept is collected normally; a slip that was copied is a
+ * different object and is simply not in the set.
+ *
+ * The brand stays, and `isAuthorisedDial` keeps its old meaning, because it is
+ * still a useful cheap check and callers depend on it. It is no longer the
+ * check that may authorise execution. See `isGenuineAuthorisedDial`.
+ */
+const MINTED = new WeakSet();
+
+/**
+ * A stable id for one authorisation, for correlation and audit only.
+ *
+ * NOT a capability. Holding the string authorises nothing — execution requires
+ * the object itself. It is derived rather than random so that a proof run and
+ * its transcript can be compared without a clock or an entropy source.
+ */
+function authorisationIdFor({ prospectId, e164, authorisedAt, decision }) {
+  const body = [prospectId || "", e164 || "", authorisedAt || "", decision || ""].join("|");
+  return `ad_${createHash("sha256").update(body).digest("hex").slice(0, 20)}`;
+}
+
 function mintAuthorisedDial({ prospectId, businessName, e164, authorisedAt, decision }) {
-  return Object.freeze({
+  const slip = Object.freeze({
     [AUTHORISED_DIAL]: true,
     kind: "authorised-dial",
+    /** Correlation only. See authorisationIdFor: it is not a bearer token. */
+    authorisationId: authorisationIdFor({ prospectId, e164, authorisedAt, decision }),
     prospectId,
     businessName,
     /** The number the gate cleared. Whatever dials must use THIS one. */
@@ -141,11 +186,32 @@ function mintAuthorisedDial({ prospectId, businessName, e164, authorisedAt, deci
     decision,
     note: "Permission to attempt one call, as at authorisedAt. It expires the moment anything changes; re-authorise rather than storing this.",
   });
+  MINTED.add(slip);
+  return slip;
 }
 
-/** True only for a slip this module minted. Nothing else can fake it. */
+/**
+ * The BRAND check. True for a slip this module minted — and also for a copy of
+ * one, because a copy carries the symbol. Cheap, and adequate for reporting.
+ *
+ * Do not use it to decide whether something may be executed. Use
+ * `isGenuineAuthorisedDial`.
+ */
 function isAuthorisedDial(value) {
   return Boolean(value) && typeof value === "object" && value[AUTHORISED_DIAL] === true;
+}
+
+/**
+ * The IDENTITY check, and the only one execution may rely on (E-7A).
+ *
+ * True only for an object this module actually froze and registered. A forged
+ * lookalike, a spread clone, an Object.assign copy, a JSON round-trip and a
+ * structuredClone are all false — the first two because they are different
+ * objects, the last two because they are different objects that also lost the
+ * brand on the way.
+ */
+function isGenuineAuthorisedDial(value) {
+  return Boolean(value) && typeof value === "object" && MINTED.has(value);
 }
 
 /**
@@ -511,6 +577,7 @@ function createDialAuthoriser({ now, store, engineOptions = null, audit = null }
 module.exports = {
   createDialAuthoriser,
   isAuthorisedDial,
+  isGenuineAuthorisedDial,
   AUTHORISATION_CODES,
   AUTHORISED_DIAL,
 };
