@@ -32,9 +32,16 @@
 -- "WHERE (resolved_at IS NULL)" would be nodded past, and that predicate is the
 -- entire durable guarantee.
 --
+-- ── IT ASKS WHAT THINGS ARE, NOT HOW THEY ARE PRINTED ──────────────
+-- Catalogue text is RECONSTRUCTED, not stored. pg_get_triggerdef prints events
+-- in Postgres's canonical order regardless of what the migration said, which
+-- means matching its exact phrasing tests the printer, not the schema. Section
+-- 12 reads pg_trigger.tgtype bits instead, and keeps a deliberately
+-- order-independent textual check beside it as a second opinion.
+--
 -- ── WHAT IT CANNOT TELL YOU ────────────────────────────────────────
 -- That the guards WORK. This file proves the triggers, functions, indexes and
--- constraints are PRESENT and shaped correctly. Proving they refuse requires
+-- constraints are PRESENT, correctly shaped and ENABLED. Proving they refuse requires
 -- attempting refused writes -- section 6/7 of the full file, or the scripted
 -- proof in scripts/dev/acquisition-dispatch-proof/, which exercises the two
 -- partial unique indexes through the real dispatch-store code including a
@@ -294,16 +301,96 @@ select p.proname                        as function_name,
  order by p.proname;
 
 
--- -- 12. Both TRIGGERS exist, BEFORE UPDATE OR DELETE ----------------
+-- -- 12. Both TRIGGERS exist, BEFORE, ROW-level, on UPDATE and DELETE
+--
+--    ── WHY THIS READS CATALOGUE BITS AND NOT pg_get_triggerdef TEXT ──
+--    The first version of this check matched the definition text against
+--    '%BEFORE UPDATE OR DELETE%'. The migration says exactly that, so it looked
+--    right. It is wrong: pg_get_triggerdef RECONSTRUCTS the definition from the
+--    catalogue in Postgres's own canonical event order, which is
+--    "BEFORE DELETE OR UPDATE" -- INSERT, DELETE, UPDATE, TRUNCATE, by bit
+--    position, not by the order anybody typed. The check therefore reported
+--    **FAIL** against a perfectly correct schema on dev.
+--
+--    A verifier that cries wolf is worse than no verifier: the next person
+--    learns that this file's FAILs are usually its own fault, and by the time
+--    one is real, nobody is reading it. So the check now asks the catalogue
+--    what the trigger IS rather than how it happens to be printed.
+--
+--    tgtype bits, from the Postgres source (TRIGGER_TYPE_*):
+--      1 = ROW (else STATEMENT)   2 = BEFORE      4 = INSERT
+--      8 = DELETE                16 = UPDATE     32 = TRUNCATE   64 = INSTEAD OF
+--
 --    BEFORE, not AFTER: a guard that raises after the row has changed is a log
 --    entry, not a guard. Both UPDATE and DELETE, because immutability and
---    undeletability are different promises and each needs its own arm.
+--    undeletability are different promises and each needs its own arm. NOT
+--    INSERT and NOT TRUNCATE, because both guard bodies dereference OLD, which
+--    does not exist on an INSERT -- an INSERT arm would turn every dispatch
+--    claim into an error.
+--
+--    tgenabled is checked too, and the text form could never have shown it: a
+--    guard that has been administratively switched off still renders an
+--    identical pg_get_triggerdef while firing on nothing. The flag is the only
+--    place that shows. 'O' = enabled on origin, 'A' = always, 'R' = replica
+--    only (so NOT firing for our writes), 'D' = switched off.
+--
+--    (Phrased without the DDL that does it, deliberately: a repository-wide
+--    ratchet bans that phrase from every .sql and .js file, comments included,
+--    because a commented-out one can be uncommented. See
+--    test/acquisition-decision-log.test.js.)
 select rel.relname                      as table_name,
-       tg.tgname                         as trigger_name,
-       pg_get_triggerdef(tg.oid)         as definition,
-       case when pg_get_triggerdef(tg.oid) like '%BEFORE UPDATE OR DELETE%'
-             and pg_get_triggerdef(tg.oid) like '%FOR EACH ROW%'
+       tg.tgname                        as trigger_name,
+       case when (tg.tgtype::int &  2) <> 0 then 'BEFORE'
+            when (tg.tgtype::int & 64) <> 0 then 'INSTEAD OF'
+            else 'AFTER' end            as timing,
+       case when (tg.tgtype::int &  1) <> 0 then 'ROW' else 'STATEMENT' end as level,
+       (tg.tgtype::int &  4) <> 0       as on_insert,
+       (tg.tgtype::int &  8) <> 0       as on_delete,
+       (tg.tgtype::int & 16) <> 0       as on_update,
+       (tg.tgtype::int & 32) <> 0       as on_truncate,
+       tg.tgenabled                     as enabled_flag,
+       p.proname                        as guard_function,
+       pg_get_triggerdef(tg.oid)        as definition_for_the_reader,
+       case when (tg.tgtype::int &  2) <> 0        -- BEFORE
+             and (tg.tgtype::int &  1) <> 0        -- FOR EACH ROW
+             and (tg.tgtype::int &  8) <> 0        -- fires on DELETE
+             and (tg.tgtype::int & 16) <> 0        -- fires on UPDATE
+             and (tg.tgtype::int &  4)  = 0        -- NOT on INSERT
+             and (tg.tgtype::int & 32)  = 0        -- NOT on TRUNCATE
+             and tg.tgenabled in ('O','A')         -- actually fires
+             and p.proname = case rel.relname
+                               when 'acquisition_dial_executions' then 'acquisition_dial_exec_guard'
+                               when 'acquisition_calling_state'   then 'acquisition_calling_state_guard'
+                             end
             then 'PASS' else '**FAIL**' end as verdict
+  from pg_trigger tg
+  join pg_class rel on rel.oid = tg.tgrelid
+  join pg_namespace n on n.oid = rel.relnamespace
+  join pg_proc p on p.oid = tg.tgfoid
+ where n.nspname = 'public'
+   and rel.relname in ('acquisition_dial_executions','acquisition_calling_state')
+   and not tg.tgisinternal
+ order by rel.relname, tg.tgname;
+
+
+--    TEXTUAL CROSS-CHECK, deliberately ORDER-INDEPENDENT.
+--
+--    Kept as a second opinion for a reader who trusts what they can see over
+--    bit arithmetic. It tests each token SEPARATELY and never as a phrase, so
+--    "BEFORE DELETE OR UPDATE" and "BEFORE UPDATE OR DELETE" both pass -- which
+--    is the whole point, because which one Postgres prints is not a property of
+--    this schema.
+--
+--    It is the WEAKER check and is not in the roll-up: it cannot see tgenabled,
+--    and 'BEFORE' anywhere in the string satisfies it.
+select rel.relname                      as table_name,
+       tg.tgname                        as trigger_name,
+       pg_get_triggerdef(tg.oid)        as definition,
+       case when pg_get_triggerdef(tg.oid) ilike '%BEFORE%'
+             and pg_get_triggerdef(tg.oid) ilike '%DELETE%'
+             and pg_get_triggerdef(tg.oid) ilike '%UPDATE%'
+             and pg_get_triggerdef(tg.oid) ilike '%FOR EACH ROW%'
+            then 'PASS' else '**FAIL**' end as verdict_textual
   from pg_trigger tg
   join pg_class rel on rel.oid = tg.tgrelid
   join pg_namespace n on n.oid = rel.relnamespace
@@ -462,12 +549,23 @@ with checks as (
              and p.proname in ('acquisition_dial_exec_guard',
                                'acquisition_calling_state_guard')) = 2
   union all
-  select 'guard triggers present, before update or delete',
+  select 'guard triggers: BEFORE, ROW, on UPDATE and DELETE, enabled',
          (select count(*) from pg_trigger tg
             join pg_class rel on rel.oid = tg.tgrelid
+            join pg_proc  p   on p.oid   = tg.tgfoid
            where rel.relname in ('acquisition_dial_executions','acquisition_calling_state')
              and not tg.tgisinternal
-             and pg_get_triggerdef(tg.oid) like '%BEFORE UPDATE OR DELETE%') = 2
+             and (tg.tgtype::int &  2) <> 0
+             and (tg.tgtype::int &  1) <> 0
+             and (tg.tgtype::int &  8) <> 0
+             and (tg.tgtype::int & 16) <> 0
+             and (tg.tgtype::int &  4)  = 0
+             and (tg.tgtype::int & 32)  = 0
+             and tg.tgenabled in ('O','A')
+             and p.proname = case rel.relname
+                               when 'acquisition_dial_executions' then 'acquisition_dial_exec_guard'
+                               when 'acquisition_calling_state'   then 'acquisition_calling_state_guard'
+                             end) = 2
   union all
   select 'calling state singleton',
          (select count(*) from pg_constraint con

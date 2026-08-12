@@ -50,6 +50,7 @@ function lexSql(sql) {
   const n = sql.length;
   let i = 0;
   let unterminated = false;
+  const literals = [];
 
   const emit = (s) => { out += s; cur += s; };
 
@@ -70,6 +71,7 @@ function lexSql(sql) {
       continue;
     }
     if (c === "'") {                                    // literal, '' escapes
+      const start = i;
       i += 1;
       let closed = false;
       while (i < n) {
@@ -78,6 +80,7 @@ function lexSql(sql) {
         i += 1;
       }
       if (!closed) unterminated = true;
+      literals.push(sql.slice(start + 1, closed ? i - 1 : i));
       emit(" <literal> ");
       continue;
     }
@@ -99,10 +102,32 @@ function lexSql(sql) {
     i += 1;
   }
   if (cur.trim()) statements.push(cur.trim());
-  return { sql: out, statements: statements.filter((s) => s.length > 0), unterminated };
+  return { sql: out, statements: statements.filter((s) => s.length > 0), unterminated, literals };
 }
 
-const { sql: SQL, statements, unterminated } = lexSql(RAW);
+const { sql: SQL, statements, unterminated, literals } = lexSql(RAW);
+
+/**
+ * The order-independent textual check from section 12, mirrored exactly.
+ *
+ *   ilike '%BEFORE%' and '%DELETE%' and '%UPDATE%' and '%FOR EACH ROW%'
+ *
+ * Each token tested SEPARATELY. If this ever goes back to matching a phrase,
+ * the regression tests below fail.
+ */
+const textualTriggerFallback = (def) =>
+  /before/i.test(def) && /delete/i.test(def) && /update/i.test(def) && /for each row/i.test(def);
+
+/** The tgtype-bit check from section 12, mirrored exactly. */
+const TG = { ROW: 1, BEFORE: 2, INSERT: 4, DELETE: 8, UPDATE: 16, TRUNCATE: 32, INSTEAD: 64 };
+const bitTriggerCheck = (tgtype, tgenabled = "O") =>
+  (tgtype & TG.BEFORE) !== 0 &&
+  (tgtype & TG.ROW) !== 0 &&
+  (tgtype & TG.DELETE) !== 0 &&
+  (tgtype & TG.UPDATE) !== 0 &&
+  (tgtype & TG.INSERT) === 0 &&
+  (tgtype & TG.TRUNCATE) === 0 &&
+  ["O", "A"].includes(tgenabled);
 
 // Every verb that writes, changes structure, changes session state, takes a
 // lock, or runs something this file cannot see the body of.
@@ -179,6 +204,83 @@ test("the read-only LAQ5 verification file", async (t) => {
   await t.test("still asserts the FK restricts deletes", () => {
     assert.match(RAW, /confdeltype/);
     assert.match(RAW, /'r'/);
+  });
+
+  // ── THE TRIGGER CHECK MUST NOT DEPEND ON EVENT ORDER ──────────────
+  //
+  // The regression this file exists to prevent. The original check matched
+  // '%BEFORE UPDATE OR DELETE%' -- the exact words the migration uses. But
+  // pg_get_triggerdef RECONSTRUCTS the definition from the catalogue in
+  // Postgres's canonical bit order, so live dev renders
+  // "BEFORE DELETE OR UPDATE" and the check reported **FAIL** against a
+  // schema that was completely correct.
+  //
+  // Both renderings below are real: the first is what dev actually returns,
+  // the second is what the migration source says.
+  const DEV_RENDERING = "CREATE TRIGGER acq_dial_exec_guard BEFORE DELETE OR UPDATE ON acquisition_dial_executions FOR EACH ROW EXECUTE FUNCTION acquisition_dial_exec_guard()";
+  const SOURCE_RENDERING = "CREATE TRIGGER acq_dial_exec_guard BEFORE UPDATE OR DELETE ON acquisition_dial_executions FOR EACH ROW EXECUTE FUNCTION acquisition_dial_exec_guard()";
+
+  await t.test("textual fallback accepts BOTH event orderings", () => {
+    assert.equal(textualTriggerFallback(DEV_RENDERING), true, "the rendering live dev returns must pass");
+    assert.equal(textualTriggerFallback(SOURCE_RENDERING), true, "the rendering the migration source uses must pass");
+  });
+
+  await t.test("textual fallback accepts the calling-state trigger in both orderings", () => {
+    const dev = "CREATE TRIGGER acq_calling_state_guard BEFORE DELETE OR UPDATE ON acquisition_calling_state FOR EACH ROW EXECUTE FUNCTION acquisition_calling_state_guard()";
+    const src = "CREATE TRIGGER acq_calling_state_guard BEFORE UPDATE OR DELETE ON acquisition_calling_state FOR EACH ROW EXECUTE FUNCTION acquisition_calling_state_guard()";
+    assert.equal(textualTriggerFallback(dev), true);
+    assert.equal(textualTriggerFallback(src), true);
+  });
+
+  await t.test("textual fallback still REJECTS genuinely wrong triggers", () => {
+    // Order-independent must not mean permissive.
+    assert.equal(textualTriggerFallback(DEV_RENDERING.replace("BEFORE", "AFTER")), false, "AFTER must fail");
+    assert.equal(textualTriggerFallback(DEV_RENDERING.replace("DELETE OR ", "")), false, "a missing DELETE arm must fail");
+    assert.equal(textualTriggerFallback(DEV_RENDERING.replace(" OR UPDATE", "")), false, "a missing UPDATE arm must fail");
+    assert.equal(textualTriggerFallback(DEV_RENDERING.replace("FOR EACH ROW", "FOR EACH STATEMENT")), false, "statement-level must fail");
+  });
+
+  await t.test("the tgtype bit check encodes the same semantics, order-free", () => {
+    const CORRECT = TG.BEFORE | TG.ROW | TG.DELETE | TG.UPDATE;      // 27
+    assert.equal(CORRECT, 27);
+    assert.equal(bitTriggerCheck(CORRECT), true, "BEFORE + ROW + DELETE + UPDATE must pass");
+
+    // Bits carry no ordering at all, which is the entire reason for using them:
+    // there is no such thing as a "DELETE before UPDATE" tgtype.
+    assert.equal(bitTriggerCheck(TG.UPDATE | TG.DELETE | TG.ROW | TG.BEFORE), true);
+
+    assert.equal(bitTriggerCheck(TG.ROW | TG.DELETE | TG.UPDATE), false, "AFTER must fail");
+    assert.equal(bitTriggerCheck(TG.BEFORE | TG.DELETE | TG.UPDATE), false, "statement-level must fail");
+    assert.equal(bitTriggerCheck(TG.BEFORE | TG.ROW | TG.UPDATE), false, "no DELETE arm must fail");
+    assert.equal(bitTriggerCheck(TG.BEFORE | TG.ROW | TG.DELETE), false, "no UPDATE arm must fail");
+    // Both guard bodies dereference OLD, which does not exist on an INSERT.
+    assert.equal(bitTriggerCheck(CORRECT | TG.INSERT), false, "an INSERT arm must fail");
+    assert.equal(bitTriggerCheck(CORRECT | TG.TRUNCATE), false, "a TRUNCATE arm must fail");
+    // The failure the text form could never see.
+    assert.equal(bitTriggerCheck(CORRECT, "D"), false, "a DISABLED trigger must fail");
+    assert.equal(bitTriggerCheck(CORRECT, "R"), false, "replica-only must fail — it does not fire for our writes");
+    assert.equal(bitTriggerCheck(CORRECT, "A"), true, "ALWAYS must pass");
+  });
+
+  await t.test("the SQL matches no trigger event PHRASE", () => {
+    // A matching PATTERN is a literal carrying a wildcard; a literal without
+    // one is a label being printed, and section 12's roll-up label legitimately
+    // reads "guard triggers: BEFORE, ROW, on UPDATE and DELETE, enabled".
+    // Naming what the check does is not the same as matching on it.
+    //
+    // Among patterns, any that names BEFORE together with both events is a
+    // phrase match, and phrase matches are the defect. '%BEFORE%', '%DELETE%'
+    // and '%UPDATE%' separately are fine.
+    const brittle = literals.filter(
+      (l) => l.includes("%") && /before/i.test(l) && /delete/i.test(l) && /update/i.test(l)
+    );
+    assert.deepEqual(brittle, [], `order-dependent trigger pattern(s): ${JSON.stringify(brittle)}`);
+  });
+
+  await t.test("the SQL reads trigger semantics from the catalogue", () => {
+    assert.match(RAW, /tgtype/, "the bit check must be present");
+    assert.match(RAW, /tgenabled/, "a disabled guard must be detectable");
+    assert.match(RAW, /tgfoid/, "the guard function must be verified");
   });
 
   // Sections 6 and 7 are identified by the fictional identifiers only they use.
