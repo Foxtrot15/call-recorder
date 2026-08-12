@@ -1,9 +1,11 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-11**, after **E-7B1**
-implemented **durable dispatch authority and a durable emergency stop, OFFLINE**
-— **LAQ5 is written and APPLIED NOWHERE**, dev is unchanged at 21 rows, there is
-still **no live provider**, and **E-7 remains OPEN**. Earlier that day **E-7A**
+**Status of this document:** LIVE. Last recomputed **2026-08-12**, after **LAQ5
+was applied to dev by hand** and **E-7B1's durable dispatch authority and
+durable emergency stop were proven against real Postgres** — including a genuine
+two-process race that Postgres, not Node, arbitrated. Dev is at **23 rows**,
+acquisition calling is **paused** and has never been anything else, there is
+still **no live provider**, and **E-7 remains OPEN**. On 2026-08-11 **E-7A**
 built the provider-disabled dial execution seam (§10). Before that, on 2026-08-10: **M8L** closed
 the caller-supplied duplicate-resolution gap, **E-5** closed durable founder batch
 approval — **neither needed SQL** — the founder approved the attempt policy
@@ -106,7 +108,7 @@ SQL was required to close A-L8.**
 | ~~**E-5**~~ | Durable batch approval | **CLOSED in E-5, offline — no SQL required.** A founder approval is now an append-only row in `acquisition_decisions` (`entity_type: 'batch'`, which the laq1 CHECK has admitted since it was written), keyed by `ba_<membershipHash>` — an identity derived from the membership itself. `acquisition-authorisation` destructures `context.batch` off the caller's context and **discards** it; the approval is read from the store or it does not exist. Proven across two genuinely separate OS processes, 9/9 and 26/26, **zero database residue**. See §5. |
 | ~~**M8L**~~ | Durable duplicate resolution | **CLOSED — no SQL.** `context.duplicateResolution` is no longer authority anywhere a call can be decided. The M8E gate destructures it off the caller's context and reads the **M8H review decision** instead — the same rows a human already wrote. Proven across two separate OS processes, 13/13 and 22/22, **zero database residue**. See §8. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
-| **E-7B1** | Durable dispatch authority + durable emergency stop | **IMPLEMENTED OFFLINE — LAQ5 WRITTEN, NOT APPLIED.** `dispatchId` (random UUID) and `batchKey` now travel on every genuine slip; the atomic claim is one INSERT the database arbitrates; the emergency stop is read from the store **twice** per dispatch and `killSwitch` is a forbidden caller option. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator. `supabase/sql/laq5_create_dispatch_authority.sql` and `verification/12_laq5_verify.sql` exist and have been **applied nowhere**; dev is unchanged at 21 rows and neither table exists there. Until it is applied the durable claim fails and `dispatch_store_unavailable` blocks, which is the correct direction. Design and exact SQL: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
+| ~~**E-7B1**~~ | Durable dispatch authority + durable emergency stop | **CLOSED ON DEV 2026-08-12 — LAQ5 applied by hand, proven against real Postgres.** `dispatchId` (random UUID) and `batchKey` travel on every genuine slip; the atomic claim is one INSERT **the database arbitrates**, and that was proven by **two separate OS processes** racing to claim one business on one handset — one claimed, one was refused naming the prospect lock. Replay, the prospect lock and the destination lock all refused as designed. The emergency stop is read from the store **twice** per dispatch, `killSwitch` is a forbidden caller option, and the executor refused a caller who supplied one. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator, and the proof row is still unresolved. Dev residue **21 → 23** (bootstrap state row + one fictional dispatch); decisions unchanged at 4, queue at 0, calling **paused**. **Production: not applied.** [Runbook §15](ACQUISITION_SQL_RUNBOOK.md), design: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **PARTIAL — E-7A COMPLETE, LIVE PROVIDER ABSENT BY DESIGN.** The execution **seam** is built, provider-disabled: `acquisition-dial-execution.js` is the only thing that may consume a slip, the default provider **refuses**, and the only other provider is an offline fake. **No real provider adapter exists, no network path exists, and no live call is possible.** E-7 does **not** close until a later founder-authorised milestone (**E-7B**) connects a real provider after DNCR operational readiness. See §10. |
 
 ---
@@ -119,10 +121,22 @@ SQL was required to close A-L8.**
 | `laq2_create_acquisition_queue.sql` | **applied** 2026-08-07 (M8D) | **not applied** |
 | `laq3_serialise_decision_chain.sql` | **applied** 2026-08-08 (M8I) | **not applied** |
 | `laq4_create_dncr_washes.sql` | **applied** 2026-08-10 (M8K) | **not applied** |
+| `laq5_create_dispatch_authority.sql` | **applied** 2026-08-12 (E-7B1) | **not applied** |
 
-Dev holds **21 fictional proof rows** across nine tables (M8D/M8E/M8G/M8H/M8I,
-plus M8K's one wash row). See [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md)
-§9 and §11.7.
+Dev holds **23 fictional proof rows** across eleven tables (M8D/M8E/M8G/M8H/M8I,
+M8K's one wash row, and E-7B1's two). See [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md)
+§9, §11.7 and §15.
+
+**E-7B1 added exactly two rows, and they are the only rows laq5 has produced.**
+One is the migration's own bootstrap: `acquisition_calling_state`, scope
+`global`, state **`paused`**, revision 1, `changed_by = 'laq5-migration'`. The
+other is `acquisition_dial_executions` dispatch
+`20e8681f-0c72-45f6-b4ea-484f6e0cc3c0`, claimed by the winner of the two-process
+race for fictional prospect `pr_3740207ebbc0a379910f` on fictional number
+`+61355509999`, provider `disabled`, `provider_live = false`. It is
+**permanently unresolved by design** — it holds both locks, and that is what
+makes the locks demonstrable afterwards. Neither row is evidence anybody was
+called; no provider was invoked at any point.
 
 **M8K added exactly one row**, and it is the only row laq4 has ever produced:
 `+61355509999`, `not_listed`, washed `2026-08-09T00:00:00Z`, attested by
@@ -282,7 +296,7 @@ Recomputed 2026-08-10, after the A-L6/A-L7/A-L8 founder approval.
 | 11 | Campaign / kill switch | 🟢 | 🟢 | Own precedence in gate and engine |
 | 12 | Founder batch approval | 🟠 | 🟢 | **E-5 closed.** Durable, restart-safe and proven across two OS processes. `context.batch` is discarded by the gate; the approval is read from `acquisition_decisions` or it does not exist. Membership-bound, so a compliance change does not fake staleness. **A-L9** is still open but is governance, not a defect |
 | 13 | Final M8E authorisation | 🟢 | 🟢 | Durable suppression **and** durable history; unforgeable slip; fails closed on either read |
-| 14 | Future dial request | 🔴 | 🔴 | **E-7 — still RED, and correctly so. E-7A built the seam; there is no live provider.** The executor exists, refuses everything that is not a genuine M8E slip, spends each slip once, and reaches an offline provider that is disabled by default. **Nothing here can call anybody.** Turns AMBER only when a real adapter lands under **E-7B** |
+| 14 | Future dial request | 🔴 | 🔴 | **E-7 — still RED, and correctly so. E-7A built the seam, E-7B1 made the dispatch durable on dev; there is still no live provider.** The executor refuses everything that is not a genuine M8E slip, spends each slip once — **now enforced by Postgres across processes, not by one process's memory** — reads a durable stop it cannot be handed, and reaches an offline provider that is disabled by default. **Nothing here can call anybody.** Turns AMBER only when a real adapter lands under **E-7B** |
 
 **Gate 6 moved AMBER → GREEN.** M8L closed it. The amber was never "we do not
 detect duplicates" — `acquisition-dedupe` has been careful since A2. It was that
@@ -328,8 +342,11 @@ dialler, so the gate does not move. What E-7A removed is the *engineering unknow
 2. **A-L2** — an authoritative holiday source. Has its own 2027-01-01 deadline,
    and until then the fixture covers the pilot period.
 3. **E-7B** — a real provider adapter behind the E-7A seam, and an explicitly
-   founder-authorised live proof. **E-7A is done**: the seam, its refusals, its
-   single-use rule and its ratchets are built and tested offline (§10).
+   founder-authorised live proof. **E-7A is done** (the seam, its refusals, its
+   single-use rule and its ratchets, §10) and **E-7B1 is done on dev** (durable
+   cross-process dispatch authority and a durable emergency stop, applied and
+   proven 2026-08-12). What is left on this item is **the adapter itself**, plus
+   applying laq1–laq5 to production, which has no acquisition schema at all.
 
 **M-5** is not on this path at all. **A-L10** is not on it either: a business
 that has never been called has no history for an uncounted-redial ceiling to
@@ -634,15 +651,18 @@ executions cannot both pass. Ten concurrent attempts produce one submission.
 A refusal still spends the slip: "at most one submission" is the invariant worth
 having, and un-spending on refusal would let a caller poll a disabled provider.
 
-> ### ⚠ THIS IS PROCESS-LOCAL, AND IT IS AN E-7A LIMITATION
+> ### ⚠ THIS WAS PROCESS-LOCAL — CLOSED ON DEV BY E-7B1, 2026-08-12
 >
-> Consumption lives in a `WeakSet` in one module in one process. **A second
-> process knows nothing about the first.** Durable cross-process single-use needs
-> a uniquely-constrained row, which needs SQL, which is **E-7B**.
+> As written in E-7A, consumption lived in a `WeakSet` in one module in one
+> process, and **a second process knew nothing about the first.** That is no
+> longer the only defence: **E-7B1's uniquely-constrained dispatch row is
+> applied to dev and proven**, and two genuinely separate OS processes racing
+> for one business produced one claim and one database refusal.
 >
-> It is safe today for exactly one reason: **no live provider exists**, so the
-> worst a double-spend can do is record a second fake submission. **It would not
-> be safe the day a real adapter lands.**
+> The in-process `WeakSet` remains, and remains process-local — it is now the
+> **cheap first refusal**, not the guarantee. The guarantee is the partial unique
+> index. **Production has no laq5 and therefore still has only the process-local
+> check**, so this warning stands in full for production.
 
 ### 10.6 TOCTOU and expiry
 
@@ -683,11 +703,15 @@ and M8E mints no slip while a stop is engaged. E-7A reads an injected
 system: no state is kept and the refusal reuses the engine's own
 `kill_switch_engaged`.
 
-**Known gap, recorded rather than papered over:** there is no *durable,
-authoritative* kill-switch source in this repository — the switch is a context
-field a caller supplies. Absent an injected reader, the only kill-switch
-authority is the one M8E applied, bounded by the 60-second expiry. **E-7B needs a
-durable stop that no caller can decline to pass in.**
+**That gap is closed on dev as of 2026-08-12.** When E-7A shipped there was no
+*durable, authoritative* kill-switch source and the switch was a context field a
+caller supplied. **E-7B1 replaced it**: `acquisition_calling_state` is a
+single-row durable stop the executor reads **itself**, twice per dispatch, and
+`killSwitch` is now a **forbidden** caller option — code still passing one is
+refused with `caller_override_rejected` rather than quietly ignored. Proven
+against dev: the bootstrap row reads `paused`, and a caller supplying
+`killSwitch: () => ({ engaged: false })` was refused. **Production still has no
+such row**, where an absent row reads as STOPPED.
 
 ### 10.10 Proof
 
@@ -703,18 +727,25 @@ ratchets and the live-call impossibility ratchet.
 
 ### 10.11 What E-7B still needs
 
-1. **Durable single-consumption** — the one thing E-7A genuinely cannot do
-   in-process. Needs SQL (see below).
-2. **A durable kill switch** the executor reads rather than is handed.
+1. ~~**Durable single-consumption**~~ — **DONE ON DEV (E-7B1, 2026-08-12).**
+   The partial unique index arbitrates, proven by a two-process race.
+   **Production: outstanding.**
+2. ~~**A durable kill switch** the executor reads rather than is handed~~ —
+   **DONE ON DEV (E-7B1, 2026-08-12).** **Production: outstanding.**
 3. **A real provider adapter**, marked live, which will deliberately fail the
    live-call ratchet until somebody updates it on purpose.
 4. **DNCR-1 operational readiness** — activation, a real wash, an attestation.
 5. **An explicitly founder-authorised live proof**, to one number, once.
 
-**The SQL E-7B will need, stated so it can be reviewed before it is written:** a
+**The SQL E-7A predicted, and what was actually built.** E-7A sketched "a
 uniquely-constrained dispatch record — either a new `acquisition_dial_executions`
 table with `unique (authorisation_id)`, or `acquisition_call_queue` gaining
-`dispatched_at` and `execution_id` with a partial unique index on `execution_id`.
-The invariant either way: **an INSERT that violates uniqueness is the second
-dispatch being refused by the database**, not by application memory. **None of
-this was written or applied in E-7A.**
+`dispatched_at` and `execution_id`". **LAQ5 took the first option and went
+further**: `unique (authorisation_id)` alone would have stopped one
+authorisation being spent twice, and nothing else. It would not have stopped two
+*different* authorisations for the same business, or two different businesses
+sharing one handset. So the load-bearing constraints are the two **partial**
+unique indexes on `(prospect_id)` and `(destination_e164)` `where resolved_at is
+null`. The invariant held either way: **an INSERT that violates uniqueness is
+the second dispatch being refused by the database**, not by application memory —
+and on 2026-08-12 that is exactly what two racing OS processes saw.

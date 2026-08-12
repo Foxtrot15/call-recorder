@@ -1,20 +1,22 @@
-# Acquisition SQL Runbook — applying LAQ1, LAQ2, LAQ3 (and, when approved, LAQ4) to dev
+# Acquisition SQL Runbook — applying LAQ1, LAQ2, LAQ3, LAQ4 and LAQ5 to dev
 
 **Status:** **APPLIED TO DEV** — LAQ1 + LAQ2 on 2026-08-07 (M8D), LAQ3 on
-2026-08-08 (M8I) and **LAQ4 on 2026-08-10 (M8K)**, against project ref
-`wvwemitmmsdytyutaqbm`. **NOT applied to production.** Nothing in this
-repository applies SQL, and a test asserts that — every step below is something
-a human runs by hand, and every step below was run by hand.
+2026-08-08 (M8I), **LAQ4 on 2026-08-10 (M8K)** and **LAQ5 on 2026-08-12
+(E-7B1)**, against project ref `wvwemitmmsdytyutaqbm`. **NOT applied to
+production.** Nothing in this repository applies SQL, and a test asserts that —
+every step below is something a human runs by hand, and every step below was run
+by hand.
 
 **Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3, LAQ4 and LAQ5 are
 applied in, how each is verified, and what can and cannot be rolled back.
-**LAQ5 is written and applied nowhere** — see §15.
+**LAQ5 is applied to dev and not to production** — see §15.
 
-> **There is no LAQ5.** Neither E-5 (durable founder batch approval) nor M8L
-> (durable duplicate resolution) required **any SQL** — every structure they need
-> was already created by LAQ1 and LAQ3, including an `entity_type` CHECK that has
-> admitted `'batch'` since it was written. Neither wrote **any row to dev**. See
-> **§12** and **§13**.
+> **The §12 and §13 heading below still reads "there is no LAQ5" in its own
+> section text. That was true of E-5 and M8L and is left standing as the
+> milestone snapshot it is.** LAQ5 exists because **E-7B1** needed it, not
+> because either of those did: neither E-5 (durable founder batch approval) nor
+> M8L (durable duplicate resolution) required **any SQL**, and neither wrote
+> **any row to dev**. See **§12**, **§13** and **§15**.
 
 > **LAQ4 is APPLIED TO DEV** (2026-08-10, by hand) **and NOT applied to
 > production.** Dev holds exactly one permanent fictional wash row from the
@@ -1005,33 +1007,77 @@ is a **blocker on E-7B, not on E-7A**, because nothing can currently dial.
 
 ---
 
-## 15. LAQ5 — written, verified statically, APPLIED NOWHERE
+## 15. LAQ5 — APPLIED TO DEV 2026-08-12, proven against real Postgres
 
-**`supabase/sql/laq5_create_dispatch_authority.sql`** and
-**`supabase/sql/verification/12_laq5_verify.sql`** exist as of 2026-08-11.
+**`supabase/sql/laq5_create_dispatch_authority.sql`** was applied by hand in the
+Supabase SQL editor on **2026-08-12**, against dev `wvwemitmmsdytyutaqbm`. The
+editor returned *Success. No rows returned.*
 
 | | state |
 |---|---|
-| dev | **NOT APPLIED** |
+| dev | **APPLIED** 2026-08-12 (E-7B1) |
 | production | **NOT APPLIED** |
-| rows it would create on dev | **2** (one bootstrap `paused` state row, one dispatch claim if section 6 of the verification script is committed) |
-| `acquisition_decisions` | **unchanged at 4** — laq5 writes none |
+| rows it created on dev | **1** — the bootstrap `global` / `paused` / revision 1 row, `changed_by = 'laq5-migration'` |
+| rows the scripted proof then added | **1** — the fictional unresolved dispatch claim, `20e8681f-0c72-45f6-b4ea-484f6e0cc3c0` |
+| dev fictional residue | **21 → 23**, across eleven tables |
+| `acquisition_decisions` | **unchanged at 4** — laq5 writes none, and the proof writes none |
+| `acquisition_call_queue` | **unchanged at 0** |
 
 It creates two tables, two guard functions, two triggers, five indexes and one
-bootstrap row. Nothing existing is altered.
+bootstrap row. Nothing existing was altered.
 
 **The two load-bearing constraints** are partial unique indexes on
 `(prospect_id)` and `(destination_e164)`, both `where resolved_at is null`.
 `test/acquisition-laq5-migration.test.js` fails the build if either disappears,
 or if either predicate is changed to something a provider result can flip.
+**Both are now proven behaviourally against dev**, not just statically: see
+§15.1.
 
-**Applying it does not enable calling.** The bootstrap row is `paused`, a test
+**Applying it did not enable calling.** The bootstrap row is `paused`, a test
 asserts the migration never writes `enabled` anywhere, and there is still no
-provider in the repository that declares itself `live`.
+provider in the repository that declares itself `live`. The proof re-read the
+state at the end of its run and it is still `paused`, still revision 1.
 
-**Until it is applied**, the durable claim throws against dev and the executor
-refuses with `dispatch_store_unavailable`. That is the correct direction to
-fail: no ledger means no dispatch.
+### 15.1 What the scripted proof established, and what it did not
+
+`scripts/dev/acquisition-dispatch-proof/` ran against dev on 2026-08-12 through
+the **actual `acquisition-dispatch-store` code the executor uses**.
+
+**Proven behaviourally against real Postgres:**
+
+| | |
+|---|---|
+| the bootstrap stop | read back as `paused`, revision 1, attributed — and reported as `acquisition_calling_paused`, a decision, not a read failure |
+| the executor while paused | refused a non-genuine slip (`authorisation_invalid`) and refused a caller-supplied `killSwitch` (`caller_override_rejected`); zero provider invocations |
+| **the genuine two-process race** | two OS processes (pids 16700 and 2092), two connections, no shared memory, both firing at one wall-clock instant at the same business on the same handset: **one CLAIMED, one CONFLICT (prospect)**, one row in the ledger |
+| T1 replay | same `dispatch_id` again → `ALREADY_CLAIMED` |
+| T2 prospect lock | same prospect, different dispatch, different number → `CONFLICT`, scope `prospect` |
+| T3 destination lock | different prospect, same number → `CONFLICT`, scope `destination` — the case a per-prospect lock cannot see |
+| the row after all of it | `resolved_at` null, `resolution` null, `provider_status` `pending`, still holding both locks |
+| census | 23 total, decisions 4, queue 0, calling still paused |
+
+**23 checks passed, 0 failed**, plus 6 in the race.
+
+**NOT proven against dev, and deliberately so:**
+
+- **T4** (an independent prospect on an independent number would succeed) is
+  proven **structurally** — both partial indexes were confirmed to hold nothing
+  matching it — rather than by writing, because a successful claim leaves a
+  second permanent row and only one is approved.
+- **The guard triggers** — identity immutability, no-DELETE, no-reopen, the
+  resolution/submission constraint pairs, and the calling-state tamper rules —
+  are covered by `test/acquisition-laq5-migration.test.js` against the migration
+  text and by the offline E-7B1 suite. Exercising them against dev needs the
+  writes in **section 6 and section 7** of the verification script, which were
+  **not run**: section 6 would commit a second permanent dispatch row, and
+  section 7's probes would mutate the approved residue if any of them
+  unexpectedly succeeded.
+- **Sections 1–5** of `verification/12_laq5_verify.sql` (columns, RLS, index
+  definitions, constraint and trigger definitions) are read-only introspection
+  over `information_schema` and `pg_catalog`. **PostgREST cannot reach either**,
+  so nothing in this repository can run them — they remain a **paste-by-hand**
+  step for a human who wants to see the index predicates with their own eyes.
+  The behavioural results above are what stands in for them today.
 
 See [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md) for the full
 rationale, and §14.3 above for the superseded sketch it corrects.

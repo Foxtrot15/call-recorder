@@ -739,12 +739,12 @@ five indexes, one bootstrap row.
 
 ---
 
-## 18. Status after Phase 2A
+## 18. Status after Phase 2B
 
 | item | status |
 |---|---|
 | **E-7A** | **COMPLETE** — pushed |
-| **E-7B1** | **IMPLEMENTED OFFLINE — LAQ5 NOT APPLIED** |
+| **E-7B1** | **COMPLETE ON DEV** — LAQ5 applied by hand 2026-08-12, proven against real Postgres. **Production: not applied** |
 | **E-7** | **OPEN** |
 | **DNCR-1** | **OPEN** — application submitted; activation, first real wash and attestation outstanding |
 | **A-L2** | **OPEN** — authoritative holiday data |
@@ -765,19 +765,51 @@ five indexes, one bootstrap row.
 - **1463 acquisition tests green**, including 45 E-7B1 proofs and 37 static
   proofs about the migration text.
 
+### 18.1b What Phase 2B added, against real dev Postgres
+
+- **LAQ5 is applied to dev** (2026-08-12, by hand — nothing here applies SQL).
+  The bootstrap row reads `global` / `paused` / revision 1 / `laq5-migration`.
+- **The race is no longer a claim about Node.** Two OS processes, pids 16700 and
+  2092, two connections, no shared memory, both busy-waiting to one wall-clock
+  instant against the same business on the same handset: **one CLAIMED, one
+  CONFLICT (prospect)**, one row. Postgres arbitrated.
+- **T1/T2/T3 refused as designed** — replay, the prospect lock and the
+  destination lock — through the real dispatch-store code, `23 passed, 0 failed`.
+- **The proof row is permanently unresolved**, holding both locks. No provider
+  result touched it, because none can.
+- **Dev residue 21 → 23.** Decisions still 4, queue still 0, calling still paused.
+- **One defect was found and fixed, in the PROOF, not the code under proof.**
+  The harness's store shim carried a hand-transcribed copy of the store contract
+  that had drifted — it named `getProspect`/`listProspects`, which the contract
+  does not have, and omitted `findRequest`, `loadProspect` and `findProspects`,
+  which it does. `assertStoreContract` threw, and every calling-state read came
+  back `acquisition_calling_state_unavailable`. **The system was behaving
+  correctly** — an unusable store must block — but a proof that fails for its
+  own reasons proves nothing, so the shim now derives the list from
+  `STORE_METHODS` and cannot drift again.
+
 ### 18.2 What is NOT true yet
 
-- **LAQ5 has not been applied.** Against dev today the durable claim throws and
-  `dispatch_store_unavailable` blocks — the correct direction to fail, and the
-  reason nothing can dispatch until a founder applies it.
-- **No live provider exists.** Enabling the durable state opens one of two locks;
-  the second stays shut because every constructible provider reports
-  `live: false`.
+- **Production has no laq5, and no acquisition schema at all.** Against
+  production the durable claim throws and `dispatch_store_unavailable` blocks —
+  the correct direction to fail.
+- **No live provider exists.** The durable state is one of two locks; the second
+  stays shut because every constructible provider reports `live: false`.
+  **Calling was never enabled** — the state row has been `paused` since creation
+  and its revision is still 1.
+- **The guard triggers are not exercised against dev.** Immutability, no-DELETE,
+  no-reopen and the calling-state tamper rules are proven against the migration
+  text (`test/acquisition-laq5-migration.test.js`) and offline. Sections 6 and 7
+  of the verification script, which would exercise them live, were **not run**:
+  section 6 commits a second permanent row, and section 7 would mutate the
+  approved residue if any probe unexpectedly succeeded.
 - **DNCR-1 is unchanged.** No real wash, no attestation.
 
 ### 18.3 The two locks, stated plainly
 
 A call needs **`state = enabled`** *and* **a provider with `live: true`**.
-Phase 2A built neither an enable path into production nor a live adapter, so
-**live acquisition calling remains impossible by construction**, exactly as it
-was before this milestone.
+Phase 2A built neither an enable path into production nor a live adapter, and
+**Phase 2B built neither either** — it applied the schema and left the state
+`paused`. **Live acquisition calling remains impossible by construction**,
+exactly as it was before this milestone. Applying laq5 made the first lock
+*real* rather than absent; it did not open it.

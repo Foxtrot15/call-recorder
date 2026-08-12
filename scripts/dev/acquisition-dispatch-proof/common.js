@@ -64,14 +64,17 @@ function makeClient() {
  * wrapping would throw that away.
  */
 function makeDispatchStore(db) {
-  const CONTRACT_STUBS = [
-    "listSuppressions", "appendSuppression", "lookupSuppression", "listLiveLeases",
-    "recordRequest", "listExpiredLeases", "listOutcomes", "appendOutcome",
-    "listWashes", "appendWash", "upsertProspect", "upsertProspectPhone",
-    "listProspectPhones", "appendEvidence", "listEvidence", "appendDecision",
-    "listDecisions", "readChainHead", "transitionProspectLifecycle", "latestWashFor",
-    "acquireLease", "releaseLease", "listProspects", "getProspect",
-  ];
+  // Taken FROM the contract rather than transcribed alongside it. A hand-kept
+  // copy of this list drifted once already — it named getProspect/listProspects,
+  // which the contract does not have, and omitted findRequest, loadProspect and
+  // findProspects, which it does. assertStoreContract then threw, and every
+  // calling-state read came back `acquisition_calling_state_unavailable`.
+  //
+  // That failure was the system behaving correctly — an unusable store must
+  // block — but it was the PROOF that was broken, not the code under proof, and
+  // a proof that fails for its own reasons proves nothing. Deriving the list
+  // removes the possibility.
+  const { STORE_METHODS } = require(path.join(__dirname, "..", "..", "..", "src/services/acquisition-store"));
 
   const store = {
     async appendDialExecution(row) {
@@ -134,7 +137,7 @@ function makeDispatchStore(db) {
   // The store contract asserts a full method list. These are never called on
   // this path; they exist so assertStoreContract passes without pretending the
   // proof has a whole store behind it.
-  for (const name of CONTRACT_STUBS) {
+  for (const name of STORE_METHODS) {
     if (!store[name]) {
       store[name] = async () => {
         throw new Error(`${name} is not part of the E-7B1 dispatch proof`);
