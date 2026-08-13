@@ -744,7 +744,7 @@ five indexes, one bootstrap row.
 | item | status |
 |---|---|
 | **E-7A** | **COMPLETE** — pushed |
-| **E-7B1** | **COMPLETE ON DEV** — LAQ5 applied by hand 2026-08-12, proven against real Postgres. **Production: not applied** |
+| **E-7B1** | **CLOSED as engineering on dev** — LAQ5 applied by hand 2026-08-12, proven against real Postgres, live schema structurally verified **14/14 PASS** 2026-08-13. **Production: not applied** |
 | **E-7** | **OPEN** |
 | **DNCR-1** | **OPEN** — application submitted; activation, first real wash and attestation outstanding |
 | **A-L2** | **OPEN** — authoritative holiday data |
@@ -797,10 +797,13 @@ five indexes, one bootstrap row.
   stays shut because every constructible provider reports `live: false`.
   **Calling was never enabled** — the state row has been `paused` since creation
   and its revision is still 1.
-- **The guard triggers are not exercised against dev.** Immutability, no-DELETE,
-  no-reopen and the calling-state tamper rules are proven against the migration
-  text (`test/acquisition-laq5-migration.test.js`) and offline. Sections 6 and 7
-  of the verification script, which would exercise them live, were **not run**:
+- **The guard triggers are not exercised against dev.** They are confirmed
+  present, BEFORE, ROW-level, covering UPDATE and DELETE, running their own
+  function and **enabled** (14/14 structural verification, 2026-08-13) — but
+  present is not the same as refuses. Immutability, no-DELETE, no-reopen and the
+  calling-state tamper rules are proven against the migration text
+  (`test/acquisition-laq5-migration.test.js`) and offline. Sections 6 and 7 of
+  the verification script, which would exercise them live, were **not run**:
   section 6 commits a second permanent row, and section 7 would mutate the
   approved residue if any probe unexpectedly succeeded.
 - **DNCR-1 is unchanged.** No real wash, no attestation.

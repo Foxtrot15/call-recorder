@@ -1064,20 +1064,60 @@ the **actual `acquisition-dispatch-store` code the executor uses**.
   proven **structurally** — both partial indexes were confirmed to hold nothing
   matching it — rather than by writing, because a successful claim leaves a
   second permanent row and only one is approved.
-- **The guard triggers** — identity immutability, no-DELETE, no-reopen, the
-  resolution/submission constraint pairs, and the calling-state tamper rules —
-  are covered by `test/acquisition-laq5-migration.test.js` against the migration
-  text and by the offline E-7B1 suite. Exercising them against dev needs the
-  writes in **section 6 and section 7** of the verification script, which were
-  **not run**: section 6 would commit a second permanent dispatch row, and
-  section 7's probes would mutate the approved residue if any of them
-  unexpectedly succeeded.
-- **Sections 1–5** of `verification/12_laq5_verify.sql` (columns, RLS, index
-  definitions, constraint and trigger definitions) are read-only introspection
-  over `information_schema` and `pg_catalog`. **PostgREST cannot reach either**,
-  so nothing in this repository can run them — they remain a **paste-by-hand**
-  step for a human who wants to see the index predicates with their own eyes.
-  The behavioural results above are what stands in for them today.
+- **That the guard triggers REFUSE.** §15.2 confirms they exist, are BEFORE
+  triggers, are ROW-level, cover both UPDATE and DELETE, run the right function
+  and are **enabled** — but present is not the same as refuses. Identity
+  immutability, no-DELETE, no-reopen, the resolution/submission constraint pairs
+  and the calling-state tamper rules are covered by
+  `test/acquisition-laq5-migration.test.js` against the migration text and by the
+  offline E-7B1 suite. Exercising them against dev needs the writes in **section
+  6 and section 7** of the verification script, which were **not run**: section 6
+  would commit a second permanent dispatch row, and section 7's probes would
+  mutate the approved residue if any of them unexpectedly succeeded.
+
+### 15.2 Live structural verification — 14/14 PASS, 2026-08-13
+
+`supabase/sql/verification/12_laq5_verify_readonly.sql` was run by hand against
+dev. It is **sections 1–5 restated as assertions**, strictly read-only: 25
+statements, 24 `SELECT` and one `WITH`, zero writes, zero DDL, no transaction.
+`test/acquisition-laq5-readonly-verify.test.js` fails the build if that ever
+stops being true, and carries negative controls proving the scan detects a write
+rather than merely passing.
+
+```
+checks_run : 14
+passed     : 14
+failed     : 0
+failing    : (none)
+verdict    : PASS: laq5 is structurally intact in this database
+```
+
+Both tables present · RLS enabled on both · zero policies across every
+`acquisition_*` table · 19 columns with the expected nullability · `dispatch_id`
+a `uuid` primary key · `batch_key` NOT NULL · the prospect FK `ON DELETE
+RESTRICT` (`confdeltype = 'r'`) · **both partial unique indexes present, unique,
+and predicated on exactly `(resolved_at IS NULL)`** · both named CHECK
+constraints · both guard functions · both guard triggers BEFORE, ROW-level,
+covering UPDATE and DELETE, running their own function, and **enabled** · the
+calling-state singleton · exactly one calling-state row · **calling PAUSED**.
+
+**One verifier defect was found and fixed before this run, and it was worth
+finding.** The trigger check originally matched the definition text against
+`'%BEFORE UPDATE OR DELETE%'` — the phrase the migration uses. But
+`pg_get_triggerdef` **reconstructs** the definition in Postgres's canonical
+event order, so dev renders `BEFORE DELETE OR UPDATE` and the check reported
+`**FAIL**` against a schema that was completely correct. It was testing the
+printer, not the schema.
+
+It now reads `pg_trigger.tgtype` bits, which carry no ordering at all, plus
+`tgenabled` — which the text form could never have shown, because a guard
+switched off administratively renders an identical definition while firing on
+nothing. A deliberately order-independent textual check sits beside it as a
+second opinion. **A verifier that cries wolf is worse than no verifier**, so the
+regression is pinned: both renderings pass, AFTER / missing-arm / statement-level
+still fail, and a ratchet rejects any future LIKE pattern naming BEFORE together
+with both events.
+- ~~**Sections 1–5**~~ — **DONE 2026-08-13. See §15.2.**
 
 See [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md) for the full
 rationale, and §14.3 above for the superseded sketch it corrects.

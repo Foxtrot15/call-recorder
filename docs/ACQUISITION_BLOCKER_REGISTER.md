@@ -1,11 +1,13 @@
 # Acquisition Blocker Register — the one current list
 
-**Status of this document:** LIVE. Last recomputed **2026-08-12**, after **LAQ5
-was applied to dev by hand** and **E-7B1's durable dispatch authority and
-durable emergency stop were proven against real Postgres** — including a genuine
-two-process race that Postgres, not Node, arbitrated. Dev is at **23 rows**,
-acquisition calling is **paused** and has never been anything else, there is
-still **no live provider**, and **E-7 remains OPEN**. On 2026-08-11 **E-7A**
+**Status of this document:** LIVE. Last recomputed **2026-08-13**, at the close
+of **E-7B1**, which is now **CLOSED as engineering on dev**: LAQ5 applied by
+hand, the durable dispatch authority and durable emergency stop proven against
+real Postgres — including a genuine two-process race that Postgres, not Node,
+arbitrated — and the live schema **structurally verified 14/14 PASS** (§11).
+Dev is at **23 rows**, acquisition calling is **paused at revision 1** and has
+never been anything else, there is still **no live provider**, and **E-7 remains
+OPEN**. On 2026-08-11 **E-7A**
 built the provider-disabled dial execution seam (§10). Before that, on 2026-08-10: **M8L** closed
 the caller-supplied duplicate-resolution gap, **E-5** closed durable founder batch
 approval — **neither needed SQL** — the founder approved the attempt policy
@@ -108,7 +110,7 @@ SQL was required to close A-L8.**
 | ~~**E-5**~~ | Durable batch approval | **CLOSED in E-5, offline — no SQL required.** A founder approval is now an append-only row in `acquisition_decisions` (`entity_type: 'batch'`, which the laq1 CHECK has admitted since it was written), keyed by `ba_<membershipHash>` — an identity derived from the membership itself. `acquisition-authorisation` destructures `context.batch` off the caller's context and **discards** it; the approval is read from the store or it does not exist. Proven across two genuinely separate OS processes, 9/9 and 26/26, **zero database residue**. See §5. |
 | ~~**M8L**~~ | Durable duplicate resolution | **CLOSED — no SQL.** `context.duplicateResolution` is no longer authority anywhere a call can be decided. The M8E gate destructures it off the caller's context and reads the **M8H review decision** instead — the same rows a human already wrote. Proven across two separate OS processes, 13/13 and 22/22, **zero database residue**. See §8. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
-| ~~**E-7B1**~~ | Durable dispatch authority + durable emergency stop | **CLOSED ON DEV 2026-08-12 — LAQ5 applied by hand, proven against real Postgres.** `dispatchId` (random UUID) and `batchKey` travel on every genuine slip; the atomic claim is one INSERT **the database arbitrates**, and that was proven by **two separate OS processes** racing to claim one business on one handset — one claimed, one was refused naming the prospect lock. Replay, the prospect lock and the destination lock all refused as designed. The emergency stop is read from the store **twice** per dispatch, `killSwitch` is a forbidden caller option, and the executor refused a caller who supplied one. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator, and the proof row is still unresolved. Dev residue **21 → 23** (bootstrap state row + one fictional dispatch); decisions unchanged at 4, queue at 0, calling **paused**. **Production: not applied.** [Runbook §15](ACQUISITION_SQL_RUNBOOK.md), design: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
+| ~~**E-7B1**~~ | Durable dispatch authority + durable emergency stop | **CLOSED ON DEV 2026-08-12 — LAQ5 applied by hand, proven against real Postgres.** `dispatchId` (random UUID) and `batchKey` travel on every genuine slip; the atomic claim is one INSERT **the database arbitrates**, and that was proven by **two separate OS processes** racing to claim one business on one handset — one claimed, one was refused naming the prospect lock. Replay, the prospect lock and the destination lock all refused as designed. The emergency stop is read from the store **twice** per dispatch, `killSwitch` is a forbidden caller option, and the executor refused a caller who supplied one. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator, and the proof row is still unresolved. Dev residue **21 → 23** (bootstrap state row + one fictional dispatch); decisions unchanged at 4, queue at 0, calling **paused**. The live schema was then **structurally verified 14/14 PASS** on 2026-08-13, read-only — including both partial unique index predicates and both guard triggers being BEFORE, ROW-level, covering UPDATE and DELETE, and **enabled** (§11). **Production: not applied.** [Runbook §15](ACQUISITION_SQL_RUNBOOK.md), design: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **PARTIAL — E-7A COMPLETE, LIVE PROVIDER ABSENT BY DESIGN.** The execution **seam** is built, provider-disabled: `acquisition-dial-execution.js` is the only thing that may consume a slip, the default provider **refuses**, and the only other provider is an offline fake. **No real provider adapter exists, no network path exists, and no live call is possible.** E-7 does **not** close until a later founder-authorised milestone (**E-7B**) connects a real provider after DNCR operational readiness. See §10. |
 
 ---
@@ -749,3 +751,73 @@ unique indexes on `(prospect_id)` and `(destination_e164)` `where resolved_at is
 null`. The invariant held either way: **an INSERT that violates uniqueness is
 the second dispatch being refused by the database**, not by application memory —
 and on 2026-08-12 that is exactly what two racing OS processes saw.
+
+---
+
+## 11. E-7B1 — closed as engineering on dev, 2026-08-13
+
+**Status: CLOSED ON DEV. E-7 REMAINS OPEN. NOTHING HERE CAN CALL ANYBODY.**
+
+E-7A left two questions it could not answer in one process: what stops a second
+process spending the same authorisation, and where does an emergency stop live
+that a caller cannot decline to pass in. E-7B1 answers both with a database
+constraint and a durable row, and both answers were checked against real
+Postgres rather than asserted.
+
+### 11.1 What was proven, and how
+
+| | |
+|---|---|
+| **Two-OS-process race** | pids 16700 and 2092, two connections, no shared memory, both busy-waiting to one wall-clock instant, same business, same handset. **One CLAIMED, one CONFLICT (prospect).** One row. Postgres arbitrated — this is not a claim about Node's event loop |
+| T1 replay | same `dispatch_id` again → `ALREADY_CLAIMED` |
+| T2 prospect lock | same prospect, different dispatch, different number → `CONFLICT`, scope `prospect` |
+| T3 destination lock | different prospect, same number → `CONFLICT`, scope `destination` — the case a per-prospect lock cannot see |
+| T4 | proven **structurally**, not written: both partial indexes confirmed to hold nothing matching it. A successful claim would leave a second permanent row and only one is approved |
+| durable stop | read back `paused`, revision 1, attributed — and reported as a **decision**, not a read failure |
+| caller override | a supplied `killSwitch` was refused with `caller_override_rejected`. It is a **forbidden** option, not an ignored one |
+| the proof row | `resolved_at` null, `resolution` null, `provider_status` pending, holding both locks. **No provider result can release it** |
+| **live schema** | **14/14 PASS**, read-only, 2026-08-13 — both partial unique index predicates, both guard triggers BEFORE / ROW / UPDATE+DELETE / correct function / **enabled**, the singleton, and calling PAUSED |
+
+`23 passed, 0 failed` in the scripted proof, `6/6` in the race, `14/14` in the
+schema verification, **2428 tests green across the whole repository**.
+
+### 11.2 The two defects found, both in the PROOF rather than the code
+
+Recorded because a milestone that reports only its successes teaches nothing.
+
+1. **The harness store shim carried a hand-transcribed copy of the store
+   contract that had drifted from it** — naming `getProspect`/`listProspects`,
+   which the contract does not have, and omitting `findRequest`, `loadProspect`
+   and `findProspects`, which it does. `assertStoreContract` threw and every
+   calling-state read came back `acquisition_calling_state_unavailable`. **The
+   system was right** — an unusable store must block — but a proof that fails
+   for its own reasons proves nothing. The shim now derives the list from
+   `STORE_METHODS`.
+2. **The read-only verifier matched trigger definition TEXT** against
+   `'%BEFORE UPDATE OR DELETE%'`, the phrase the migration uses.
+   `pg_get_triggerdef` reconstructs definitions in Postgres's canonical event
+   order, so dev renders `BEFORE DELETE OR UPDATE` and the check reported
+   `**FAIL**` against a correct schema. It was testing the printer. It now reads
+   `tgtype` bits and `tgenabled`, and a ratchet rejects any future phrase match.
+
+Neither defect was in `acquisition-dispatch-store`, `acquisition-calling-state`,
+`acquisition-dial-execution` or LAQ5. **Nothing was changed to make a proof
+pass.**
+
+### 11.3 What closing E-7B1 does NOT mean
+
+- **E-7 is still OPEN and gate 14 is still RED.** A call needs `state = enabled`
+  **and** a provider with `live: true`. This milestone made the first lock
+  **real** rather than absent. It did not open it, and it built no enable path.
+- **No live provider exists.** Every constructible provider reports
+  `live: false`; a ratchet fails the build if one declares otherwise.
+- **Calling has never been enabled.** The state row has read `paused` since
+  creation and its revision is still **1** — no write has ever touched it.
+- **Production has no acquisition schema at all**, so laq1–laq5 all remain
+  unapplied there and the durable claim correctly throws.
+- **DNCR-1 is unchanged and is still the only blocker that stops a first call
+  outright** — the Access Seeker application is in, activation has not come
+  back, and no real wash or attestation exists.
+- **A-L2 is unchanged.** The holiday calendar is a hand-compiled 2026-only
+  fixture, `authoritative: false`, and from 2027-01-01 the gate refuses every
+  date.
