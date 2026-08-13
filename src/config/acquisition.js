@@ -217,6 +217,49 @@ const DEFAULT_MARKET = Object.freeze({
 });
 
 /**
+ * THE ACQUISITION VOICE — ITS OWN KEY, WITH NO FALLBACK (E-12B).
+ *
+ * ── WHY NOT JUST USE RETELL_DEFAULT_VOICE_ID ────────────────────────
+ * Because at the moment it holds the same voice the founder chose for
+ * acquisition, and that is precisely the trap. `RETELL_DEFAULT_VOICE_ID` is the
+ * RECEPTIONIST's voice — the one a locksmith's own customers hear. If
+ * acquisition read it, the two would be wired together by accident, and the day
+ * somebody re-voiced the receptionist they would also silently re-voice every
+ * cold call to a stranger, with no test failing and nobody deciding it.
+ *
+ * The same underlying voice may be chosen for both. That has to be a
+ * coincidence somebody typed twice, not an inheritance.
+ *
+ * ── NO FALLBACK, ON PURPOSE ─────────────────────────────────────────
+ * There is deliberately no fallback to the shared receptionist key here. An
+ * unset acquisition key yields `null`, which keeps `createAgentReady` false and
+ * names the blocker, rather than quietly borrowing another product's voice.
+ * Fail closed.
+ *
+ * The value itself is deployment configuration and lives in the environment —
+ * not in git — the same as RETELL_ACQUISITION_LLM_ID.
+ */
+function resolveAcquisitionVoiceId(env = process.env) {
+  const raw = env.RETELL_ACQUISITION_VOICE_ID;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+/**
+ * The config `buildAcquisitionAgent` expects, assembled from acquisition-only
+ * environment keys. Reads no receptionist or onboarding key at all.
+ */
+function getAcquisitionRetellConfig(env = process.env) {
+  return Object.freeze({
+    voiceId: resolveAcquisitionVoiceId(env),
+    // Named here so the agent builder never reaches for the onboarding webhook.
+    acquisitionWebhookUrl:
+      typeof env.RETELL_ACQUISITION_WEBHOOK_URL === "string" && env.RETELL_ACQUISITION_WEBHOOK_URL.trim()
+        ? env.RETELL_ACQUISITION_WEBHOOK_URL.trim()
+        : null,
+  });
+}
+
+/**
  * Assemble the config object handed to the pipeline. Every env var is optional;
  * an unset var yields the safe default, never a permissive one.
  */
@@ -267,6 +310,9 @@ module.exports = {
   CALLING_WINDOWS,
   DEFAULT_CAPS,
   DEFAULT_MARKET,
+  // retell resources — acquisition-only keys, no receptionist fallback
+  resolveAcquisitionVoiceId,
+  getAcquisitionRetellConfig,
   // assembled
   getAcquisitionConfig,
 };

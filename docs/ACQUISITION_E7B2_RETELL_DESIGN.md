@@ -7,13 +7,13 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 **acquisition response engine is PROVISIONED** on the dev Retell account, §21.
 · **E-11A COMPLETE** — the acquisition webhook ingress is built, mounted in source and DORMANT (§22).
 · **E-12A COMPLETE** — leave-no-message is now a PROVIDER setting, configured locally (§23).
-· **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, and the voice catalogue has been read once (§24). **No voice selected — founder decision.**
+· **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, the voice catalogue was read once, and the founder has **SELECTED the acquisition voice** (§24).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
-voice is UNRESOLVED, webhook is UNRESOLVED, the voicemail hang-up is
-**CONFIGURED LOCALLY but NEVER OBSERVED ON A REAL CALL**, no outbound
-acquisition number is provisioned, and no acquisition webhook route is exposed.
-**A response engine cannot ring anybody.**
+**voice is SELECTED** (Sunny, via `RETELL_ACQUISITION_VOICE_ID`, §24.7), webhook
+is UNRESOLVED, the voicemail hang-up is **CONFIGURED LOCALLY but NEVER OBSERVED
+ON A REAL CALL**, no outbound acquisition number is provisioned, and no
+acquisition webhook route is exposed. **A response engine cannot ring anybody.**
 
 **Owns (source of truth for):** how an authorised acquisition dial becomes a
 Retell outbound call, what E-7B2B still requires, and why the adapter built in
@@ -1059,9 +1059,11 @@ Production untouched.
 
 ## 24. E-12B — pinning what was provisioned, and reading the voice catalogue
 
-**Status: DRIFT PIN ADDED. VOICE CATALOGUE READ (one read-only request). NO
-VOICE SELECTED — founder decision. Agent still NOT PROVISIONED. Response engine
-UNCHANGED. Number NOT PROVISIONED. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
+**Status: DRIFT PIN ADDED. VOICE CATALOGUE READ (one read-only request).
+ACQUISITION VOICE SELECTED — Sunny (§24.7). Agent still NOT PROVISIONED.
+Response engine UNCHANGED and hash-pinned. Webhook NOT DEPLOYED / UNSET.
+Voicemail hang-up configured locally, live behaviour UNVERIFIED. Number NOT
+PROVISIONED. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
 
 ### 24.1 Why the prompt stopped being a local file
 
@@ -1165,3 +1167,65 @@ No Retell write of any kind: no agent, no engine update, no voice created,
 cloned or modified, no number, no call. The response engine is byte-identical to
 the provisioned one. No Twilio, no DNCR, no prospect contacted. **Zero DEV
 writes** — 23 rows, calling paused at revision 1. Production untouched.
+
+### 24.7 The founder chose Sunny — and why it needed its own key
+
+**Selected 2026-08-13: "Sunny - Australian Female"**, ElevenLabs custom voice,
+`voice_type: custom`. The acquisition voice is **RESOLVED**.
+
+The evidence for its accent is **the founder's audition**, and the record says
+so. Retell returned **no `accent`, `gender` or `age` metadata** for this voice —
+its name is the only written claim, and §24.4 refused to infer an accent from a
+name. Listening was always going to be the only thing that could settle it.
+
+**The configured value lives in `RETELL_ACQUISITION_VOICE_ID`, not in source.**
+`SELECTED_VOICE` in the spec records the *decision* — who chose, what they chose,
+when, and where the value lives — and a ratchet asserts the id itself appears in
+**neither the spec nor the config module**.
+
+*(The id does appear once in §24.4, as part of what the read-only catalogue
+actually returned. That is a finding about the provider's data, not a
+configuration value, which is why it is written out there and elided as a config
+value here. `RETELL_ACQUISITION_LLM_ID` is elided everywhere by contrast, because
+that resource was **created by us on a specific dev account** rather than read
+from a shared catalogue.)*
+
+**Why a new key when the shared one already holds this voice.** That coincidence
+is the trap. `RETELL_DEFAULT_VOICE_ID` is the **receptionist's** voice — what a
+locksmith's own customers hear. Had acquisition read it, the two products would
+be joined by accident, and the day somebody re-voices the receptionist they would
+also re-voice every cold call to a stranger, with no test failing and nobody
+deciding it. The same voice may be chosen for both; it has to be a coincidence
+somebody typed twice, not an inheritance.
+
+`resolveAcquisitionVoiceId` therefore has **no fallback**. An unset key yields
+`null`, `createAgentReady` stays false, and the blocker names the variable and
+the chosen voice so a human knows what to set. Proven both ways: the receptionist
+key alone leaves acquisition **voiceless** rather than borrowed, and it cannot
+override an explicit acquisition choice. `RETELL_ACQUISITION_WEBHOOK_URL` is
+separated on the same principle.
+
+Selecting the voice **did not touch the response engine** — `voice_id` is an
+agent field, the pinned hash is unchanged, and no `updateResponseEngine` is
+required. Asserted directly, because if it were ever false, choosing a voice
+would mean re-provisioning the engine.
+
+**Resulting agent payload** (`webhook_url` is the one field still unresolved):
+
+```json
+{
+  "agent_name": "aida-acquisition-agent-acq-agent-spec-2026-08-13",
+  "response_engine": { "type": "retell-llm", "llm_id": "<RETELL_ACQUISITION_LLM_ID>" },
+  "voice_id": "<RETELL_ACQUISITION_VOICE_ID — Sunny>",
+  "language": "en-AU",
+  "webhook_url": null,
+  "voicemail_option": { "action": { "type": "hangup" } },
+  "post_call_analysis_data": "<10 fields>"
+}
+```
+
+**Remaining create-agent blockers: one.** `webhook_url` — the acquisition route
+is implemented and mounted but not deployed. The `llm_id` exists and needs only
+to be present in the provisioning environment. Voice is **no longer a blocker**.
+The outbound number, DNCR-1, A-L2 and enabling calling remain **pre-live-call**
+gates per §24.4a — unchanged, all still OPEN.

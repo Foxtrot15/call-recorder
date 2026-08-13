@@ -582,6 +582,36 @@ function buildAcquisitionResponseEngine({ identity = DEFAULT_IDENTITY, pricing =
 }
 
 /**
+ * THE VOICE THE FOUNDER CHOSE (E-12B).
+ *
+ * ── WHY THE ID IS NOT HERE ──────────────────────────────────────────
+ * This records the DECISION — who chose, what they chose, and where the value
+ * lives — but not the value. A Retell voice id is deployment configuration, the
+ * same class of thing as RETELL_ACQUISITION_LLM_ID, and hardcoding it here would
+ * put a dev-account resource id into source that every environment then shares.
+ *
+ * ── WHY IT NAMES AN ACQUISITION-ONLY KEY ────────────────────────────
+ * `RETELL_DEFAULT_VOICE_ID` currently happens to hold the same voice. That is a
+ * coincidence, and treating it as the source would wire the receptionist's voice
+ * to every cold call — see resolveAcquisitionVoiceId in config/acquisition.js.
+ *
+ * The selection was made from a read-only catalogue listing. Retell reported no
+ * `accent`, `gender` or `age` metadata for this voice at all — its name claims
+ * an Australian female and the founder confirmed it BY LISTENING to the preview,
+ * which is the only evidence that was ever going to settle it.
+ */
+const SELECTED_VOICE = Object.freeze({
+  voiceName: "Sunny - Australian Female",
+  provider: "elevenlabs",
+  voiceType: "custom",
+  envVar: "RETELL_ACQUISITION_VOICE_ID",
+  selectedBy: "founder",
+  selectedOn: "2026-08-13",
+  selectedFrom: "E-12B read-only list-voices catalogue (272 voices)",
+  accentEvidence: "founder audition of the preview — Retell returned no accent metadata for this voice",
+});
+
+/**
  * WHAT WAS ACTUALLY SENT TO RETELL, PINNED (E-12B).
  *
  * ── THE PROBLEM THIS SOLVES ─────────────────────────────────────────
@@ -778,7 +808,9 @@ function describeAcquisitionRetellResources({ identity = DEFAULT_IDENTITY, prici
     engineReady.promptReady ? null : "the response engine has no usable prompt",
     engineReady.openingReady ? null : "the opening does not carry its required meaning",
     agentReady.llmIdResolved ? null : "no acquisition response-engine id has been supplied (create the engine first)",
-    agentReady.voiceResolved ? null : "voice_id is unresolved — a founder must choose one",
+    agentReady.voiceResolved
+      ? null
+      : `voice_id is unresolved — set ${SELECTED_VOICE.envVar} (the founder has chosen ${SELECTED_VOICE.voiceName})`,
     agentReady.webhookResolved ? null : "webhook_url is unresolved — the acquisition route is not exposed",
     agentReady.voicemailProviderPolicyConfigured
       ? null
@@ -847,6 +879,7 @@ module.exports = {
   buildAcquisitionResponseEngine,
   buildAcquisitionAgent,
   ACQUISITION_VOICEMAIL_OPTION,
+  SELECTED_VOICE,
   PROVISIONED_RESPONSE_ENGINE,
   RESPONSE_ENGINE_DRIFT_MESSAGE,
   responseEnginePayloadHash,
