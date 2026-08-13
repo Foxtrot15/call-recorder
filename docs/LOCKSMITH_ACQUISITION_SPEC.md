@@ -3652,7 +3652,8 @@ and a conflict that will be refused identically for ever would become a stream
 of redeliveries; it is recorded in the durable log as `failed` for a human
 instead. 503 is reserved for a genuine storage outage.
 
-**Blocker: LPM3 is not applied to dev**, so `provider_webhook_events` does not
-exist and the durable fingerprint has nowhere to go. The route answers 503 on
-that path — the correct direction — and no acquisition webhook may be processed
-live until it is applied. See [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §17.
+**LPM3 is applied to dev** (founder, 2026-08-13), so `provider_webhook_events`
+exists and its UNIQUE `pwe_fingerprint_key` is the durable idempotency
+authority — a redelivered event collides on it and is acknowledged without being
+processed twice. **Production has not received LPM3.** See
+[ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §17.

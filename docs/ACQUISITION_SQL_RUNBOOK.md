@@ -1205,11 +1205,27 @@ connection string, no `exec_sql` RPC, and a test fails the build if any appears.
 
 ---
 
-## 17. LPM3 — NOT APPLIED TO DEV, and it blocks live acquisition webhooks
+## 17. LPM3 — APPLIED TO DEV 2026-08-13
 
-**`supabase/sql/lpm3_create_retell_provisioning.sql` is not applied to dev.**
-Probed read-only on 2026-08-13: `provider_webhook_events`, `provisioning_plans`
-and `retell_resources` are all **ABSENT**.
+**`supabase/sql/lpm3_create_retell_provisioning.sql` was applied by hand by the
+founder on 2026-08-13** and completed without SQL error. **Production has NOT
+received it.**
+
+| table | dev |
+|---|---|
+| `provider_webhook_events` | **PRESENT** (verified read-only by me, 0 rows) |
+| `provisioning_plans` | **PRESENT** (0 rows) |
+| `provider_resources` | **PRESENT** (0 rows) |
+
+**Founder-verified in the SQL editor** — not independently re-read by me, because
+PostgREST cannot reach `pg_constraint` or `pg_class`: `pwe_fingerprint_key` with
+`contype = u`, and RLS enabled with **0 policies** on all three tables.
+
+**Acquisition residue unchanged at 23.** lpm3 creates no acquisition row.
+
+> **Name correction:** an earlier report called the third table
+> `retell_resources`. It is **`provider_resources`**. The earlier conclusion held
+> — the other two really were absent — but the name was wrong.
 
 `provider_webhook_events` is where the **durable webhook idempotency** lives —
 `constraint pwe_fingerprint_key unique (fingerprint)`, which is the whole

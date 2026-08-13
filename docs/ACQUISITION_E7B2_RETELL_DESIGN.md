@@ -786,9 +786,9 @@ No call, SMS or email. Production untouched.
 
 ## 22. E-11A — the acquisition webhook ingress, built and dormant
 
-**Status: LOCAL WEBHOOK INTEGRATION COMPLETE. Route IMPLEMENTED AND MOUNTED IN
-SOURCE, NOT DEPLOYED, NOT EXPOSED, DORMANT BY DEFAULT. Retell webhook_url UNSET.
-LPM3 NOT APPLIED TO DEV — a hard pre-live blocker (§22.5). Response engine
+**Status: CLOSED ON DEV. Route IMPLEMENTED AND MOUNTED IN SOURCE, NOT DEPLOYED,
+NOT EXPOSED, DORMANT BY DEFAULT. Retell webhook_url UNSET. **LPM3 APPLIED TO
+DEV** (§22.5) — the durable idempotency schema is present. Response engine
 PROVISIONED · agent NOT PROVISIONED · number NOT PROVISIONED · providers
 `live:false` · calling PAUSED · E-7 OPEN · DNCR-1 OPEN.**
 
@@ -847,33 +847,37 @@ operator's problem into a stream of them. It is recorded in the durable log as
 `failed` — needing a human — while the HTTP answer says "heard you, stop
 resending".
 
-### 22.5 LPM3 — NOT APPLIED. The hard pre-live blocker.
+### 22.5 LPM3 — APPLIED TO DEV, 2026-08-13
 
-Probed read-only against dev:
+**Applied by hand by the founder** (`supabase/sql/lpm3_create_retell_provisioning.sql`), completing without SQL error. Production has **not** received it.
+
+**Verified by me, read-only over PostgREST** — existence only:
 
 | table | dev |
 |---|---|
-| `provider_webhook_events` | **ABSENT** |
-| `provisioning_plans` | **ABSENT** |
-| `retell_resources` | **ABSENT** |
-| `locksmith_onboarding_sessions` | present |
-| `clients` | present |
+| `provider_webhook_events` | **PRESENT**, 0 rows |
+| `provisioning_plans` | **PRESENT**, 0 rows |
+| `provider_resources` | **PRESENT**, 0 rows |
 
-So the durable fingerprint has nowhere to go. Today the handler answers **503**
-on that path — the correct direction to fail, and exactly why 503 is reserved
-for it — but **no acquisition webhook may be processed live until LPM3 exists**.
+**Verified by the founder in the SQL editor** — I cannot read `pg_constraint` or
+`pg_class` through PostgREST and do not claim to have:
 
-**No new migration is needed.** `supabase/sql/lpm3_create_retell_provisioning.sql`
-already creates `provider_webhook_events` with `constraint pwe_fingerprint_key
-unique (fingerprint)` — that uniqueness *is* the idempotency mechanism. Its
-foreign keys point at `locksmith_onboarding_sessions` (present) and
-`provisioning_plans` (created earlier in the same file), so the migration is
-self-contained given what dev already has.
+- `pwe_fingerprint_key`, `contype = u` — the UNIQUE fingerprint constraint;
+- RLS enabled with **0 policies** on all three tables.
 
-**It was not applied, and applying it is a founder decision**, because it also
-brings `retell_resources` and `provisioning_plans` — the whole Retell
-provisioning schema — into the acquisition dev project, and acquisition uses
-neither. The manual step is in the runbook.
+That constraint **is** the durable idempotency authority: a redelivered Retell
+delivery collides on it and is acknowledged without being processed twice. The
+arbitration is the database, not this process.
+
+**A NAME CORRECTION.** The earlier E-11A report listed `retell_resources` as
+absent. That table has never existed under that name — the real one is
+**`provider_resources`**, as `provider-resource-registry.js:23` and lpm3 itself
+both say. The conclusion at the time was still right, because
+`provider_webhook_events` and `provisioning_plans` were genuinely absent, but the
+name was wrong and the probe was weaker than it looked.
+
+Acquisition residue is **unchanged at 23** — lpm3 creates no acquisition row and
+touches no acquisition table.
 
 ### 22.6 What did NOT happen
 
