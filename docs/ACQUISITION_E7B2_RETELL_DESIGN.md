@@ -194,22 +194,35 @@ holds through the existing partial unique indexes and the single-use rule.
 
 ---
 
-## 8. The gap E-7B2B must close: correlating an ambiguous submission
+## 8. Correlating an ambiguous submission — CLOSED
 
-The provider receives `executionId`, **not `dispatchId`** — the executor holds
-`dispatchId` and writes the binding itself, so the durable link needs nothing
-from the provider.
+**This was an open gap when E-7B2A was first built, and a founder check caught
+it before push.** The provider received `executionId` and not `dispatchId`, and
+`executionId` is `ex_` + a 20-hex truncation of `sha256(dispatchId)` — a
+**one-way** derivation. So if the create-call response was lost, `provider_ref`
+was never written, and a webhook arriving later carried a `call_id` we had never
+seen with nothing tying it to the dispatch. Recovery would have meant listing
+unresolved rows and recomputing the executor's private hash for each: a second
+copy of a derivation that must never diverge, and a scan where a lookup belongs.
 
-**But that leaves one real hole.** If the create-call response is lost
-(timeout), `provider_ref` is never written. A webhook that arrives later carries
-a `call_id` we have never seen, and **nothing ties it back to the dispatch** —
-the exact case where reconciliation matters most.
+**Fixed.** The exact LAQ5 `dispatchId` now travels, unhashed and untruncated:
 
-**Recommendation for E-7B2B:** widen the executor's provider submission by one
-field so `dispatchId` travels in Retell `metadata`. Retell echoes metadata back
-on call events, so an orphaned webhook could then name its own dispatch. This is
-a deliberate change to E-7A's proven submission shape and is **not** made in
-E-7B2A.
+| field | value | role |
+|---|---|---|
+| `metadata.aida_dispatch_id` | **the exact `slip.dispatchId`** | the durable LAQ5 identity and external reconciliation key |
+| `metadata.aida_execution_id` | `executionId`, unchanged | names this attempt in logs |
+
+They are different things and neither replaces the other. The executor's
+submission carries `dispatchId` verbatim off the genuine slip — not
+caller-supplied, not recomputed, not hashed, not truncated, not transformed —
+and `buildRetellCallPayload` **refuses to build a payload without it**, because
+a request whose lost response would be unreconcilable should be unbuildable
+rather than merely unusual.
+
+A ratchet pins it: `metadata.aida_dispatch_id === slip.dispatchId`, with the
+executionId, the authorisationId, a hash of the dispatchId and a truncation of
+it all explicitly rejected as substitutes. Substituting `executionId` in the
+source fails six tests, including the lost-response scenario.
 
 ---
 
@@ -335,8 +348,8 @@ as a side effect.
 3. **Wire a transport** — the one line E-7B2A deliberately leaves undone — and
    flip `live` to `true`, which will **fail the live-call-impossibility ratchet
    until somebody updates it on purpose**. That is the design.
-4. **Add `dispatchId` to the provider submission** so an ambiguous dispatch is
-   reconcilable (§8).
+4. ~~**Add `dispatchId` to the provider submission**~~ — **DONE in the E-7B2A
+   correlation fix.** The exact LAQ5 key travels in `aida_dispatch_id` (§8).
 5. **Decide how an opt-out is confirmed** from a call (§9). Policy, not code.
 6. **Build the webhook → outcome → resolution path**, in that order: durable
    contact outcome first, dispatch resolution second.

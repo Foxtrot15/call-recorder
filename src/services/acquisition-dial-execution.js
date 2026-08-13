@@ -416,8 +416,28 @@ async function executeAuthorisedDial(options = {}) {
   // The provider is handed a frozen record built only from the slip. There is
   // no expression below in which a caller-supplied value could become the
   // destination.
+  //
+  // ── WHY dispatchId TRAVELS, AND WHY IT IS NOT executionId ─────────
+  // E-7B2A can build a Retell request but not send one, and the case that
+  // decided this field is the one where sending goes wrong: the claim succeeds,
+  // the provider accepts, and the HTTP response carrying the call id is LOST.
+  // `provider_ref` is then never written, and a webhook arriving later names a
+  // call we have no record of.
+  //
+  // Correlation therefore has to survive in the payload itself, and it has to
+  // be the DURABLE key. executionId is `ex_` + a 20-hex truncation of
+  // sha256(dispatchId) — one-way, so a reconciler holding one could only
+  // recover the dispatch by listing unresolved rows and recomputing this
+  // module's private hash for each. That is a second copy of a derivation which
+  // must never diverge, and a scan where a lookup belongs.
+  //
+  // So the exact LAQ5 primary key travels, unhashed and untruncated, and
+  // executionId stays exactly what it was. They are different things: one names
+  // the durable dispatch, the other names this attempt for logs.
   const execution = Object.freeze({
     executionId,
+    /** THE DURABLE LAQ5 IDENTITY. Verbatim off the genuine slip. */
+    dispatchId: slip.dispatchId,
     destination: slip.e164,
     prospectId: slip.prospectId,
     businessName: slip.businessName,

@@ -886,17 +886,34 @@ the ledger.
 | the E-7A registry | **untouched** — still exactly `createDisabledDialProvider` and `createFakeDialProvider`, which is why the provider lives in its own file rather than relaxing that ratchet |
 | the durable stop | proven to yield **zero** submissions while paused, and zero when the state row is missing, even with a perfectly good provider wired |
 
-### 12.4 The gap E-7B2B must close
+### 12.4 The correlation gap — found by a founder check, fixed before push
 
-The provider receives `executionId`, **not `dispatchId`** — the executor holds
-both and writes the binding itself, so the durable link needs nothing from the
-provider.
+E-7B2A was first built with the provider receiving `executionId` and **not**
+`dispatchId`. That looked adequate and was not: `executionId` is `ex_` plus a
+20-hex truncation of `sha256(dispatchId)`, a **one-way** derivation. If the
+create-call response were lost, `provider_ref` would never be written and a
+webhook arriving later would carry a `call_id` we had never seen, matchable only
+by listing unresolved rows and recomputing the executor's private hash for each
+— a second copy of a derivation that must never diverge, and a scan where a
+lookup belongs.
 
-**But if the create-call response is lost, `provider_ref` is never written**, and
-a webhook arriving later carries a `call_id` we have never seen with nothing
-tying it to the dispatch. That is exactly the case where reconciliation matters
-most. E-7B2B should widen the provider submission by one field so `dispatchId`
-travels in Retell metadata, which Retell echoes back on call events.
+**The founder's pre-push check caught it, and it is now fixed.** The exact LAQ5
+`dispatchId` travels verbatim in `metadata.aida_dispatch_id` — not hashed, not
+truncated, not derived, not caller-supplied — with `aida_execution_id` retained
+beside it for logs. `buildRetellCallPayload` **refuses to build a payload
+without the durable key**, so an unreconcilable request is unbuildable rather
+than merely unusual.
+
+A ratchet pins `metadata.aida_dispatch_id === slip.dispatchId` and explicitly
+rejects the executionId, the authorisationId, a hash of the dispatchId and a
+truncation of it as substitutes. Substituting `executionId` in the source fails
+six tests, including the end-to-end lost-response scenario.
+
+**The E-7A provider-contract test was widened deliberately**, not incidentally:
+its closed-world key list now admits `dispatchId`, with the argument recorded in
+place that a dispatch id is an **identity, not a permission** — the locks are
+held by the row, the row is written by the executor, and no provider result can
+release it.
 
 ### 12.5 The agent is a new agent, not a reused one
 

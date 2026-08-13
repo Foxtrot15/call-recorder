@@ -143,6 +143,16 @@ function buildRetellCallPayload({ execution, routing } = {}) {
   if (!isE164(execution.destination)) {
     throw new Error("buildRetellCallPayload refused: the execution carries no usable E.164 destination.");
   }
+  // CORRELATION IS NOT OPTIONAL. A request that reaches a provider without the
+  // durable key is one whose lost response would be unreconcilable, so it
+  // cannot be built at all. This fails loudly here rather than quietly at
+  // reconciliation time, months later, with a telephone call in between.
+  if (typeof execution.dispatchId !== "string" || !execution.dispatchId.trim()) {
+    throw new Error(
+      "buildRetellCallPayload refused: the execution carries no dispatchId. Without the durable LAQ5 " +
+        "identity in the payload, a lost response leaves a call nothing can be matched back to."
+    );
+  }
   if (execution.destination === routing.fromNumber) {
     // Cheap, and it closes a genuinely bad failure: a misconfigured from-number
     // equal to the target would have us ring ourselves and bill for it.
@@ -153,10 +163,24 @@ function buildRetellCallPayload({ execution, routing } = {}) {
     from_number: routing.fromNumber,
     to_number: execution.destination,
     override_agent_id: routing.agentId,
-    // Correlation only. Retell echoes metadata back on call events, which is
-    // what will let a later webhook find the dispatch this belongs to.
+    // ── CORRELATION. Retell echoes metadata back on call events. ─────
+    //
+    // aida_dispatch_id is THE LAQ5 PRIMARY KEY, verbatim: not hashed, not
+    // truncated, not derived, and not the execution id. It is the field that
+    // makes the worst case survivable — the provider accepts, our HTTP response
+    // is lost, provider_ref is never written, and the only thing tying the
+    // eventual webhook to an unresolved dispatch is what we put in here.
+    //
+    // A reconciler must be able to take this value and look the dispatch up
+    // DIRECTLY. Anything that has to be recomputed to be matched — a hash, a
+    // prefix, a truncation — puts a second copy of a derivation in a second
+    // file and makes correlation depend on the two never diverging.
+    //
+    // aida_execution_id is kept beside it, unchanged, because it names this
+    // attempt in logs. It is not a substitute and must never become one.
     metadata: Object.freeze({
       aida_purpose: "locksmith_acquisition",
+      aida_dispatch_id: execution.dispatchId || null,
       aida_execution_id: execution.executionId || null,
       aida_prospect_id: execution.prospectId || null,
     }),

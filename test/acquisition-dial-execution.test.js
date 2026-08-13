@@ -213,10 +213,21 @@ describe("E-7A end to end: a genuine authorisation reaches a fake provider, and 
     await executeAuthorisedDial({ store, authorisedDial: decision.dial, provider, now: clock });
 
     const submitted = provider.submissions[0];
+    // A CLOSED WORLD, deliberately. Widening it is how a provider quietly
+    // acquires something it can reinterpret, so the list is exact and every
+    // addition has to be argued for here.
+    //
+    // dispatchId was added by the E-7B2A correlation fix. It is an IDENTITY,
+    // not a permission: it names which durable row this attempt belongs to, it
+    // is the key a provider's own webhook must echo back for a lost response to
+    // be reconcilable, and knowing it grants nothing — the locks are held by
+    // the row, the row is written by the executor, and no provider result can
+    // release it. See acquisition-retell-provider.js.
     assert.deepStrictEqual(
       Object.keys(submitted).sort(),
-      ["authorisedAt", "businessName", "destination", "executionId", "metadata", "prospectId"].sort()
+      ["authorisedAt", "businessName", "destination", "dispatchId", "executionId", "metadata", "prospectId"].sort()
     );
+    assert.strictEqual(submitted.dispatchId, decision.dial.dispatchId, "verbatim off the slip — never derived");
     for (const forbidden of ["authorised", "approved", "eligible", "suppressed", "dncr", "batch", "duplicateResolution", "callingPolicy", "eligibility"]) {
       assert.strictEqual(forbidden in submitted, false, `a provider must not receive ${forbidden}`);
     }

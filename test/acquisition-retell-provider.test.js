@@ -49,6 +49,7 @@ const ROUTING = Object.freeze({ agentId: "agent_acqfixture0001", fromNumber: "+6
 
 const EXECUTION = Object.freeze({
   executionId: "ex_fixture_0001",
+  dispatchId: "11111111-2222-4333-8444-555555555555",
   destination: NUMBER,
   prospectId: "pr_fixture0001",
   businessName: "Northside Lock & Key",
@@ -184,6 +185,228 @@ describe("E-7B2A builds the exact Retell request", () => {
   it("exposes the request a founder could read before anything is enabled", () => {
     const p = createRetellAcquisitionProvider({ routing: ROUTING });
     assert.strictEqual(p.describeSubmission(EXECUTION).to_number, NUMBER);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CORRELATION CONTRACT
+//
+// The load-bearing invariant of this file: what leaves for Retell must carry
+// the EXACT LAQ5 dispatchId. Not the execution id, not the authorisation id,
+// not a hash of the dispatch id, not a prefix of it.
+//
+// It exists for one scenario. The claim succeeds, Retell accepts, and our HTTP
+// response is lost. provider_ref is never written, and the only thing that can
+// tie the eventual webhook to an unresolved dispatch is the value we put in the
+// payload before any of that happened.
+// ---------------------------------------------------------------------------
+
+describe("E-7B2A carries the exact LAQ5 dispatch id across the Retell boundary", () => {
+  it("RATCHET: metadata.aida_dispatch_id IS the slip's dispatchId, verbatim", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    const D = d.dial.dispatchId;
+
+    let seen = null;
+    const provider = createRetellAcquisitionProvider({
+      routing: ROUTING,
+      transport: fakeTransport((n) => { void n; return okResponse(); }),
+    });
+    // Capture what the payload builder produced for the real slip.
+    const spy = Object.freeze({
+      name: "spy", live: false,
+      submit: async (execution) => { seen = provider.describeSubmission(execution); return provider.submit(execution); },
+    });
+
+    await executeAuthorisedDial({ store, authorisedDial: d.dial, provider: spy, now: now() });
+
+    assert.ok(seen, "the payload must have been built");
+    assert.strictEqual(seen.metadata.aida_dispatch_id, D, "metadata must carry the EXACT dispatchId");
+
+    // And explicitly NOT any of the near-misses.
+    assert.notStrictEqual(seen.metadata.aida_dispatch_id, d.dial.authorisationId, "not the authorisationId");
+    assert.notStrictEqual(seen.metadata.aida_dispatch_id, seen.metadata.aida_execution_id, "not the executionId");
+    const sha = require("node:crypto").createHash("sha256").update(String(D)).digest("hex");
+    assert.notStrictEqual(seen.metadata.aida_dispatch_id, `ex_${sha.slice(0, 20)}`, "not a hash of the dispatchId");
+    assert.notStrictEqual(seen.metadata.aida_dispatch_id, D.slice(0, 8), "not a truncation of the dispatchId");
+    assert.strictEqual(seen.metadata.aida_dispatch_id.length, D.length, "not shortened in any way");
+  });
+
+  it("the executor's submission carries dispatchId verbatim off the slip", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    let handed = null;
+    const capture = Object.freeze({ name: "capture", live: false, submit: async (e) => { handed = e; return { status: PROVIDER_STATUS.REFUSED, accepted: false, reason: "captured", providerRef: null }; } });
+
+    await executeAuthorisedDial({ store, authorisedDial: d.dial, provider: capture, now: now() });
+    assert.strictEqual(handed.dispatchId, d.dial.dispatchId, "providerSubmission.dispatchId === authorisedDial.dispatchId");
+  });
+
+  it("aida_execution_id is RETAINED and is still the execution id", () => {
+    const payload = buildRetellCallPayload({ execution: EXECUTION, routing: ROUTING });
+    assert.strictEqual(payload.metadata.aida_execution_id, EXECUTION.executionId);
+    assert.strictEqual(payload.metadata.aida_dispatch_id, EXECUTION.dispatchId);
+    assert.notStrictEqual(payload.metadata.aida_execution_id, payload.metadata.aida_dispatch_id);
+  });
+
+  it("a payload CANNOT be built without the durable key", () => {
+    // Correlation is not optional: an unreconcilable request must be
+    // unbuildable, not merely unusual.
+    for (const bad of [undefined, null, "", "   ", 12345]) {
+      assert.throws(
+        () => buildRetellCallPayload({ execution: { ...EXECUTION, dispatchId: bad }, routing: ROUTING }),
+        /carries no dispatchId/,
+        `dispatchId ${JSON.stringify(bad)} must be refused`
+      );
+    }
+  });
+
+  // ── THE LOST-RESPONSE SCENARIO, END TO END ───────────────────────
+  it("survives a LOST response: the webhook alone identifies the exact dispatch", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    const D = d.dial.dispatchId;
+
+    // 1-3. Claim succeeds and the payload goes out carrying D.
+    let sent = null;
+    const transport = async ({ payload }) => {
+      sent = payload;
+      // 4-5. Retell ACCEPTED the call, but our response is lost. Modelled as
+      //      the ambiguous case the executor already handles.
+      throw new Error("socket hang up before the response was read");
+    };
+    const provider = createRetellAcquisitionProvider({ routing: ROUTING, transport });
+
+    const r = await executeAuthorisedDial({ store, authorisedDial: d.dial, provider, now: now() });
+    assert.strictEqual(r.status, EXECUTION_CODES.PROVIDER_FAILED);
+
+    // The durable row knows nothing: no call id was ever learned.
+    const [row] = await store.listDialExecutions({});
+    assert.strictEqual(row.providerStatus, "unknown");
+    assert.strictEqual(row.providerRef, null, "the call id was lost, exactly as in the real failure");
+    assert.strictEqual(row.resolvedAt, null, "and the dispatch still holds both locks");
+
+    // 6. A webhook arrives later carrying only what we put in the payload.
+    const webhook = { event: "call_ended", call: { call_id: "call_we_have_never_seen", metadata: sent.metadata } };
+
+    // 7. That is sufficient to name the exact unresolved dispatch — by DIRECT
+    //    lookup, with no hash recomputed and no scan of the table.
+    const claimed = webhook.call.metadata.aida_dispatch_id;
+    assert.strictEqual(claimed, D);
+
+    const open = await store.listDialExecutions({ unresolvedOnly: true });
+    const match = open.filter((x) => x.dispatchId === claimed);
+    assert.strictEqual(match.length, 1, "exactly one unresolved dispatch is named");
+    assert.strictEqual(match[0].dispatchId, D);
+    assert.strictEqual(match[0].providerRef, null, "still unreconciled — a reconciler could now bind call_we_have_never_seen to it");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SUBSTITUTION — nobody may choose which dispatch a call is attributed to
+// ---------------------------------------------------------------------------
+
+describe("E-7B2A dispatch correlation cannot be substituted", () => {
+  it("a caller cannot supply a dispatchId", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    let handed = null;
+    const capture = Object.freeze({ name: "capture", live: false, submit: async (e) => { handed = e; return { status: PROVIDER_STATUS.REFUSED, accepted: false, reason: "captured", providerRef: null }; } });
+
+    // Offered at the execution boundary, alongside a forged destination.
+    const r = await executeAuthorisedDial({
+      store, authorisedDial: d.dial, provider: capture, now: now(),
+      dispatchId: "00000000-0000-4000-8000-000000000000",
+      destination: "+61399999999",
+    });
+
+    // The caller-override guard refuses the destination outright; when it does
+    // not fire, the slip's value is still the only one that reaches a provider.
+    if (r.status === EXECUTION_CODES.CALLER_OVERRIDE_REJECTED) {
+      assert.strictEqual(handed, null, "nothing reached a provider at all");
+    } else {
+      assert.strictEqual(handed.dispatchId, d.dial.dispatchId);
+    }
+  });
+
+  it("a provider cannot choose the dispatchId it is correlated under", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    // A provider that tries to rewrite its own execution before building.
+    const greedy = Object.freeze({
+      name: "greedy", live: false,
+      submit: async (execution) => {
+        const forged = { ...execution, dispatchId: "99999999-9999-4999-8999-999999999999" };
+        const payload = buildRetellCallPayload({ execution: forged, routing: ROUTING });
+        // It can build whatever it likes for itself — but the DURABLE row is
+        // keyed by the executor, which never consulted the provider.
+        assert.notStrictEqual(payload.metadata.aida_dispatch_id, d.dial.dispatchId);
+        return { status: PROVIDER_STATUS.ACCEPTED, accepted: true, reason: null, providerRef: "call_x" };
+      },
+    });
+
+    await executeAuthorisedDial({ store, authorisedDial: d.dial, provider: greedy, now: now() });
+    const [row] = await store.listDialExecutions({});
+    assert.strictEqual(row.dispatchId, d.dial.dispatchId, "the ledger row is keyed by the executor, never by the provider");
+    assert.strictEqual(row.providerRef, "call_x");
+  });
+
+  it("a cloned or forged slip never reaches a provider at all", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    let handed = null;
+    const capture = Object.freeze({ name: "capture", live: false, submit: async (e) => { handed = e; return { status: PROVIDER_STATUS.REFUSED, accepted: false, reason: "c", providerRef: null }; } });
+
+    for (const forged of [{ ...d.dial }, Object.assign({}, d.dial), JSON.parse(JSON.stringify(d.dial))]) {
+      const r = await executeAuthorisedDial({ store, authorisedDial: forged, provider: capture, now: now() });
+      assert.strictEqual(r.status, EXECUTION_CODES.AUTHORISATION_INVALID);
+    }
+    assert.strictEqual(handed, null, "no clone may be correlated to anything");
+  });
+
+  it("changing the destination cannot move the dispatch binding", async () => {
+    const store = await storeWithCalling("enabled");
+    const d = await authorise(store, mkProspect());
+    // A clone with a rewritten number is not a genuine slip, so it is refused
+    // before correlation is even reached.
+    const rewritten = { ...d.dial, e164: "+61399999999" };
+    const capture = Object.freeze({ name: "capture", live: false, submit: async () => ({ status: PROVIDER_STATUS.REFUSED, accepted: false, reason: "c", providerRef: null }) });
+    const r = await executeAuthorisedDial({ store, authorisedDial: rewritten, provider: capture, now: now() });
+    assert.strictEqual(r.status, EXECUTION_CODES.AUTHORISATION_INVALID);
+
+    // And on the genuine slip, the payload's destination and dispatch id come
+    // from the same object — one cannot be changed without the other.
+    const payload = buildRetellCallPayload({ execution: { ...EXECUTION, destination: "+61355509911" }, routing: ROUTING });
+    assert.strictEqual(payload.metadata.aida_dispatch_id, EXECUTION.dispatchId, "the binding does not follow the number");
+  });
+
+  it("changing executionId does not change the durable dispatchId", () => {
+    const a = buildRetellCallPayload({ execution: { ...EXECUTION, executionId: "ex_aaaa" }, routing: ROUTING });
+    const b = buildRetellCallPayload({ execution: { ...EXECUTION, executionId: "ex_bbbb" }, routing: ROUTING });
+    assert.notStrictEqual(a.metadata.aida_execution_id, b.metadata.aida_execution_id);
+    assert.strictEqual(a.metadata.aida_dispatch_id, b.metadata.aida_dispatch_id);
+    assert.strictEqual(a.metadata.aida_dispatch_id, EXECUTION.dispatchId);
+  });
+
+  it("same-millisecond authorisations collide on authorisationId but NOT on correlation", async () => {
+    // The case that made E-7B1 key the execution id off dispatchId in the first
+    // place: authorisationId is a deterministic fingerprint and legitimately
+    // collides. Correlation must not.
+    const store = await storeWithCalling("enabled");
+    const p = mkProspect();
+    const a = await authorise(store, p);
+    const b = await authorise(store, p);
+
+    assert.strictEqual(a.dial.authorisationId, b.dial.authorisationId, "the fingerprint still collides — that is by design");
+    assert.notStrictEqual(a.dial.dispatchId, b.dial.dispatchId, "but the dispatch identity does not");
+
+    const pa = buildRetellCallPayload({ execution: { ...EXECUTION, dispatchId: a.dial.dispatchId }, routing: ROUTING });
+    const pb = buildRetellCallPayload({ execution: { ...EXECUTION, dispatchId: b.dial.dispatchId }, routing: ROUTING });
+    assert.notStrictEqual(
+      pa.metadata.aida_dispatch_id,
+      pb.metadata.aida_dispatch_id,
+      "two authorisations in the same millisecond must never share Retell correlation metadata"
+    );
   });
 });
 
