@@ -1,10 +1,12 @@
 # E-7B2 — the Retell acquisition provider
 
-**Status:** **E-7B2A COMPLETE (offline adapter + audit). E-7B2B1 COMPLETE
-(offline agent contract + outcome/reconciliation return path, §14). E-7B2B live
-activation NOT STARTED. E-7 REMAINS OPEN. Acquisition calling is PAUSED, no
-live provider exists, no Retell agent is provisioned and no outbound acquisition
-number is provisioned.**
+**Status:** **E-7B2A COMPLETE** (offline adapter + audit) · **E-7B2B1 COMPLETE**
+(offline agent contract + outcome/reconciliation return path, §14) · **E-10A
+COMPLETE** (the acquisition agent specified locally, §19). **E-7B2B live
+activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is PAUSED, no
+live provider exists, **the Retell acquisition agent is NOT PROVISIONED**, no
+outbound acquisition number is provisioned, and no acquisition webhook route is
+exposed.
 
 **Owns (source of truth for):** how an authorised acquisition dial becomes a
 Retell outbound call, what E-7B2B still requires, and why the adapter built in
@@ -472,3 +474,112 @@ E-7B2B and requires founder approval, so it is **not written here**.
 
 Likewise `lpm3` (the webhook-event idempotency table) must be **applied wherever
 acquisition webhooks are processed**. It is not part of laq1–laq5.
+
+---
+
+## 19. E-10A — the acquisition agent, specified and unprovisioned
+
+**Status: LOCAL AGENT SPEC COMPLETE. Retell acquisition agent NOT PROVISIONED.
+No outbound number. No webhook route. Calling PAUSED. E-7 OPEN.**
+
+`src/services/acquisition-agent-spec.js` builds the opening, the
+`general_prompt`, the `post_call_analysis_data` fields and the exact
+`create-agent` payload — and sends none of it. `describeAcquisitionAgentPayload`
+returns the request that *would* go, carrying a `_note` saying it has not.
+
+### 19.1 Disclosure — a product decision, stated as one
+
+The agent says it is an AI assistant **unprompted, in the opening**, and answers
+plainly if asked whether it is AI, a robot, automated or a person. It may never
+claim to be human. Ratchets enforce all three.
+
+**This is recorded as founder product policy, not as a legal requirement.**
+Nothing here claims Australian law mandates the words "AI assistant" — M8M
+already established that this repository does not manufacture legal positions,
+and that rule holds here.
+
+### 19.2 THE BRAND DISCREPANCY, reported rather than resolved
+
+The approved opening says *"calling from AIDA"*. This repository says:
+
+| constant | value |
+|---|---|
+| `PRODUCT_NAME` | **AIDA Locksmith Receptionist** |
+| `PROVIDER_NAME` | **Niche Drops** |
+
+So **AIDA is the product and Niche Drops is the company**, and the opening also
+names the assistant after the product — *"Aida, … calling from AIDA"*.
+
+The founder's wording is kept as the **default**, because trading as AIDA is a
+commercial decision this file should not quietly overrule. But `company` is a
+**parameter**, not prose baked into a prompt, so correcting it is one argument
+rather than an edit to a script. **A decision is wanted before the first live
+call.**
+
+### 19.3 The tagline may not be spoken
+
+`tagline: "Never lose another after-hours locksmith enquiry"` is an **absolute**,
+and no infrastructure here justifies one. It is on the forbidden list and a
+ratchet asserts it never appears in the prompt.
+
+Copy on a page somebody chose to visit is not the same act as a promise made
+down a telephone to a stranger who did not.
+
+### 19.4 Price is never hardcoded and never raised first
+
+`DEFAULT_PRICING` is `provisional: true` and env-overridable, and its own comment
+says there is **exactly one numeric source**. A prompt is not it.
+
+The agent never introduces price. If asked, it quotes **only** figures passed in
+as data at compile time, always framed as founding-pilot pricing confirmed at
+setup; given none, it says so and offers to have details sent. A ratchet asserts
+no amount appears in the spec source.
+
+### 19.5 Voicemail — leave no message, for now
+
+**Recommendation: hang up.** Three reasons, the third decisive:
+
+1. a voicemail **consumes a counted attempt** under A-L7 and a no-answer does
+   not, so a message spends half a business's permitted contact on a recording
+   nobody agreed to receive;
+2. no recorded acquisition message has ever been written or reviewed here, and a
+   first live proof is the wrong moment to hear one for the first time;
+3. **machine detection is a provider behaviour we have never configured or
+   observed.** Drafting a message that assumes it works reliably would be
+   inventing a capability.
+
+**No template is provided.** `VOICEMAIL_POLICY.template` is `null`, and a test
+asserts it.
+
+### 19.6 The analysis schema, and what is deliberately absent
+
+Retell `post_call_analysis_data` in this repository's existing shape
+(`type`/`name`/`description`, `choices` for enums): `reached_human`,
+`final_outcome` (closed enum), `explicit_opt_out`, `callback_requested`,
+`requested_callback_at`, `confidence`, `transcript_evidence`, `brief_reason`,
+plus the two system presets.
+
+**`voicemail` and `no_answer` are NOT in the outcome enum.** They are machine
+facts derived from `disconnection_reason` at `call_ended` (§14.3), and letting
+the analysis assert them as well would put one fact behind two sources that can
+disagree. The enum is the conversation vocabulary only.
+
+The field descriptions carry the conservative rule to the model itself:
+`explicit_opt_out` says being busy or uninterested is **not** an opt-out and to
+answer false when unsure; `transcript_evidence` says it is **required** when an
+opt-out is reported.
+
+### 19.7 Proven offline
+
+**37 tests.** Eighteen conversations — interested, "how does it work", price,
+not interested, declined, "don't call me again", busy, callback tomorrow, wrong
+person, "are you a robot", "are you a real person", hostile, voicemail, no
+answer, "maybe another time", already has a receptionist, missed calls are a
+problem, unsupported feature — each run through the real validate-and-classify
+path.
+
+Ratchets fail the build if the opening loses its disclosure, the prompt permits
+claiming to be human, AIDA identity disappears, pitching continues after an
+opt-out or a clear refusal, "busy" becomes a refusal, the outcome enum opens to
+free text, an opt-out is accepted without evidence, or any guarantee appears.
+The guarantee ratchet was checked by planting one: it fires.

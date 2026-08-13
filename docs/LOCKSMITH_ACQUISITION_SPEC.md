@@ -3560,3 +3560,39 @@ reports `live: false`. **Both locks remain shut.**
 - **A resolved dispatch is releasable only by a human or an outcome**, so an
   abandoned dispatch holds a business until somebody acts. That is intended, and
   it is real operational work.
+
+---
+
+## E-10A — the outbound acquisition agent (local spec, 2026-08-13)
+
+**The agent is NOT PROVISIONED.** `src/services/acquisition-agent-spec.js`
+builds everything Retell will eventually be sent and sends none of it.
+
+**It discloses.** Unprompted, in the opening: *"Hi, this is Aida, an AI
+assistant calling from AIDA. We help locksmith businesses handle missed and
+after-hours calls. I was just calling to see if that might be useful for your
+business."* If asked whether it is AI, a robot, automated or a person, it answers
+plainly and may never claim to be human. **Founder product policy — this
+repository makes no claim that any law requires those words.**
+
+**It takes a no the first time.** One acknowledgement, then the call ends — no
+second pitch after "not interested", no second close after a decline, and after
+an opt-out nothing at all except agreeing and hanging up. "Busy" and "not now"
+are **not** refusals.
+
+**It cannot promise things AIDA cannot do.** Permitted claims trace to what the
+product page actually says. Forbidden: guarantees of any kind, unbuilt
+integrations, human equivalence — and **the marketing tagline**, which is an
+absolute that no infrastructure justifies.
+
+**It never raises price**, and quotes only figures passed in as data.
+
+**It leaves no voicemail.** A message costs a counted attempt under A-L7, none
+has ever been written or reviewed, and machine detection has never been observed
+working here. No template was invented.
+
+Three things are open and recorded in
+[ACQUISITION_E7B2_RETELL_DESIGN.md](ACQUISITION_E7B2_RETELL_DESIGN.md) §19: the
+**AIDA / Niche Drops** naming discrepancy, the AI-disclosure wording being
+product policy rather than legal advice, and how an opt-out is finally confirmed
+from a transcript.
