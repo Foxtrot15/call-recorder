@@ -513,25 +513,155 @@ function buildAcquisitionAnalysisFields() {
   ]);
 }
 
+// ── TWO RESOURCES, NOT ONE (E-10C) ──────────────────────────────────
+//
+// The first version of this file described ONE object carrying agent fields
+// AND `general_prompt` AND `begin_message`. That was wrong against Retell's API
+// and against this repository's own convention, which both compilers already
+// follow:
+//
+//   response engine   POST /create-retell-llm   general_prompt, begin_message,
+//                                               default_dynamic_variables,
+//                                               general_tools
+//   agent             POST /create-agent        agent_name, response_engine,
+//                                               voice_id, language,
+//                                               webhook_url,
+//                                               post_call_analysis_data
+//
+// Sent as it was, it would have created an agent whose `llm_id` was null — an
+// agent with no brain — while the prompt went to an endpoint that does not take
+// one. The dependency is real and is now expressed as one.
+
+const ACQUISITION_RESOURCE_PREFIX = "aida-acquisition";
+
 /**
- * The create-agent request that WOULD be sent. Nothing sends it.
+ * The acquisition provisioning order, DELIBERATELY NOT in
+ * provisioning-plan.js's DESIRED_RESOURCE_ORDER.
  *
- * Returned so a founder can read the exact payload before anybody is authorised
- * to create anything, and so a test can assert its shape without a network.
+ * ── WHY IT LIVES HERE INSTEAD ───────────────────────────────────────
+ * That list is keyed by `resourceType`, and `buildDesiredResources` looks each
+ * entry up in a `byResource` map built from ONE compiled receptionist. An
+ * acquisition entry with `resourceType: "response_engine"` would therefore be
+ * handed the RECEPTIONIST's engine payload and emitted as an
+ * acquisition-purposed row carrying receptionist content.
+ *
+ * There is no executor today — nothing dispatches `operation` to an adapter —
+ * so this could not provision anything by itself. But "it cannot run yet" is a
+ * poor reason to leave a landmine where the next person will step on it, and
+ * acquisition provisioning must be an explicit act rather than a side effect of
+ * planning a receptionist.
  */
-function describeAcquisitionAgentPayload({ identity = DEFAULT_IDENTITY, pricing = null, config = {} } = {}) {
+const ACQUISITION_RESOURCE_ORDER = Object.freeze([
+  Object.freeze({ purpose: "acquisition_agent", resourceType: "response_engine", operation: "createResponseEngine", updateOperation: "updateResponseEngine", dependsOn: null }),
+  Object.freeze({ purpose: "acquisition_agent", resourceType: "voice_agent", operation: "createAgent", updateOperation: "updateAgent", dependsOn: "response_engine" }),
+]);
+
+/** The Retell LLM. Everything the agent SAYS lives here. */
+function buildAcquisitionResponseEngine({ identity = DEFAULT_IDENTITY, pricing = null } = {}) {
   const id = { ...DEFAULT_IDENTITY, ...(identity || {}) };
   return Object.freeze({
-    agent_name: `aida-acquisition-${SPEC_VERSION}`,
-    response_engine: { type: config.responseEngineType || "retell-llm", llm_id: null },
+    general_prompt: buildAcquisitionAgentPrompt({ identity: id, pricing }),
+    begin_message: buildAcquisitionOpening(id),
+    // Declared so a missing variable at call time is an empty string rather
+    // than a literal placeholder spoken down the telephone. The dial provider
+    // supplies both per call (E-7B2A).
+    default_dynamic_variables: Object.freeze({ business_name: "", authorised_at: "" }),
+    // No tools. This agent books nothing, looks nothing up, and calls no
+    // endpoint of ours — giving it a tool would be giving it a capability
+    // nobody has approved.
+    general_tools: Object.freeze([]),
+  });
+}
+
+/**
+ * The agent. It REFERENCES the engine and never contains it.
+ *
+ * @param {string|null} llmId  the id returned by createResponseEngine. Until a
+ *                             real one is supplied this stays null and the
+ *                             resource is NOT provisionable — see `readiness`.
+ */
+function buildAcquisitionAgent({ config = {}, llmId = null } = {}) {
+  return Object.freeze({
+    agent_name: `${ACQUISITION_RESOURCE_PREFIX}-agent-${SPEC_VERSION}`,
+    response_engine: Object.freeze({ type: config.responseEngineType || "retell-llm", llm_id: llmId || null }),
     voice_id: config.voiceId || null,
     language: config.language || "en-AU",
-    webhook_url: config.webhookBaseUrl ? `${config.webhookBaseUrl}/webhooks/retell` : null,
-    begin_message: buildAcquisitionOpening(id),
-    general_prompt: buildAcquisitionAgentPrompt({ identity: id, pricing }),
+    // Never the receptionist's or onboarding's webhook, never localhost, never
+    // a placeholder. Null until the acquisition route exists.
+    webhook_url: config.acquisitionWebhookUrl || null,
     post_call_analysis_data: buildAcquisitionAnalysisFields(),
-    // Stated so a reader is not left wondering: this object has never been sent.
-    _note: "LOCAL ONLY. This payload has not been sent to any provider and no agent exists.",
+  });
+}
+
+const isRealId = (v) => typeof v === "string" && v.trim().length > 0;
+
+/**
+ * BOTH resources, their dependency, and an honest account of what is not ready.
+ *
+ * Readiness is not "the JSON parses". Every unresolved item below is a real
+ * decision or a real provider behaviour nobody has verified, and each one is
+ * reported by name rather than averaged into a single optimistic boolean.
+ */
+function describeAcquisitionRetellResources({ identity = DEFAULT_IDENTITY, pricing = null, config = {}, llmId = null } = {}) {
+  const responseEngine = buildAcquisitionResponseEngine({ identity, pricing });
+  const agent = buildAcquisitionAgent({ config, llmId });
+
+  const engineReady = {
+    promptReady: responseEngine.general_prompt.length > 500,
+    openingReady: describeOpeningSemantics(responseEngine.begin_message, identity).ok,
+    networkIdPresent: false,
+    provisioned: false,
+  };
+
+  const agentReady = {
+    identityReady: true,
+    languageReady: agent.language === "en-AU",
+    analysisReady: agent.post_call_analysis_data.length > 0,
+    voiceResolved: isRealId(agent.voice_id),
+    llmIdResolved: isRealId(agent.response_engine.llm_id),
+    webhookResolved: isRealId(agent.webhook_url),
+    // Policy is "leave no message". Nothing in this payload can ENFORCE it —
+    // no voicemail, machine-detection or hang-up field is represented anywhere
+    // in this repository's Retell surface. The instruction lives in the prompt,
+    // which is guidance to a model rather than a provider guarantee.
+    voicemailProviderBehaviourVerified: false,
+    provisioned: false,
+  };
+
+  const blockers = [
+    engineReady.promptReady ? null : "the response engine has no usable prompt",
+    engineReady.openingReady ? null : "the opening does not carry its required meaning",
+    agentReady.llmIdResolved ? null : "no acquisition response-engine id has been supplied (create the engine first)",
+    agentReady.voiceResolved ? null : "voice_id is unresolved — a founder must choose one",
+    agentReady.webhookResolved ? null : "webhook_url is unresolved — the acquisition route is not exposed",
+    agentReady.voicemailProviderBehaviourVerified ? null : "provider behaviour on an answering machine is unverified",
+  ].filter(Boolean);
+
+  return Object.freeze({
+    order: ACQUISITION_RESOURCE_ORDER,
+    responseEngine,
+    agent,
+    dependencies: Object.freeze([
+      Object.freeze({
+        from: "response_engine",
+        to: "voice_agent",
+        field: "response_engine.llm_id",
+        satisfied: agentReady.llmIdResolved,
+        note: "The agent may not be created until createResponseEngine has returned an id for THIS acquisition engine.",
+      }),
+    ]),
+    readiness: Object.freeze({
+      responseEngine: Object.freeze(engineReady),
+      agent: Object.freeze(agentReady),
+      // COMPUTED, not asserted. A hardcoded `false` would be honest today and
+      // a lie the moment somebody resolved the blockers, and a readiness flag
+      // that cannot ever say yes is one people learn to ignore.
+      createAgentReady: blockers.length === 0,
+      blockers: Object.freeze(blockers),
+      note:
+        "NOT CREATE-AGENT READY. Nothing here has been sent to any provider; no acquisition response engine " +
+        "and no acquisition agent exists.",
+    }),
   });
 }
 
@@ -552,5 +682,13 @@ module.exports = {
   describeOpeningSemantics,
   buildAcquisitionAgentPrompt,
   buildAcquisitionAnalysisFields,
-  describeAcquisitionAgentPayload,
+  // E-10C: two resources. The old `describeAcquisitionAgentPayload` is gone
+  // rather than aliased — its name promised one agent payload while the truth
+  // is two unrelated API resources with a dependency between them, and a
+  // misleading name is worse than a rename.
+  buildAcquisitionResponseEngine,
+  buildAcquisitionAgent,
+  describeAcquisitionRetellResources,
+  ACQUISITION_RESOURCE_ORDER,
+  ACQUISITION_RESOURCE_PREFIX,
 };

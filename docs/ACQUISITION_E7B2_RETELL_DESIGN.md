@@ -2,11 +2,13 @@
 
 **Status:** **E-7B2A COMPLETE** (offline adapter + audit) · **E-7B2B1 COMPLETE**
 (offline agent contract + outcome/reconciliation return path, §14) · **E-10A
-COMPLETE** (the acquisition agent specified locally, §19). **E-7B2B live
-activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is PAUSED, no
-live provider exists, **the Retell acquisition agent is NOT PROVISIONED**, no
-outbound acquisition number is provisioned, and no acquisition webhook route is
-exposed.
+COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
+(response-engine / agent resource split, §20). **E-7B2B live activation NOT
+STARTED. E-7 REMAINS OPEN.** Acquisition calling is PAUSED, no live provider
+exists, **the acquisition response engine and the acquisition agent are both
+NOT PROVISIONED**, voice is UNRESOLVED, webhook is UNRESOLVED, voicemail
+provider enforcement is UNVERIFIED, no outbound acquisition number is
+provisioned, and no acquisition webhook route is exposed.
 
 **Owns (source of truth for):** how an authorised acquisition dial becomes a
 Retell outbound call, what E-7B2B still requires, and why the adapter built in
@@ -612,3 +614,95 @@ claiming to be human, AIDA identity disappears, pitching continues after an
 opt-out or a clear refusal, "busy" becomes a refusal, the outcome enum opens to
 free text, an opt-out is accepted without evidence, or any guarantee appears.
 The guarantee ratchet was checked by planting one: it fires.
+
+---
+
+## 20. E-10C — two Retell resources, and the order between them
+
+**Status: RESOURCE SPLIT COMPLETE, OFFLINE. Acquisition response engine NOT
+PROVISIONED. Acquisition agent NOT PROVISIONED. Voice UNRESOLVED. Webhook
+UNRESOLVED. Voicemail provider enforcement UNRESOLVED. Calling PAUSED.**
+
+### 20.1 The defect E-10B found
+
+`describeAcquisitionAgentPayload` returned **one** object carrying agent fields
+**and** `general_prompt` **and** `begin_message`. Wrong against Retell's API and
+against this repository's own convention — both existing compilers already
+split the two:
+
+| resource | endpoint | carries |
+|---|---|---|
+| response engine | `POST /create-retell-llm` | `general_prompt`, `begin_message`, `default_dynamic_variables`, `general_tools` |
+| agent | `POST /create-agent` | `agent_name`, `response_engine {type, llm_id}`, `voice_id`, `language`, `webhook_url`, `post_call_analysis_data` |
+
+Sent as it was, it would have created **an agent with no brain** — `llm_id`
+null — while the prompt went to an endpoint that does not accept one.
+
+### 20.2 THE PROVISIONING HAZARD, and why acquisition is NOT in the shared list
+
+`provisioning-plan.js` exposes `DESIRED_RESOURCE_ORDER`, and it is tempting to
+add two acquisition rows to it. **That would have been a landmine.**
+
+`buildDesiredResources` looks each entry up in a `byResource` map keyed by
+**`resourceType`** and built from **one compiled receptionist**. An acquisition
+entry with `resourceType: "response_engine"` would therefore be handed the
+**receptionist's** engine payload and emitted as an acquisition-purposed row
+carrying receptionist content — a wrong resource with a convincing name.
+
+There is **no executor** — nothing dispatches `operation` to an adapter, so
+nothing could have been created either way. But "it cannot run yet" is a poor
+reason to leave a trap where the next person will step on it.
+
+So acquisition has its **own** `ACQUISITION_RESOURCE_ORDER`, in the acquisition
+module, and `provisioning-plan.js` does not mention acquisition at all. A test
+asserts that, and another walks `src/services`, `src/routes` and `scripts`
+proving **nothing anywhere constructs acquisition resources**. Provisioning
+acquisition must be an explicit act, never a side effect of planning a
+receptionist.
+
+### 20.3 The dependency, expressed rather than remembered
+
+```
+acquisition response engine  →  llm_id  →  acquisition agent
+        (no dependency)                     (dependsOn: response_engine)
+```
+
+`describeAcquisitionRetellResources({ llmId })` binds a supplied id into exactly
+one field, `agent.response_engine.llm_id`, and the engine never carries its own
+id. Until a real one is supplied it stays `null` and the agent is **not
+provisionable** — reported as a named blocker rather than inferred.
+
+### 20.4 Readiness is computed, and says what is missing
+
+```
+createAgentReady: false
+blockers:
+  - no acquisition response-engine id has been supplied (create the engine first)
+  - voice_id is unresolved — a founder must choose one
+  - webhook_url is unresolved — the acquisition route is not exposed
+  - provider behaviour on an answering machine is unverified
+```
+
+**Computed from the blockers, not hardcoded.** A flag that can never say yes is
+one people learn to ignore; supplying an llm_id, a voice and an acquisition
+webhook leaves exactly one blocker, and a test pins that.
+
+`webhook_url` reads only `config.acquisitionWebhookUrl` — passing the
+receptionist's `webhookBaseUrl` leaves it **null**, so the acquisition agent
+cannot inherit another family's webhook by accident.
+
+### 20.5 The old API is gone, not aliased
+
+`describeAcquisitionAgentPayload` no longer exists. Its name promised one agent
+payload while the truth is two unrelated API resources with a dependency between
+them, and a misleading name is worse than a rename.
+
+### 20.6 Unchanged by this milestone
+
+Language `en-AU`. Voice unresolved and never invented. No pricing injected. No
+pronunciation encoded. Opening unchanged and still tunable — E-10C is
+architecture, not copy. Voicemail stays no-message with a `null` template, and
+**provider-level enforcement remains unverified**: no voicemail, machine-
+detection or hang-up field exists anywhere in this repository's Retell surface,
+so the instruction lives in the prompt, which is guidance to a model rather than
+a provider guarantee. No such field was invented.

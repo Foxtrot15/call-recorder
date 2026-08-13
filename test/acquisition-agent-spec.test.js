@@ -23,7 +23,7 @@ const {
   describeOpeningSemantics,
   buildAcquisitionAgentPrompt,
   buildAcquisitionAnalysisFields,
-  describeAcquisitionAgentPayload,
+  describeAcquisitionRetellResources,
 } = require("../src/services/acquisition-agent-spec");
 
 const {
@@ -209,7 +209,7 @@ describe("E-10A: the opening conveys the right things — as MEANING, not as cop
 
   it("is what the agent opens with, and is the payload's begin_message", () => {
     assert.ok(PROMPT.includes(OPENING));
-    assert.strictEqual(describeAcquisitionAgentPayload().begin_message, OPENING);
+    assert.strictEqual(describeAcquisitionRetellResources().responseEngine.begin_message, OPENING, "the opening is the ENGINE's begin_message (E-10C)");
   });
 
   // ── THE PROOF THAT WORDING REMAINS TUNABLE ───────────────────────
@@ -398,13 +398,16 @@ describe("E-10A: voicemail and the unsent payload", () => {
     assert.match(VOICEMAIL_POLICY.attemptCost, /consumes a counted attempt/i);
   });
 
-  it("the payload is complete enough to review, and has been sent nowhere", () => {
-    const p = describeAcquisitionAgentPayload({ config: { voiceId: "v", webhookBaseUrl: "https://example.test" } });
-    assert.match(p.agent_name, /^aida-acquisition-/);
-    assert.strictEqual(p.language, "en-AU");
-    assert.ok(p.general_prompt.length > 500);
-    assert.ok(Array.isArray(p.post_call_analysis_data));
-    assert.match(p._note, /has not been sent to any provider and no agent exists/i);
+  it("both resources are complete enough to review, and have been sent nowhere", () => {
+    // E-10C: two resources. The prompt is the engine's; the analysis is the
+    // agent's. Shape is proven in acquisition-agent-resources.test.js.
+    const r = describeAcquisitionRetellResources({ config: { voiceId: "v" } });
+    assert.match(r.agent.agent_name, /^aida-acquisition-agent-/);
+    assert.strictEqual(r.agent.language, "en-AU");
+    assert.ok(r.responseEngine.general_prompt.length > 500);
+    assert.ok(Array.isArray(r.agent.post_call_analysis_data));
+    assert.strictEqual(r.readiness.createAgentReady, false);
+    assert.match(r.readiness.note, /has been sent to any provider/i);
   });
 
   it("the spec reaches no network, reads no environment, and creates no agent", () => {
@@ -414,7 +417,18 @@ describe("E-10A: voicemail and the unsent payload", () => {
       return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
     }).join("\n");
     assert.ok(!/process\.env/.test(src), "it must not read the environment");
-    for (const p of [/\bfetch\s*\(/, /createAgent/, /require\(["'](axios|got|node-fetch|undici|twilio|retell-sdk)/, /require\(["']\.\/retell-adapter["']\)/, /https?:\/\/(?!example\.test)/]) {
+    // The hazard is INVOKING a provisioning operation, not naming one. E-10C's
+    // ACQUISITION_RESOURCE_ORDER declares `operation: "createAgent"` as data,
+    // exactly as provisioning-plan.js does, so the ratchet matches the call
+    // form. Banning the bare word would forbid describing the plan at all.
+    for (const p of [
+      /\bfetch\s*\(/,
+      /\bcreateAgent\s*\(/,
+      /\bcreateResponseEngine\s*\(/,
+      /require\(["'](axios|got|node-fetch|undici|twilio|retell-sdk)/,
+      /require\(["']\.\/retell-adapter["']\)/,
+      /https?:\/\/(?!example\.test)/,
+    ]) {
       assert.ok(!p.test(code), `the spec must not contain ${p}`);
     }
     for (const r of [...src.matchAll(/require\(["']([^"']+)["']\)/g)].map((m) => m[1])) {
@@ -427,7 +441,7 @@ describe("E-10A: voicemail and the unsent payload", () => {
     const offenders = [];
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js") && n !== "acquisition-agent-spec.js")) {
       const body = fs.readFileSync(path.join(dir, f), "utf8");
-      if (/describeAcquisitionAgentPayload\s*\(/.test(body)) offenders.push(f);
+      if (/describeAcquisitionRetellResources\s*\(/.test(body)) offenders.push(f);
     }
     assert.deepStrictEqual(offenders, [], offenders.join("; "));
   });

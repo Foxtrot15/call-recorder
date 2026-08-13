@@ -3608,3 +3608,27 @@ Three things are open and recorded in
 **AIDA / Niche Drops** naming discrepancy, the AI-disclosure wording being
 product policy rather than legal advice, and how an opt-out is finally confirmed
 from a transcript.
+
+### E-10C — two Retell resources, not one (2026-08-13)
+
+The acquisition agent compiles to **two** objects, matching the receptionist and
+onboarding compilers exactly:
+
+- **response engine** (`create-retell-llm`) — the prompt, the opening, the
+  dynamic variables the dial provider sends, and an **empty tool list** (this
+  agent books nothing and calls no endpoint of ours);
+- **agent** (`create-agent`) — name, `response_engine{type, llm_id}`, voice,
+  language, webhook, post-call analysis.
+
+The engine must exist first; its returned `llm_id` is the agent's only link to
+it, and until a real one is supplied the agent is **not provisionable**.
+
+**Acquisition is deliberately absent from the shared `DESIRED_RESOURCE_ORDER`.**
+That list is keyed by `resourceType` and resolved against one compiled
+receptionist, so an acquisition entry would have been handed the receptionist's
+payload under an acquisition name. Acquisition provisioning must be an explicit
+act, never a side effect of planning a receptionist — and a test proves nothing
+in the repository constructs these resources at all.
+
+**Neither resource is provisioned.** Voice, webhook and answering-machine
+behaviour all remain unresolved, and readiness reports each by name.
