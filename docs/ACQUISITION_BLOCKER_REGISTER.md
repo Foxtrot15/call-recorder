@@ -7,7 +7,10 @@ real Postgres — including a genuine two-process race that Postgres, not Node,
 arbitrated — and the live schema **structurally verified 14/14 PASS** (§11).
 Dev is at **23 rows**, acquisition calling is **paused at revision 1** and has
 never been anything else, there is still **no live provider**, and **E-7 remains
-OPEN**. On 2026-08-11 **E-7A**
+OPEN**. Also on 2026-08-13, **E-7B2A** built the Retell provider adapter
+**offline** — it constructs the exact outbound request, maps every answer, and
+**cannot send one**: no transport is wired anywhere, `live` is a literal
+`false`, and no SQL or cross-repo change was needed (§12). On 2026-08-11 **E-7A**
 built the provider-disabled dial execution seam (§10). Before that, on 2026-08-10: **M8L** closed
 the caller-supplied duplicate-resolution gap, **E-5** closed durable founder batch
 approval — **neither needed SQL** — the founder approved the attempt policy
@@ -111,6 +114,8 @@ SQL was required to close A-L8.**
 | ~~**M8L**~~ | Durable duplicate resolution | **CLOSED — no SQL.** `context.duplicateResolution` is no longer authority anywhere a call can be decided. The M8E gate destructures it off the caller's context and reads the **M8H review decision** instead — the same rows a human already wrote. Proven across two separate OS processes, 13/13 and 22/22, **zero database residue**. See §8. |
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
 | ~~**E-7B1**~~ | Durable dispatch authority + durable emergency stop | **CLOSED ON DEV 2026-08-12 — LAQ5 applied by hand, proven against real Postgres.** `dispatchId` (random UUID) and `batchKey` travel on every genuine slip; the atomic claim is one INSERT **the database arbitrates**, and that was proven by **two separate OS processes** racing to claim one business on one handset — one claimed, one was refused naming the prospect lock. Replay, the prospect lock and the destination lock all refused as designed. The emergency stop is read from the store **twice** per dispatch, `killSwitch` is a forbidden caller option, and the executor refused a caller who supplied one. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator, and the proof row is still unresolved. Dev residue **21 → 23** (bootstrap state row + one fictional dispatch); decisions unchanged at 4, queue at 0, calling **paused**. The live schema was then **structurally verified 14/14 PASS** on 2026-08-13, read-only — including both partial unique index predicates and both guard triggers being BEFORE, ROW-level, covering UPDATE and DELETE, and **enabled** (§11). **Production: not applied.** [Runbook §15](ACQUISITION_SQL_RUNBOOK.md), design: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
+| **E-7B2A** | The Retell provider adapter, offline | **COMPLETE — OFFLINE, NO TRANSPORT, `live: false`.** `acquisition-retell-provider.js` builds the exact outbound call request and maps every answer Retell can give, and **cannot send one**: it imports no transport, reads no environment, holds no credential, names no host, and states `live` as a literal `false` a caller cannot override. Its submitter is **injected**, and a ratchet walks every `acquisition-*.js` proving nothing constructs one. **No SQL** — laq5's `provider_ref` already carries a `call_id`. **No cross-repo change** — there is no second repository (§12). The one substantive decision: the shared voice port marks `provider_timeout` **retryable**, and this provider **discards that flag**, raising ambiguity instead so an unknown submission leaves the dispatch unresolved for a human rather than ringing a business twice. 34 offline proofs. [ACQUISITION_E7B2_RETELL_DESIGN.md](ACQUISITION_E7B2_RETELL_DESIGN.md) |
+| **E-7B2B** | Live Retell integration | **NOT STARTED — founder-authorised, after DNCR readiness.** Needs a purpose-built acquisition agent (the receptionist and onboarding agents are both wrong for cold calling, §12), its own outbound number and capability gate, a wired transport, `dispatchId` in Retell metadata so an ambiguous submission is reconcilable, an explicit decision on how an opt-out is confirmed, and the webhook → outcome → resolution path in that order. |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **PARTIAL — E-7A COMPLETE, LIVE PROVIDER ABSENT BY DESIGN.** The execution **seam** is built, provider-disabled: `acquisition-dial-execution.js` is the only thing that may consume a slip, the default provider **refuses**, and the only other provider is an offline fake. **No real provider adapter exists, no network path exists, and no live call is possible.** E-7 does **not** close until a later founder-authorised milestone (**E-7B**) connects a real provider after DNCR operational readiness. See §10. |
 
 ---
@@ -821,3 +826,90 @@ pass.**
 - **A-L2 is unchanged.** The holiday calendar is a hand-compiled 2026-only
   fixture, `authoritative: false`, and from 2027-01-01 the gate refuses every
   date.
+
+---
+
+## 12. E-7B2A — the Retell provider that cannot call, 2026-08-13
+
+**Status: COMPLETE, OFFLINE. E-7 REMAINS OPEN. Calling is PAUSED at revision 1.**
+
+### 12.1 The audit finding that reframed it
+
+The milestone was scoped as a cross-repository integration against
+`C:/Users/HyperBit/Documents/GitHub/call-recorder`, with a hard stop if changes
+were needed there.
+
+**There is no second repository.** Both working copies point at the same
+remote, `github.com/Foxtrot15/call-recorder.git`. They are two checkouts of one
+repository on different branches — ours, and
+`feature/locksmith-pilot-m7e-live-diagnostics-validation`.
+
+The boundary is therefore **cross-branch, and mostly already crossed**:
+`retell-adapter.js` (with `createPhoneCall`), `voice-platform-port.js`,
+`config/retell.js` (with `canPlaceCall`) and `retell-webhook-handler.js` are
+**already on the acquisition branch**, the last two byte-identical to M7E. The
+32 commits M7E has that we do not are diagnostics and sandbox work, none of it
+required to place an outbound call.
+
+**Nothing outside this working tree was modified, and nothing needed to be.**
+
+### 12.2 The decision the milestone turns on
+
+`voice-platform-port.js` marks `provider_timeout`, `provider_unreachable` and
+`provider_error` as **retryable** — "may be retried with the same idempotency
+key". For an onboarding call to a client who asked for one, that is right.
+
+**For a cold acquisition call it is the precise mechanism by which one
+authorisation becomes two telephone calls to a business that never asked to hear
+from us.** A timeout cannot distinguish *never arrived* from *arrived, placed
+the call, and the answer was lost*.
+
+So the acquisition provider **discards `retryable` entirely** — not read, not
+mapped, not passed upward, with a test asserting the flag never appears on a
+result. An ambiguous answer is **raised**, not returned, because the executor's
+contract is that a throwing provider yields `provider_status: 'unknown'` with no
+`submitted_at` — the one status laq5 permits to stand alone. Returning a refusal
+instead would assert we definitely reached the provider, and would be a lie in
+the ledger.
+
+`RETELL_MAX_RETRIES` exists in `config/retell.js` (default 2). Nothing reads it.
+
+### 12.3 Why it still cannot call anybody
+
+| | |
+|---|---|
+| `live` | the literal `false`. Not a parameter — a caller passing `live: true` gets `false` |
+| transport | **injected, and nothing constructs one.** A ratchet walks every `acquisition-*.js` and fails if any caller appears, or if any of them imports `./retell-adapter` |
+| without a transport | `submit()` refuses with `acquisition_retell_transport_absent` |
+| imports | only `./acquisition-dial-provider`. No http, https, net, tls, fetch, axios, twilio, retell-sdk |
+| environment | never read. No key, token, SID or host appears in the code |
+| the E-7A registry | **untouched** — still exactly `createDisabledDialProvider` and `createFakeDialProvider`, which is why the provider lives in its own file rather than relaxing that ratchet |
+| the durable stop | proven to yield **zero** submissions while paused, and zero when the state row is missing, even with a perfectly good provider wired |
+
+### 12.4 The gap E-7B2B must close
+
+The provider receives `executionId`, **not `dispatchId`** — the executor holds
+both and writes the binding itself, so the durable link needs nothing from the
+provider.
+
+**But if the create-call response is lost, `provider_ref` is never written**, and
+a webhook arriving later carries a `call_id` we have never seen with nothing
+tying it to the dispatch. That is exactly the case where reconciliation matters
+most. E-7B2B should widen the provider submission by one field so `dispatchId`
+travels in Retell metadata, which Retell echoes back on call events.
+
+### 12.5 The agent is a new agent, not a reused one
+
+`locksmith-receptionist-compiler.js` serves a locksmith's **inbound** callers.
+`locksmith-onboarding-agent-compiler.js` interviews a **consenting client**.
+Neither identifies itself to a stranger, handles an objection, honours an
+opt-out or records a callback, and cold acquisition needs all four. A **third,
+purpose-built acquisition agent** is required. **None was created** — that is a
+network write, and it belongs to E-7B2B. AI disclosure wording remains
+deliberately uninvented.
+
+Also recorded: `not_interested`, `declined`, `opt_out` and `callback_requested`
+are **not** disconnection reasons. Every one of them ends the call as
+`user_hangup` or `agent_hangup`, so they can only come from post-call analysis.
+**How an opt-out is confirmed from a transcript is an open decision with
+permanent, append-only consequences, and E-7B2A does not make it.**
