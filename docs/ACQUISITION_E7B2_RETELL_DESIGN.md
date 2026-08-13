@@ -3,12 +3,13 @@
 **Status:** **E-7B2A COMPLETE** (offline adapter + audit) · **E-7B2B1 COMPLETE**
 (offline agent contract + outcome/reconciliation return path, §14) · **E-10A
 COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
-(response-engine / agent resource split, §20). **E-7B2B live activation NOT
-STARTED. E-7 REMAINS OPEN.** Acquisition calling is PAUSED, no live provider
-exists, **the acquisition response engine and the acquisition agent are both
-NOT PROVISIONED**, voice is UNRESOLVED, webhook is UNRESOLVED, voicemail
-provider enforcement is UNVERIFIED, no outbound acquisition number is
-provisioned, and no acquisition webhook route is exposed.
+(response-engine / agent resource split, §20) · **E-10D(i) COMPLETE** — the
+**acquisition response engine is PROVISIONED** on the dev Retell account, §21.
+**E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
+PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
+voice is UNRESOLVED, webhook is UNRESOLVED, voicemail provider enforcement is
+UNVERIFIED, no outbound acquisition number is provisioned, and no acquisition
+webhook route is exposed. **A response engine cannot ring anybody.**
 
 **Owns (source of truth for):** how an authorised acquisition dial becomes a
 Retell outbound call, what E-7B2B still requires, and why the adapter built in
@@ -706,3 +707,76 @@ architecture, not copy. Voicemail stays no-message with a `null` template, and
 detection or hang-up field exists anywhere in this repository's Retell surface,
 so the instruction lives in the prompt, which is guidance to a model rather than
 a provider guarantee. No such field was invented.
+
+---
+
+## 21. E-10D(i) — the acquisition response engine, provisioned
+
+**Status: ACQUISITION RESPONSE ENGINE PROVISIONED (dev Retell account,
+2026-08-13). ACQUISITION AGENT NOT PROVISIONED. Voice UNRESOLVED. Webhook
+UNRESOLVED. Outbound number NOT PROVISIONED. Voicemail provider enforcement
+UNVERIFIED. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
+
+The first authorised Retell network write in this chain, and the smallest one
+available: a Retell LLM holding a prompt and an opening. **It has no voice, no
+agent, no telephone number and no webhook — it cannot ring anybody and cannot be
+rung.**
+
+| | |
+|---|---|
+| operation | `createResponseEngine` — **one request, no retry** |
+| account tag | `dev` (the script refuses `prod`) |
+| result | **created**, 907 ms, resource version 0 |
+| id | recorded as `RETELL_ACQUISITION_LLM_ID` in the deployment environment — **deliberately not in git** |
+| spec version | `acq-agent-spec-2026-08-13` |
+
+### 21.1 Two things had to be built to do this at all
+
+**A transport.** Nothing in this branch injects a `fetchImpl`, which is exactly
+what has kept the repository structurally incapable of a live write. The script
+supplies one **for one command, run by hand**. Wiring a transport into the
+running service would hand that capability to everything, permanently, and no
+milestone has asked for that. The service remains inert.
+
+**A narrowed ratchet.** `acquisition-agent-resources.test.js` asserted that
+*nothing anywhere* builds acquisition resources — correct while provisioning was
+unauthorised. The rule it protects is unchanged (acquisition is never
+provisioned as a side effect of something else), so the exception is **one
+named filename**, not a relaxed pattern. A second provisioning caller appearing
+anywhere still fails the build.
+
+### 21.2 How "no agent was created" is known
+
+**Structurally, not by asking Retell.** Four ratchets read the only file that
+can reach the provider and assert:
+
+- it calls `createResponseEngine` and **exactly one** `adapter.create*` in the
+  whole file;
+- it contains **no** `createAgent`, `updateAgent`, `createPhoneCall`,
+  `createWebCall`, `bindPhoneNumber` or `deleteAgent` path;
+- it has **no retry, backoff, timer or loop**;
+- it sends `resources.responseEngine` and **cannot reach `resources.agent`**;
+- it **defaults to preview** — sending is opt-in via an explicit flag — and
+  refuses the `prod` tag.
+
+A second network call to list agents would have been a second unauthorised
+request; the code path is the stronger evidence anyway.
+
+### 21.3 Ambiguity handling, which fortunately went unused
+
+A timeout or lost response does **not** mean nothing was created — Retell may
+have built the engine and lost the answer coming back. The script therefore
+separates a **definitive** refusal (4xx: nothing created, safe to correct and
+run again) from an **ambiguous** one (timeout, unreachable, provider error, or
+success carrying no id), and on ambiguity it exits telling the operator to look
+in the dashboard **before** anything else is sent. It never retries.
+
+The write succeeded first time, so none of that fired. It is recorded because
+the next milestone creates an agent under the same rule.
+
+### 21.4 What did NOT happen
+
+No agent. No phone number. No webhook exposed. No voice chosen or listed. No
+transport wired into the acquisition executor. No provider set `live: true`. No
+calling-state change. No DEV write, no SQL. No prospect, Twilio or DNCR contact.
+No call, SMS or email. Production untouched.

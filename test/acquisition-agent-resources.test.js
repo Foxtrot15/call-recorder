@@ -161,20 +161,86 @@ describe("E-10C: acquisition cannot be provisioned as a side effect", () => {
     }
   });
 
-  it("nothing in the repository provisions acquisition resources at all", () => {
-    const dirs = ["src/services", "src/routes", "scripts"];
+  /**
+   * Nothing builds acquisition resources except ONE named script.
+   *
+   * ── THE EXCEPTION IS NAMED, NOT WILDCARDED (E-10D(i)) ─────────────
+   * This test used to assert that NOTHING anywhere touched these builders,
+   * which was right while provisioning was unauthorised. E-10D(i) authorised
+   * exactly one act: creating the response engine. The rule it was protecting —
+   * acquisition is never provisioned as a side effect of something else — is
+   * unchanged, so the exception is a single filename rather than a relaxed
+   * pattern. Same shape as the runbook's section-6 probe exception.
+   *
+   * A second provisioning caller appearing anywhere still fails the build.
+   */
+  const PROVISIONING_SCRIPT = "acquisition-provision-response-engine.js";
+
+  it("nothing provisions acquisition resources except the one named script", () => {
+    const dirs = ["src/services", "src/routes", "scripts", "scripts/dev"];
     const offenders = [];
     for (const d of dirs) {
       const dir = path.join(__dirname, "..", d);
+      if (!fs.existsSync(dir)) continue;
       for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+        if (f === "acquisition-agent-spec.js" || f === PROVISIONING_SCRIPT) continue;
         const body = fs.readFileSync(path.join(dir, f), "utf8");
-        if (f === "acquisition-agent-spec.js") continue;
         if (/describeAcquisitionRetellResources|buildAcquisitionResponseEngine|buildAcquisitionAgent/.test(body)) {
           offenders.push(`${d}/${f}`);
         }
       }
     }
     assert.deepStrictEqual(offenders, [], offenders.join("; "));
+  });
+
+  it("the provisioning script can create an ENGINE and nothing else", () => {
+    // The structural guarantee behind "no agent was created": there is no code
+    // path to one. Asserted by reading the only file that can reach Retell.
+    const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "dev", PROVISIONING_SCRIPT), "utf8");
+    const code = src.split("\n").filter((l) => {
+      const t = l.trimStart();
+      return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+    }).join("\n");
+
+    assert.match(code, /adapter\.createResponseEngine\s*\(/, "it must create the engine");
+    for (const forbidden of [
+      /\.createAgent\s*\(/,
+      /\.updateAgent\s*\(/,
+      /\.createPhoneCall\s*\(/,
+      /\.createWebCall\s*\(/,
+      /\.bindPhoneNumber\s*\(/,
+      /\.updateResponseEngine\s*\(/,
+      /\.deleteAgent\s*\(/,
+    ]) {
+      assert.ok(!forbidden.test(code), `the provisioning script must not be able to call ${forbidden}`);
+    }
+  });
+
+  it("the provisioning script never retries an ambiguous write", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "dev", PROVISIONING_SCRIPT), "utf8");
+    const code = src.split("\n").filter((l) => {
+      const t = l.trimStart();
+      return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+    }).join("\n");
+    for (const p of [/\bretry\s*\(/, /\bbackoff\b/, /setTimeout\s*\(/, /setInterval\s*\(/, /\bwhile\s*\(/, /\bfor\s*\(\s*;;/]) {
+      assert.ok(!p.test(code), `the provisioning script must contain no ${p}`);
+    }
+    // Exactly one create call in the whole file.
+    const creates = code.match(/adapter\.create\w+\s*\(/g) || [];
+    assert.strictEqual(creates.length, 1, `exactly one create call, found ${creates.length}: ${creates.join(", ")}`);
+  });
+
+  it("the provisioning script defaults to preview and refuses production", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "dev", PROVISIONING_SCRIPT), "utf8");
+    assert.match(src, /PREVIEW_ONLY = !process\.argv\.includes\("--create-one-response-engine"\)/, "sending must be opt-in");
+    assert.match(src, /allowedTag === "prod"/, "it must refuse the production account");
+    assert.match(src, /REFUSING/, "and say so");
+  });
+
+  it("the provisioning script sends the ENGINE payload only", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "dev", PROVISIONING_SCRIPT), "utf8");
+    assert.match(src, /const payload = resources\.responseEngine/, "the engine payload, never the agent's");
+    assert.ok(!/resources\.agent/.test(src.replace(/\/\/.*$/gm, "")), "the agent payload must not be reachable");
   });
 });
 
