@@ -1,17 +1,17 @@
 # E-9 — durable unique Retell call binding
 
-**Status: IMPLEMENTED LOCALLY / DEV MIGRATION PENDING. E-9 IS NOT CLOSED.**
+**Status: CLOSED ON DEV, 2026-08-13. Production: NOT APPLIED.**
 
-**The constraint described here does not exist in any database.** Phase 2 wrote
-the migration (`supabase/sql/laq6_bind_provider_call_once.sql`) and it has been
-applied to **neither dev nor production** — nothing in this repository can
-execute DDL, and a test asserts that. E-7 remains OPEN, DNCR-1 remains OPEN,
-A-L2 remains OPEN, calling remains PAUSED at revision 1, dev residue is 23.
+`laq6_bind_provider_call_once.sql` was applied **to dev by hand** by the founder;
+the post-migration verifier reports **8/8 PASS**. E-7 remains OPEN, DNCR-1
+remains OPEN, A-L2 remains OPEN, calling remains PAUSED at revision 1, and dev
+residue is **23 — unchanged, with zero permanent proof rows**.
 
-> Sections 1–8 are the **Phase 1 audit** and describe the state before the
-> migration was written. Phase 2 begins at §9, and revises §4: the founder
-> required a second invariant, because a unique index cannot catch the
-> same-dispatch race.
+> **Read this document in three layers.** Sections 1–8 are the **Phase 1 audit**
+> and describe the state before any migration existed. **Phase 2 begins at §9**
+> and revises §4 — the founder required a second invariant, because a unique
+> index cannot catch the same-dispatch race. **Phase 3 begins at §16** and
+> records what was actually applied, what was observed, and what was not.
 
 **Owns (source of truth for):** why one Retell `call_id` must belong to at most
 one acquisition dispatch, why application code cannot guarantee that, and the
@@ -357,3 +357,84 @@ is the real index and the real guard exercised against real Postgres by
 `14_laq6_mutation_probes.sql`, plus offline tests for the service mapping.
 
 **The database has not seen this migration yet.** Everything above is local.
+
+---
+
+# PHASE 3 — APPLIED TO DEV AND CLOSED, 2026-08-13
+
+**Status: E-9 CLOSED ON DEV. Production: NOT APPLIED.**
+E-7 remains OPEN, DNCR-1 remains OPEN, A-L2 remains OPEN, calling remains
+PAUSED at revision 1, dev residue is **23 — unchanged**.
+
+## 16. What was run, and by whom
+
+`laq6_bind_provider_call_once.sql` was applied **by hand** by the founder in the
+dev Supabase SQL editor. Nothing in this repository can execute DDL and a test
+asserts that.
+
+| step | artefact | result |
+|---|---|---|
+| 1 | `verification/13_laq6_verify_readonly.sql` — **before** | **6/8**, failing exactly `invariant A` and `invariant B`. The expected pre-migration state |
+| 2 | `laq6_bind_provider_call_once.sql` | **Success. No rows returned.** No SQL error |
+| 3 | `13_laq6_verify_readonly.sql` — **after** | **8/8 — `PASS: laq6 is structurally intact in this database`** |
+| 4 | `verification/14_laq6_mutation_probes.sql` | **the rollback mutation-probe script completed successfully without SQL error** |
+| 5 | `13_laq6_verify_readonly.sql` — **final** | **8/8 PASS** |
+
+Step 1 failing *both* E-9 checks and nothing else is worth noting: it is
+positive evidence that the verifier discriminates, rather than a script that
+would have said PASS regardless.
+
+### 16.1 What the mutation probes did and did not show
+
+**The Supabase editor did not surface the individual `RAISE NOTICE` lines**, so
+the six per-case PASS messages were **not visually observed by anybody**. What
+is known is that the script ran to completion with no SQL error, inside a
+transaction whose final statement is `ROLLBACK`.
+
+That is recorded exactly as it happened. It is weaker than "six probes were
+watched passing", and writing the stronger sentence would have been the easiest
+possible lie to tell here.
+
+### 16.2 What I verified independently, and what I did not
+
+Verified by me, read-only against dev:
+
+- census **23**, `acquisition_decisions` **4**, `acquisition_call_queue` **0**;
+- one dispatch row, still **unresolved**, `provider_ref` still **NULL**;
+- **zero** non-null provider references, **zero** duplicates;
+- calling state `global` / `paused` / **revision 1**.
+
+**Not verified by me:** the existence and shape of the index and the guard.
+PostgREST cannot reach `pg_class`, `pg_indexes` or `pg_proc` — probed, not
+assumed — and no `exec_sql`-style RPC exists. The structural 8/8 is the
+**founder's verifier output**, not a second independent reading.
+
+## 17. The deliberate proof choice
+
+**No live two-process Postgres race was performed, and none is claimed.** What
+E-9 rests on instead, by decision:
+
+1. the **real** unique index and the **real** guard, applied to real Postgres;
+2. `14_laq6_mutation_probes.sql`, which exercises them inside `BEGIN … ROLLBACK`
+   and leaves nothing behind;
+3. **offline** tests for the concurrency window and the error mapping, against
+   an in-memory store that raises Postgres's own `23505`, the real constraint
+   name and the real write-once token.
+
+`acquisition_dial_executions` refuses DELETE, so a live race needs permanent
+fictional dispatch rows. Contaminating a database that is the record of which
+businesses may have been rung, in order to demonstrate that a unique index
+arbitrates, is not a trade worth making.
+
+**Zero permanent proof residue. Dev is 23 before and after.**
+
+## 18. What is now true
+
+| | enforced by |
+|---|---|
+| one non-null provider reference belongs to **at most one dispatch** | `idx_acq_dial_exec_provider_ref`, live on dev |
+| a bound reference **cannot change** (`R1 → R2`) | the laq5/laq6 guard, live on dev |
+| a bound reference **cannot be cleared** (`R1 → NULL`) | the same guard |
+| every laq5 rule still holds | asserted by check 3 of the verifier, 8/8 |
+
+Production has none of this: laq1–laq6 are all unapplied there.

@@ -1,16 +1,17 @@
 # Acquisition SQL Runbook — applying LAQ1, LAQ2, LAQ3, LAQ4 and LAQ5 to dev
 
 **Status:** **APPLIED TO DEV** — LAQ1 + LAQ2 on 2026-08-07 (M8D), LAQ3 on
-2026-08-08 (M8I), **LAQ4 on 2026-08-10 (M8K)** and **LAQ5 on 2026-08-12
-(E-7B1)**, against project ref `wvwemitmmsdytyutaqbm`. **NOT applied to
+2026-08-08 (M8I), **LAQ4 on 2026-08-10 (M8K)**, **LAQ5 on 2026-08-12 (E-7B1)**
+and **LAQ6 on 2026-08-13 (E-9)**, against project ref
+`wvwemitmmsdytyutaqbm`. **NOT applied to
 production.** Nothing in this repository applies SQL, and a test asserts that —
 every step below is something a human runs by hand, and every step below was run
 by hand.
 
 **Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3, LAQ4, LAQ5 and LAQ6
 are applied in, how each is verified, and what can and cannot be rolled back.
-**LAQ5 is applied to dev and not to production** — see §15. **LAQ6 is written
-and applied NOWHERE** — see §16.
+**LAQ5 is applied to dev and not to production** — see §15. **LAQ6 is applied to
+dev (2026-08-13, verifier 8/8) and not to production** — see §16.
 
 > **The §12 and §13 heading below still reads "there is no LAQ5" in its own
 > section text. That was true of E-5 and M8L and is left standing as the
@@ -1125,14 +1126,29 @@ rationale, and §14.3 above for the superseded sketch it corrects.
 
 ---
 
-## 16. LAQ6 — written, APPLIED NOWHERE
+## 16. LAQ6 — APPLIED TO DEV 2026-08-13, verifier 8/8
 
-**`supabase/sql/laq6_bind_provider_call_once.sql`** exists as of **2026-08-13**
-and has been applied to **neither dev nor production**.
+**`supabase/sql/laq6_bind_provider_call_once.sql`** was applied **by hand** in
+the dev Supabase SQL editor on **2026-08-13** and returned *Success. No rows
+returned.* It has **not** been applied to production.
+
+| step | result |
+|---|---|
+| `13_laq6_verify_readonly.sql` **before** | **6/8** — failing exactly `invariant A` and `invariant B`, the expected pre-migration state |
+| the migration | **Success. No rows returned.** No SQL error |
+| `13_laq6_verify_readonly.sql` **after** | **8/8 — PASS: laq6 is structurally intact in this database** |
+| `14_laq6_mutation_probes.sql` | **the rollback mutation-probe script completed successfully without SQL error** |
+| `13_laq6_verify_readonly.sql` **final** | **8/8 PASS** |
+
+**The editor did not surface the probe script's `RAISE NOTICE` lines**, so the
+six individual per-case results were **not visually observed**. Recorded as it
+happened rather than as it would read better.
+
+**Dev residue: 23 before, 23 after. Zero permanent proof rows.**
 
 | | state |
 |---|---|
-| dev | **NOT APPLIED** |
+| dev | **APPLIED** 2026-08-13 (E-9) |
 | production | **NOT APPLIED** |
 | rows it creates | **0** |
 | rows it rewrites | **0** |
