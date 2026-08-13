@@ -3603,6 +3603,14 @@ absolute that no infrastructure justifies.
 has ever been written or reviewed, and machine detection has never been observed
 working here. No template was invented.
 
+As of **E-12A** that is enforced by the **provider**, not by an instruction:
+the acquisition agent carries `voicemail_option: { action: { type: "hangup" } }`,
+so Retell ends the call itself on detection. **Configured locally — not yet
+observed on a real call.** The outcome and attempt rules are unchanged: a
+detected voicemail is still the durable outcome `voicemail` and still consumes a
+counted attempt, because A-L7 counts the machine being *reached*, not a message
+being *delivered*.
+
 Three things are open and recorded in
 [ACQUISITION_E7B2_RETELL_DESIGN.md](ACQUISITION_E7B2_RETELL_DESIGN.md) §19: the
 **AIDA / Niche Drops** naming discrepancy, the AI-disclosure wording being

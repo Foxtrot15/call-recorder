@@ -4,13 +4,14 @@
 //   buildAcquisitionOpening(identity)   the first thing a stranger hears
 //   buildAcquisitionAgentPrompt(...)    the general_prompt sections
 //   buildAcquisitionAnalysisFields()    Retell post_call_analysis_data
-//   describeAcquisitionAgentPayload()   the create-agent request, unsent
+//   buildAcquisitionAgent(...)          the create-agent request, unsent
+//   describeAcquisitionRetellResources() both, plus what is not ready
 //
 // ── LOCAL ONLY. NOTHING HERE CREATES OR CONTACTS AN AGENT ───────────
 // It builds strings and objects. No network client is imported, no credential
-// is read, no host is named, and `describeAcquisitionAgentPayload` returns the
-// request that WOULD be sent rather than sending it. Provisioning is a separate
-// founder-authorised milestone.
+// is read, no host is named, and the builders return the requests that WOULD be
+// sent rather than sending them. Provisioning is a separate founder-authorised
+// milestone.
 //
 // ── WHY A THIRD AGENT ───────────────────────────────────────────────
 // The receptionist serves a locksmith's own inbound callers. The onboarding
@@ -184,10 +185,11 @@ const BEHAVIOURS = Object.freeze({
  *   2. Nothing in this repository has ever produced or reviewed a recorded
  *      acquisition message, and a first live proof is the wrong moment to hear
  *      one for the first time.
- *   3. Machine detection is a PROVIDER behaviour we have not configured, tested
- *      or observed. Drafting a message that assumes reliable detection would be
- *      inventing a capability, which is the failure mode this whole milestone
- *      is built to avoid.
+ *   3. Machine detection is a PROVIDER behaviour. As of E-12A it is CONFIGURED
+ *      — the agent carries `voicemail_option.action.type: "hangup"` — but it
+ *      has never been OBSERVED on a real call. Drafting a message that assumed
+ *      reliable detection would still be inventing a capability, which is the
+ *      failure mode this whole milestone is built to avoid.
  *
  * A template is therefore deliberately NOT provided. If the founder later wants
  * one, it is a small, separate, reviewable decision — and it should be made
@@ -198,6 +200,12 @@ const VOICEMAIL_POLICY = Object.freeze({
   recommendation: "Hang up without leaving a message for the first live proof.",
   template: null,
   attemptCost: "A voicemail consumes a counted attempt (A-L7); a no-answer does not.",
+  // E-12A. The policy is now carried by a PROVIDER field on the agent
+  // (`voicemail_option.action.type`), not by a sentence in the prompt. The
+  // prompt still says it, but as defence in depth behind something Retell
+  // enforces without consulting the model.
+  providerAction: "hangup",
+  providerAuthority: "retell_agent.voicemail_option.action.type",
   revisitWhen: "Machine detection has been observed working, and a message has been written and approved.",
 });
 
@@ -574,6 +582,34 @@ function buildAcquisitionResponseEngine({ identity = DEFAULT_IDENTITY, pricing =
 }
 
 /**
+ * THE ANSWERING-MACHINE POLICY, AS A PROVIDER SETTING (E-12A).
+ *
+ * ── WHY THIS IS NOT IN THE PROMPT ───────────────────────────────────
+ * "Leave no message" was already written into the general_prompt, and until now
+ * that was the ONLY thing carrying it. A prompt is an instruction to a model:
+ * it is advisory, it competes with everything else in the context, and on the
+ * one call where it loses we have recorded a sales pitch onto a stranger's
+ * answering machine and spent a counted attempt (A-L7) doing it. Retell will
+ * end the call itself, without asking the model, so the failure mode stops
+ * being possible rather than becoming unlikely.
+ *
+ * ── WHY IT IS A CONSTANT AND NOT READ FROM `config` ─────────────────
+ * Every other field here falls back to a caller-supplied value. This one does
+ * not, and that asymmetry is the point: a caller able to supply the action
+ * could supply a static-text one, turning the founder's "leave no message" into
+ * a message from outside the file where the policy is written and reviewed.
+ * Changing it has to be an edit to this line.
+ *
+ * ── WHAT IS DELIBERATELY ABSENT ─────────────────────────────────────
+ * Retell's other actions — static_text, prompt-generated, callback — all
+ * deliver something. None is configured, and there is no `text` key to fill in
+ * by accident. Enabling one is a separate founder decision, per VOICEMAIL_POLICY.
+ */
+const ACQUISITION_VOICEMAIL_OPTION = Object.freeze({
+  action: Object.freeze({ type: "hangup" }),
+});
+
+/**
  * The agent. It REFERENCES the engine and never contains it.
  *
  * @param {string|null} llmId  the id returned by createResponseEngine. Until a
@@ -589,6 +625,7 @@ function buildAcquisitionAgent({ config = {}, llmId = null } = {}) {
     // Never the receptionist's or onboarding's webhook, never localhost, never
     // a placeholder. Null until the acquisition route exists.
     webhook_url: config.acquisitionWebhookUrl || null,
+    voicemail_option: ACQUISITION_VOICEMAIL_OPTION,
     post_call_analysis_data: buildAcquisitionAnalysisFields(),
   });
 }
@@ -620,11 +657,27 @@ function describeAcquisitionRetellResources({ identity = DEFAULT_IDENTITY, prici
     voiceResolved: isRealId(agent.voice_id),
     llmIdResolved: isRealId(agent.response_engine.llm_id),
     webhookResolved: isRealId(agent.webhook_url),
-    // Policy is "leave no message". Nothing in this payload can ENFORCE it —
-    // no voicemail, machine-detection or hang-up field is represented anywhere
-    // in this repository's Retell surface. The instruction lives in the prompt,
-    // which is guidance to a model rather than a provider guarantee.
-    voicemailProviderBehaviourVerified: false,
+    // ── CONFIGURED AND OBSERVED ARE TWO DIFFERENT FACTS (E-12A) ──────
+    // Until E-12A there was ONE flag here, `voicemailProviderBehaviourVerified`,
+    // and it was a permanent false in the create-agent blocker list. That made
+    // it unsatisfiable by construction: provider behaviour on an answering
+    // machine cannot be observed until an agent exists and has been telephoned,
+    // and the agent could not be created until the behaviour was observed. A
+    // gate nobody can ever open is not a safety property, it is a gate people
+    // eventually delete.
+    //
+    // So it is split. What can be settled before creation — is the hang-up
+    // policy actually in the payload — is COMPUTED from the payload and gates
+    // creation. What genuinely cannot — has a real answering machine hung up on
+    // a real call — is reported by name below and does NOT gate creation,
+    // because creating the agent is a prerequisite for answering it.
+    voicemailProviderPolicyConfigured:
+      agent.voicemail_option != null &&
+      agent.voicemail_option.action != null &&
+      agent.voicemail_option.action.type === "hangup",
+    // Never been observed. This is not paperwork: detection is probabilistic,
+    // and nobody here has watched it fire.
+    voicemailProviderBehaviourObserved: false,
     provisioned: false,
   };
 
@@ -634,7 +687,18 @@ function describeAcquisitionRetellResources({ identity = DEFAULT_IDENTITY, prici
     agentReady.llmIdResolved ? null : "no acquisition response-engine id has been supplied (create the engine first)",
     agentReady.voiceResolved ? null : "voice_id is unresolved — a founder must choose one",
     agentReady.webhookResolved ? null : "webhook_url is unresolved — the acquisition route is not exposed",
-    agentReady.voicemailProviderBehaviourVerified ? null : "provider behaviour on an answering machine is unverified",
+    agentReady.voicemailProviderPolicyConfigured
+      ? null
+      : "the agent payload does not configure a provider hang-up on detected voicemail",
+  ].filter(Boolean);
+
+  // Things that stay open AFTER the agent exists. Kept as a named list rather
+  // than folded into `blockers`, so that moving voicemail observation out of the
+  // create gate does not quietly delete the fact that nobody has seen it work.
+  const unverifiedAfterCreation = [
+    agentReady.voicemailProviderBehaviourObserved
+      ? null
+      : "hang-up on a detected answering machine is configured but has never been observed on a real call",
   ].filter(Boolean);
 
   return Object.freeze({
@@ -658,6 +722,7 @@ function describeAcquisitionRetellResources({ identity = DEFAULT_IDENTITY, prici
       // that cannot ever say yes is one people learn to ignore.
       createAgentReady: blockers.length === 0,
       blockers: Object.freeze(blockers),
+      unverifiedAfterCreation: Object.freeze(unverifiedAfterCreation),
       note:
         "NOT CREATE-AGENT READY. Nothing here has been sent to any provider; no acquisition response engine " +
         "and no acquisition agent exists.",
@@ -688,6 +753,7 @@ module.exports = {
   // misleading name is worse than a rename.
   buildAcquisitionResponseEngine,
   buildAcquisitionAgent,
+  ACQUISITION_VOICEMAIL_OPTION,
   describeAcquisitionRetellResources,
   ACQUISITION_RESOURCE_ORDER,
   ACQUISITION_RESOURCE_PREFIX,

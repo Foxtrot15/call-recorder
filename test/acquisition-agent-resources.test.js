@@ -56,7 +56,10 @@ describe("E-10C: the prompt belongs to the engine, the analysis to the agent", (
     assert.deepStrictEqual(Object.keys(r.responseEngine).sort(), ["begin_message", "default_dynamic_variables", "general_prompt", "general_tools"]);
     assert.deepStrictEqual(
       Object.keys(r.agent).sort(),
-      ["agent_name", "language", "post_call_analysis_data", "response_engine", "voice_id", "webhook_url"]
+      // voicemail_option added by E-12A. Named explicitly rather than letting
+      // the list go open-world, so the next field to appear on this payload
+      // still has to be argued for here.
+      ["agent_name", "language", "post_call_analysis_data", "response_engine", "voice_id", "voicemail_option", "webhook_url"]
     );
   });
 
@@ -294,18 +297,29 @@ describe("E-10C: readiness is honest about what is unresolved", () => {
     assert.match(r.responseEngine.general_prompt, /Do not quote a number — you have not been given one/i);
   });
 
-  it("18-19. voicemail stays no-message, and provider enforcement stays UNVERIFIED", () => {
+  it("18-19. voicemail stays no-message, now enforced by the PROVIDER (E-12A)", () => {
     const { VOICEMAIL_POLICY } = require("../src/services/acquisition-agent-spec");
     assert.strictEqual(VOICEMAIL_POLICY.leaveMessage, false);
     assert.strictEqual(VOICEMAIL_POLICY.template, null);
     const r = describeAcquisitionRetellResources();
-    assert.strictEqual(r.readiness.agent.voicemailProviderBehaviourVerified, false, "the prompt is guidance, not a provider guarantee");
-    assert.ok(r.readiness.blockers.some((b) => /answering machine is unverified/i.test(b)));
-    // And no invented Retell FIELD for it. Checked against field NAMES, not the
-    // serialised payload: `reached_human`'s description legitimately says
-    // "False for voicemail, silence or a failed connection", and a scan of the
-    // whole JSON would have banned describing the concept at all.
-    assert.ok(!Object.keys(r.agent).some((k) => /voicemail|machine|answering/i.test(k)), "no voicemail field on the agent");
+    // The E-10C form of this test asserted there was NO voicemail field, which
+    // was a true statement of the gap rather than a property worth keeping.
+    // E-12A closes the gap, so the assertion is re-pointed at the new truth:
+    // exactly one voicemail field, and it hangs up.
+    assert.deepStrictEqual(r.agent.voicemail_option, { action: { type: "hangup" } });
+    assert.strictEqual(r.readiness.agent.voicemailProviderPolicyConfigured, true);
+    // Configured is still not observed, and that distinction is the whole point.
+    assert.strictEqual(r.readiness.agent.voicemailProviderBehaviourObserved, false);
+    assert.ok(r.readiness.unverifiedAfterCreation.some((u) => /never been observed on a real call/i.test(u)));
+    // Checked against field NAMES, not the serialised payload: `reached_human`'s
+    // description legitimately says "False for voicemail, silence or a failed
+    // connection", and a scan of the whole JSON would have banned describing the
+    // concept at all.
+    assert.deepStrictEqual(
+      Object.keys(r.agent).filter((k) => /voicemail|machine|answering/i.test(k)),
+      ["voicemail_option"],
+      "one voicemail field, the one we put there"
+    );
     assert.ok(!Object.keys(r.responseEngine).some((k) => /voicemail|machine|answering/i.test(k)), "none on the engine either");
     assert.ok(
       !r.agent.post_call_analysis_data.some((f) => /voicemail|machine|answering/i.test(f.name)),
@@ -320,10 +334,24 @@ describe("E-10C: readiness is honest about what is unresolved", () => {
       llmId: ACQ_LLM,
       config: { voiceId: "voice_fixture", acquisitionWebhookUrl: "https://acq.example.test/webhooks/retell" },
     });
-    // Still false — voicemail provider behaviour is unverified, and that is a
-    // real blocker rather than paperwork.
+    // E-10C left ONE blocker standing here — "provider behaviour on an answering
+    // machine is unverified" — which could never be cleared before creating an
+    // agent, because you need the agent to observe the behaviour. E-12A settles
+    // the half that IS settleable in advance (the payload configures a hang-up)
+    // and moves the half that is not out of the create gate.
+    assert.strictEqual(r.readiness.createAgentReady, true);
+    assert.deepStrictEqual([...r.readiness.blockers], []);
+    // Moved, not deleted.
+    assert.strictEqual(r.readiness.unverifiedAfterCreation.length, 1);
+  });
+
+  it("the real world is still NOT create-agent ready — voice and webhook are unresolved", () => {
+    // The test above supplies fixtures. With the config this repository actually
+    // has, two genuine blockers remain, and E-12A cleared neither of them.
+    const r = describeAcquisitionRetellResources({ llmId: ACQ_LLM });
     assert.strictEqual(r.readiness.createAgentReady, false);
-    assert.deepStrictEqual([...r.readiness.blockers], ["provider behaviour on an answering machine is unverified"]);
+    assert.ok(r.readiness.blockers.some((b) => /voice_id is unresolved/i.test(b)));
+    assert.ok(r.readiness.blockers.some((b) => /webhook_url is unresolved/i.test(b)));
   });
 
   it("nothing claims to be provisioned", () => {

@@ -6,11 +6,13 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 (response-engine / agent resource split, §20) · **E-10D(i) COMPLETE** — the
 **acquisition response engine is PROVISIONED** on the dev Retell account, §21.
 · **E-11A COMPLETE** — the acquisition webhook ingress is built, mounted in source and DORMANT (§22).
+· **E-12A COMPLETE** — leave-no-message is now a PROVIDER setting, configured locally (§23).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
-voice is UNRESOLVED, webhook is UNRESOLVED, voicemail provider enforcement is
-UNVERIFIED, no outbound acquisition number is provisioned, and no acquisition
-webhook route is exposed. **A response engine cannot ring anybody.**
+voice is UNRESOLVED, webhook is UNRESOLVED, the voicemail hang-up is
+**CONFIGURED LOCALLY but NEVER OBSERVED ON A REAL CALL**, no outbound
+acquisition number is provisioned, and no acquisition webhook route is exposed.
+**A response engine cannot ring anybody.**
 
 **Owns (source of truth for):** how an authorised acquisition dial becomes a
 Retell outbound call, what E-7B2B still requires, and why the adapter built in
@@ -682,12 +684,22 @@ blockers:
   - no acquisition response-engine id has been supplied (create the engine first)
   - voice_id is unresolved — a founder must choose one
   - webhook_url is unresolved — the acquisition route is not exposed
-  - provider behaviour on an answering machine is unverified
+unverifiedAfterCreation:
+  - hang-up on a detected answering machine is configured but has never been
+    observed on a real call
 ```
 
 **Computed from the blockers, not hardcoded.** A flag that can never say yes is
-one people learn to ignore; supplying an llm_id, a voice and an acquisition
-webhook leaves exactly one blocker, and a test pins that.
+one people learn to ignore.
+
+**Revised by E-12A.** This list previously carried a fourth blocker, *"provider
+behaviour on an answering machine is unverified"*, which was **unsatisfiable by
+construction**: the behaviour cannot be observed until an agent exists and has
+been telephoned, and the agent could not be created until the behaviour had been
+observed. E-12A settles the half that can be settled in advance — whether the
+hang-up is actually in the payload — and moves the half that cannot into
+`unverifiedAfterCreation`, where it is still reported by name rather than
+deleted. See §23.2.
 
 `webhook_url` reads only `config.acquisitionWebhookUrl` — passing the
 receptionist's `webhookBaseUrl` leaves it **null**, so the acquisition agent
@@ -703,11 +715,12 @@ them, and a misleading name is worse than a rename.
 
 Language `en-AU`. Voice unresolved and never invented. No pricing injected. No
 pronunciation encoded. Opening unchanged and still tunable — E-10C is
-architecture, not copy. Voicemail stays no-message with a `null` template, and
-**provider-level enforcement remains unverified**: no voicemail, machine-
-detection or hang-up field exists anywhere in this repository's Retell surface,
-so the instruction lives in the prompt, which is guidance to a model rather than
-a provider guarantee. No such field was invented.
+architecture, not copy. Voicemail stays no-message with a `null` template.
+
+> **Superseded by E-12A (§23).** As of E-10C there was no voicemail,
+> machine-detection or hang-up field anywhere in this repository's Retell
+> surface. E-12A adds exactly one — `voicemail_option.action.type: "hangup"` —
+> on the acquisition agent, and nowhere else.
 
 ---
 
@@ -887,3 +900,118 @@ no tunnel, no public host. `RETELL_ACQUISITION_WEBHOOK_URL` is named as a
 concept and **deliberately unpopulated** — there is no deployed route for it to
 name. No transport wired into the executor, no provider `live: true`, no
 calling-state change, no DEV write, no SQL, production untouched.
+
+---
+
+## 23. E-12A — hang up on an answering machine, and mean it
+
+**Status: CONFIGURED LOCALLY. NOT LIVE-VERIFIED. No Retell request was made.
+Agent still NOT PROVISIONED. Voice UNRESOLVED. Webhook UNRESOLVED. Number NOT
+PROVISIONED. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
+
+Founder policy: **if Retell detects voicemail, hang up. Leave no message.**
+
+### 23.1 The gap, stated accurately
+
+The policy has existed since E-10A as `VOICEMAIL_POLICY`, and the honest finding
+of this milestone is that **it was carried by nothing that reaches the provider**.
+
+`VOICEMAIL_POLICY` is a specification object consumed by documents and tests.
+`buildAcquisitionAgentPrompt` has never emitted a word of it into
+`general_prompt` — verified by an assertion, not by reading. So the position
+before E-12A was not "enforcement is weak because a prompt is only guidance". It
+was **no enforcement at all**: nothing on the wire, in either resource, said
+anything about an answering machine.
+
+That matters for what it would have cost. Detection would not have happened, the
+call would have run its opening into a recording, and under **A-L7 a voicemail
+consumes one of the two counted attempts** — half the contact this business is
+ever permitted, spent on a message nobody agreed to receive.
+
+### 23.2 The setting
+
+On the acquisition **agent** (`POST /create-agent`), and nowhere else:
+
+```json
+"voicemail_option": { "action": { "type": "hangup" } }
+```
+
+Retell ends the call itself on detection. The model is not consulted, so the
+failure mode stops being possible rather than becoming unlikely.
+
+**It is a frozen module constant, not a config field.** Every other field on this
+payload falls back to a caller-supplied value; this one deliberately does not. A
+caller able to supply the action could supply a static-text one and turn "leave
+no message" into a message, from outside the file where the policy is written
+and reviewed. Changing it has to be an edit to that line. A ratchet feeds six
+hostile config shapes in and asserts the payload is unmoved.
+
+**No message exists by any route.** No `static_text`, no prompt-generated
+message, no callback, no `text` key to fill in by accident. `template` stays
+`null`. Enabling any of them is a separate founder decision.
+
+**The prompt was deliberately NOT changed.** Adding the sentence to
+`general_prompt` would edit the response engine, which is **already provisioned**
+at `llm_111ed…`; the local spec would then disagree with the live resource and
+require an `updateResponseEngine` call that E-12A does not authorise. The
+provider setting is therefore the only thing carrying this policy today, which is
+the stronger arrangement anyway. Whether to add prompt text as defence in depth —
+and pay for it with an engine update — is a founder decision, recorded as open.
+
+### 23.3 Acquisition only
+
+`voicemail_option` is emitted from **exactly one file in `src/`**, asserted by a
+directory walk rather than a grep of the two files anyone would think to check.
+The receptionist and onboarding compilers are untouched — proven twice: their
+sources contain no such field, and the receptionist's **actually compiled**
+`toRetellPayload` output is built in the test and inspected. The shared
+`retell-adapter` and `voice-platform-port` gained no voicemail knowledge; the
+adapter serialises whatever payload it is handed, which is why no shared schema
+or validator change was required.
+
+### 23.4 Readiness — configured is not observed
+
+| | |
+|---|---|
+| Configured locally | **YES** — `voicemailProviderPolicyConfigured`, computed by reading the payload |
+| Observed on a real call | **NO** — `voicemailProviderBehaviourObserved`, a hardcoded `false` |
+
+The second is hardcoded on purpose: nothing in this repository can observe a real
+call, so nothing here may compute it true. It moved out of `blockers` into
+`unverifiedAfterCreation` for the reason given in §20.4 — as a create-agent gate
+it could never be opened. **It is reported, not retired.**
+
+`createAgentReady` is still **false** in the real world: `voice_id` and
+`webhook_url` remain unresolved, and E-12A cleared neither. A ratchet pins that
+separately from the fixture-supplied case, so the milestone cannot be misread as
+having moved the agent closer to existing than it did.
+
+### 23.5 Outcome and attempt semantics — unchanged
+
+`voicemail_reached` and `machine_detected` still map to the durable outcome
+`voicemail`; `dial_no_answer` and `dial_busy` still map to `no_answer`. No new
+vocabulary. Under A-L7 **voicemail still consumes a counted attempt and
+no_answer still does not** — the rule counts the machine being *reached*, not a
+recording being *delivered*, so hanging up changes nothing about the accounting.
+E-8/E-11A ordering is untouched: technical outcome → `attempted` → outcome →
+attempt policy → dispatch resolved last.
+
+No retry, no second call, no automatic callback was introduced.
+
+### 23.6 Out of scope, deliberately
+
+**IVR / phone-tree navigation: NOT enabled.** Not coupled to the voicemail
+surface — a separate agent field — so auditing it required no change.
+
+**`call_screening_option`: NOT enabled.** It sits adjacent to voicemail detection
+in Retell's agent object and is a plausible later optimisation for cold calling,
+where a screening service answering first is common. Recorded here as a **future
+founder decision**, not taken.
+
+### 23.7 What did NOT happen
+
+No Retell request of any kind: no agent created or updated, no response engine
+created or updated, no voice listing, no webhook configured remotely, no number
+provisioned. No Twilio, no DNCR, no prospect contacted. **Zero DEV writes** — no
+SQL, LPM3 untouched, 23 acquisition rows, calling still paused at revision 1.
+Production untouched.
