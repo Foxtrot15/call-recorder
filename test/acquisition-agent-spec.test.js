@@ -20,6 +20,7 @@ const {
   PRICE_RULE,
   VOICEMAIL_POLICY,
   buildAcquisitionOpening,
+  describeOpeningSemantics,
   buildAcquisitionAgentPrompt,
   buildAcquisitionAnalysisFields,
   describeAcquisitionAgentPayload,
@@ -175,25 +176,84 @@ describe("E-10A: eighteen conversations a locksmith might actually have", () => 
 // THE OPENING
 // ---------------------------------------------------------------------------
 
-describe("E-10A: the opening discloses, unprompted", () => {
-  it("names the assistant, says AI assistant, names the company, and says why", () => {
-    assert.match(OPENING, /this is Aida/i, "the assistant names itself");
-    assert.match(OPENING, /an AI assistant/i, "the disclosure");
-    assert.match(OPENING, /calling from AIDA/i, "the company");
-    assert.match(OPENING, /locksmith businesses handle missed and after-hours calls/i, "what we do");
-    assert.match(OPENING, /see if that might be useful for your business/i, "why we are calling");
+describe("E-10A: the opening conveys the right things — as MEANING, not as copy", () => {
+  // ── WHY THERE IS NO EXACT-STRING RATCHET ──────────────────────────
+  //
+  // The opening is concept copy and is expected to be tuned for speech. A test
+  // that pinned the sentence would forbid moving a comma, and would be switched
+  // off the first time somebody needed to — which is the moment the obligation
+  // it was protecting quietly disappears.
+  //
+  // So every assertion below is against `describeOpeningSemantics`, which asks
+  // what the sentence CONVEYS relative to the configured identity. Reword it,
+  // reorder it, split it in two: all fine. Drop a required fact: fails.
+
+  it("conveys all seven requirements", () => {
+    const s = describeOpeningSemantics(OPENING);
+    assert.strictEqual(s.namesAssistant, true, "1. the assistant names itself");
+    assert.strictEqual(s.disclosesAI, true, "2. it says plainly that it is AI");
+    assert.strictEqual(s.namesCompany, true, "3. the calling BUSINESS is named");
+    assert.strictEqual(s.namesProduct, true, "4. the PRODUCT is identified");
+    assert.strictEqual(s.statesPurpose, true, "5. the commercial purpose is clear");
+    assert.strictEqual(s.statesValue, true, "6. missed / after-hours value survives");
+    assert.strictEqual(s.concise, true, "7. it is still an opening, not a monologue");
+    assert.strictEqual(s.ok, true);
   });
 
-  it("is what the agent opens with, and is in the payload's begin_message", () => {
-    assert.ok(PROMPT.includes(OPENING), "the prompt must open with the same words");
+  it("names Niche Drops as the caller and AIDA as the product — not the reverse", () => {
+    const s = describeOpeningSemantics(OPENING);
+    assert.strictEqual(s.doesNotNameProductAsCaller, true, "never \"from AIDA\" when the company is Niche Drops");
+    assert.ok(/from Niche Drops/i.test(OPENING) || /Niche Drops/i.test(OPENING));
+    assert.ok(!/\bfrom\s+AIDA\b/i.test(OPENING), "AIDA is the product, not the business placing the call");
+  });
+
+  it("is what the agent opens with, and is the payload's begin_message", () => {
+    assert.ok(PROMPT.includes(OPENING));
     assert.strictEqual(describeAcquisitionAgentPayload().begin_message, OPENING);
   });
 
-  it("survives identity being reconfigured, because the parts are named", () => {
-    const o = buildAcquisitionOpening({ assistantName: "Ada", company: "Niche Drops" });
-    assert.match(o, /this is Ada/);
+  // ── THE PROOF THAT WORDING REMAINS TUNABLE ───────────────────────
+  it("ACCEPTS founder rewordings that keep the meaning", () => {
+    const variants = [
+      // Reordered, product first.
+      "Hi — I'm Aida, an AI assistant. I'm ringing from Niche Drops about AIDA, our AI receptionist for locksmiths: it handles missed and after-hours calls. Would that be useful for your business?",
+      // Chattier, contractions, different connective.
+      "Morning! This is Aida — I'm an AI assistant over at Niche Drops. We've built AIDA, an AI receptionist that picks up missed and after-hours calls for locksmiths, and I wondered whether that'd be useful for you.",
+      // Formal.
+      "Good afternoon. My name is Aida and I am an AI assistant calling on behalf of Niche Drops. We provide AIDA, an AI receptionist for locksmith businesses which answers missed and after-hours calls. I am calling to see whether it may be useful to your business.",
+      // "artificial intelligence" spelled out instead of "AI".
+      "Hi, this is Aida — I'm an artificial intelligence assistant from Niche Drops. I'm calling about AIDA, our AI receptionist for locksmiths that covers missed and after-hours calls, to see if it might be useful for your business.",
+    ];
+    for (const v of variants) {
+      const s = describeOpeningSemantics(v);
+      assert.strictEqual(s.ok, true, `this rewording must be accepted:\n${v}\n${JSON.stringify(s)}`);
+    }
+  });
+
+  it("REJECTS a rewording that loses any required fact", () => {
+    const bad = {
+      "no assistant name": "Hi, I'm an AI assistant from Niche Drops calling about AIDA, which handles missed and after-hours calls — useful for your business?",
+      "no AI disclosure": "Hi, this is Aida from Niche Drops. I'm calling about AIDA, our receptionist for locksmiths that handles missed and after-hours calls, to see if it's useful for your business.",
+      "no company": "Hi, this is Aida, an AI assistant. I'm calling about AIDA, our AI receptionist that handles missed and after-hours calls — might that be useful for your business?",
+      "no product": "Hi, this is Aida, an AI assistant from Niche Drops. We help with missed and after-hours calls, and I wondered if that might be useful for your business.",
+      "no value proposition": "Hi, this is Aida, an AI assistant from Niche Drops. I'm calling about AIDA, our AI receptionist for locksmiths, to see if it might be useful for your business.",
+      "product named as the caller": "Hi, this is Aida, an AI assistant from AIDA. We help with missed and after-hours calls and I wondered if AIDA might be useful for your business.",
+      "claims to be human": "Hi, this is Aida, a real person from Niche Drops calling about AIDA — we help with missed and after-hours calls, useful for your business?",
+    };
+    for (const [what, text] of Object.entries(bad)) {
+      assert.strictEqual(describeOpeningSemantics(text).ok, false, `must be rejected — ${what}`);
+    }
+  });
+
+  it("follows the configured identity rather than hardcoded names", () => {
+    const id = { assistantName: "Ada", companyName: "Acme Pty Ltd", productName: "Switchboard" };
+    const o = buildAcquisitionOpening(id);
+    const s = describeOpeningSemantics(o, id);
+    assert.strictEqual(s.ok, true, JSON.stringify(s));
+    assert.match(o, /Ada/);
+    assert.match(o, /from Acme Pty Ltd/);
+    assert.match(o, /about Switchboard/);
     assert.match(o, /an AI assistant/, "the disclosure is not a configurable detail");
-    assert.match(o, /calling from Niche Drops/);
   });
 });
 
@@ -203,9 +263,17 @@ describe("E-10A: the opening discloses, unprompted", () => {
 
 describe("E-10A ratchets: the prompt cannot quietly lose its obligations", () => {
   it("AI disclosure cannot be removed from the opening", () => {
-    assert.match(OPENING, /\bAI assistant\b/, "the opening must disclose");
+    assert.strictEqual(describeOpeningSemantics(OPENING).disclosesAI, true, "the opening must disclose");
     assert.match(PROMPT, /You say this unprompted, at the start, before anything else/i);
     assert.match(PROMPT, /You never wait to be asked what you are/i);
+  });
+
+  it("the three roles are stated unambiguously in the prompt", () => {
+    assert.match(PROMPT, /THE BUSINESS placing this call/i);
+    assert.match(PROMPT, /THE PRODUCT you are calling about/i);
+    assert.match(PROMPT, /Never say that AIDA is your company/i);
+    assert.match(PROMPT, /never say you are calling "from AIDA"/i);
+    assert.match(PROMPT, /never describe Niche Drops as the receptionist product/i);
   });
 
   it("the agent can never claim to be human", () => {
@@ -216,10 +284,14 @@ describe("E-10A ratchets: the prompt cannot quietly lose its obligations", () =>
     assert.match(PROMPT, /Never say or imply that you are a person, human/i);
   });
 
-  it("AIDA identity cannot be omitted", () => {
-    assert.match(OPENING, /AIDA/);
-    assert.match(PROMPT, /on behalf of AIDA/i);
-    assert.strictEqual(DEFAULT_IDENTITY.company.length > 0, true);
+  it("neither the calling business nor the product may be omitted", () => {
+    const s = describeOpeningSemantics(OPENING);
+    assert.strictEqual(s.namesCompany, true, "Niche Drops places the call");
+    assert.strictEqual(s.namesProduct, true, "AIDA is what the call is about");
+    assert.ok(DEFAULT_IDENTITY.companyName.length > 0);
+    assert.ok(DEFAULT_IDENTITY.productName.length > 0);
+    assert.notStrictEqual(DEFAULT_IDENTITY.companyName, DEFAULT_IDENTITY.productName, "they are different things and stay different fields");
+    assert.match(PROMPT, /making an outbound call for Niche Drops/i);
   });
 
   it("pitching after an explicit opt-out is forbidden in the strongest terms", () => {

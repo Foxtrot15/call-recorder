@@ -3568,12 +3568,24 @@ reports `live: false`. **Both locks remain shut.**
 **The agent is NOT PROVISIONED.** `src/services/acquisition-agent-spec.js`
 builds everything Retell will eventually be sent and sends none of it.
 
+**Three names, three roles.** `assistantName` **Aida** is the thing speaking,
+`companyName` **Niche Drops** is the business placing the call, and
+`productName` **AIDA** is the product being discussed. Separate fields, never
+merged: the agent is *from Niche Drops* and is *calling about AIDA*.
+
 **It discloses.** Unprompted, in the opening: *"Hi, this is Aida, an AI
-assistant calling from AIDA. We help locksmith businesses handle missed and
-after-hours calls. I was just calling to see if that might be useful for your
-business."* If asked whether it is AI, a robot, automated or a person, it answers
-plainly and may never claim to be human. **Founder product policy — this
-repository makes no claim that any law requires those words.**
+assistant from Niche Drops. I'm calling about AIDA, our AI receptionist for
+locksmiths. We help with missed and after-hours calls, and I was just calling to
+see if that might be useful for your business."* If asked whether it is AI, a
+robot, automated or a person, it answers plainly and may never claim to be
+human. **Founder product policy — this repository makes no claim that any law
+requires those words.**
+
+**The wording above is concept copy and remains founder-tunable.** Nothing
+asserts it verbatim; the ratchets test what an opening *conveys* — assistant
+named, AI disclosed, calling business named, product identified, purpose and
+missed/after-hours value clear, still concise, never presenting the product as
+the caller or the assistant as human.
 
 **It takes a no the first time.** One acknowledgement, then the call ends — no
 second pitch after "not interested", no second close after a decline, and after

@@ -31,27 +31,34 @@ const S = require("./acquisition-agent-contract");
 const SPEC_VERSION = "acq-agent-spec-2026-08-13";
 
 /**
- * WHO IS CALLING.
+ * WHO IS CALLING, AND WHAT THEY ARE CALLING ABOUT.
  *
- * ── A DISCREPANCY WORTH READING BEFORE CHANGING ─────────────────────
- * The founder-approved opening says "calling from AIDA". In this repository
- * `PRODUCT_NAME` is "AIDA Locksmith Receptionist" and `PROVIDER_NAME` is
- * "Niche Drops" (src/config/locksmith.js) — so AIDA is the PRODUCT and Niche
- * Drops is the COMPANY, and "Aida calling from AIDA" also names the assistant
- * after the product.
+ * ── THREE ROLES, THREE FIELDS, DELIBERATELY NOT MERGED ──────────────
  *
- * The founder's wording is kept as the default, because trading as AIDA is a
- * commercial decision and not one this file should quietly overrule. But the
- * company is a PARAMETER rather than prose baked into a prompt, so correcting
- * it later is one argument and not an edit to a script. See the E-10A report.
+ *   assistantName   Aida          the thing speaking
+ *   companyName     Niche Drops   the BUSINESS placing the call
+ *   productName     AIDA          the PRODUCT being discussed
+ *
+ * The first draft of this file collapsed the second and third, because the
+ * approved opening said "calling from AIDA" — and AIDA is the product, while
+ * `PROVIDER_NAME` in src/config/locksmith.js is "Niche Drops". A cold call that
+ * names the product as the caller misidentifies who is telephoning, which is
+ * the one fact a stranger is entitled to be told accurately.
+ *
+ * They stay separate fields for that reason. Merging them to make a sentence
+ * flow would put the ambiguity back, and the prompt states each role explicitly
+ * so the agent cannot say "AIDA is my company" or "Niche Drops is the AI
+ * receptionist".
  */
 const DEFAULT_IDENTITY = Object.freeze({
   assistantName: "Aida",
-  company: "AIDA",
+  companyName: "Niche Drops",
+  productName: "AIDA",
   // Not a legal claim. The founder's product decision is to disclose, and the
   // contract records it as such rather than as a statutory requirement.
   disclosure: "an AI assistant",
-  offerSummary: "We help locksmith businesses handle missed and after-hours calls.",
+  productDescription: "our AI receptionist for locksmiths",
+  valueProposition: "We help with missed and after-hours calls",
   reasonForCalling: "I was just calling to see if that might be useful for your business.",
 });
 
@@ -242,18 +249,96 @@ const ACQUISITION_AGENT_SPEC = Object.freeze({
 });
 
 /**
- * THE OPENING.
+ * THE OPENING — CONCEPT COPY, NOT FROZEN WORDING.
  *
- * Four things must survive any wording change, and the ratchets check each:
- * the assistant names itself, it says it is an AI assistant, it names the
- * company, and it says why it is calling.
+ * The current sentence is a founder-approved concept and is expected to be
+ * tuned for speech. No test asserts it verbatim, and none should: a ratchet
+ * that pinned one string would forbid moving a comma and would be switched off
+ * the first time somebody needed to.
+ *
+ * What the ratchets assert instead is MEANING — the seven things that must
+ * survive any rewrite. See `describeOpeningSemantics`.
  */
 function buildAcquisitionOpening(identity = DEFAULT_IDENTITY) {
   const id = { ...DEFAULT_IDENTITY, ...(identity || {}) };
   return (
-    `Hi, this is ${id.assistantName}, ${id.disclosure} calling from ${id.company}. ` +
-    `${id.offerSummary} ${id.reasonForCalling}`
+    `Hi, this is ${id.assistantName}, ${id.disclosure} from ${id.companyName}. ` +
+    `I'm calling about ${id.productName}, ${id.productDescription}. ` +
+    `${id.valueProposition}, and ${id.reasonForCalling}`
   );
+}
+
+/**
+ * What an opening actually conveys, checked as MEANING rather than as text.
+ *
+ * Every requirement is expressed against the CONFIGURED identity, so rewording,
+ * reordering, or replacing "calling about X" with any equivalent phrasing all
+ * pass — while dropping a required fact fails. That is the difference between a
+ * ratchet that protects the obligation and one that protects a sentence.
+ *
+ * @returns {object} one boolean per requirement, plus `ok`
+ */
+function describeOpeningSemantics(opening = "", identity = DEFAULT_IDENTITY) {
+  const id = { ...DEFAULT_IDENTITY, ...(identity || {}) };
+  const text = String(opening);
+  const lower = text.toLowerCase();
+  const has = (v) => Boolean(v) && lower.includes(String(v).toLowerCase());
+  const escapeRe = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const checks = {
+    // 1. The assistant names itself — IN A SELF-IDENTIFYING CONTEXT.
+    //
+    // A plain substring test is not good enough here, and the reason is the
+    // exact ambiguity this identity model exists to remove: "Aida" is a
+    // substring of "AIDA", so an opening that only mentioned the PRODUCT would
+    // have counted as the assistant introducing itself. It must actually say
+    // "this is Aida" / "I'm Aida" / "my name is Aida".
+    namesAssistant: new RegExp(`\\b(?:this is|i'?m|i am|my name is)\\s+${escapeRe(id.assistantName)}\\b`, "i").test(text),
+    // 2. It says plainly that it is AI. Any phrasing carrying "AI" plus an
+    //    assistant-ish noun counts; "artificial intelligence" counts too.
+    disclosesAI: /\bA\.?I\.?\b/i.test(text) || /artificial intelligence/i.test(text),
+    // 3. The BUSINESS placing the call is named.
+    namesCompany: has(id.companyName),
+    // 4. The PRODUCT is named, AND framed as a thing being discussed.
+    //
+    // The mirror of the problem above: "AIDA" contains "Aida", so an opening
+    // that only introduced the ASSISTANT would otherwise have counted as
+    // naming the product. It has to appear in a product frame — "calling about
+    // AIDA", "we provide AIDA", "AIDA, our AI receptionist".
+    // An appositive frame ("AIDA, our AI receptionist") is deliberately NOT
+    // accepted: it collides with the assistant's own introduction, "Aida, an
+    // AI assistant". The frames below are ones only a product can occupy.
+    namesProduct: new RegExp(
+      `(?:\\b(?:about|regarding|our|called|named|introducing)\\s+${escapeRe(id.productName)}\\b)` +
+        `|(?:\\bwe(?:'ve)?\\s+(?:provide|offer|make|built|have|created)\\s+${escapeRe(id.productName)}\\b)` +
+        `|(?:\\b${escapeRe(id.productName)}\\s+(?:is|handles|answers|picks up|covers|does)\\b)`,
+      "i"
+    ).test(text),
+    // 5. Commercial purpose is legible — it is selling something to a business.
+    statesPurpose: /\buseful\b|\bhelp\b|\bcalling about\b|\bfor your business\b/i.test(text),
+    // 6. The missed / after-hours value proposition survives.
+    statesValue: /missed/i.test(text) && /after[- ]hours/i.test(text),
+    // 7. Still an opening, not a monologue.
+    concise: text.split(/\s+/).filter(Boolean).length <= 90,
+  };
+
+  // The product must not be presented AS the caller — "from AIDA" when the
+  // company is Niche Drops is precisely the defect this correction fixes.
+  checks.doesNotNameProductAsCaller =
+    id.productName === id.companyName || !new RegExp(`\\bfrom\\s+${id.productName}\\b`, "i").test(text);
+
+  // And it may never present itself as a person. Written to catch the claim
+  // however it is phrased — "I'm a human", "this is Aida, a real person" —
+  // rather than only the first-person form.
+  //
+  // It would also flag "I'm not a real person", which is honest but is not the
+  // approved phrasing; the approved form is "I'm an AI assistant", so the
+  // false positive costs nothing.
+  checks.doesNotClaimHuman =
+    !/\b(?:a|an)\s+(?:real\s+person|human(?:\s+being)?)\b/i.test(text) &&
+    !/\b(?:i am|i'?m)\s+(?:a\s+)?(?:human|person)\b/i.test(text);
+
+  return Object.freeze({ ...checks, ok: Object.values(checks).every(Boolean) });
 }
 
 const bullet = (lines) => lines.filter(Boolean).map((l) => `- ${l}`).join("\n");
@@ -288,8 +373,21 @@ function buildAcquisitionAgentPrompt({ identity = DEFAULT_IDENTITY, pricing = nu
       ];
 
   return [
-    `# Who you are`,
-    `You are ${id.assistantName}, ${id.disclosure} making an outbound call on behalf of ${id.company}.`,
+    `# Who you are, and who you are not`,
+    `You are ${id.assistantName}, ${id.disclosure} making an outbound call for ${id.companyName}.`,
+    ``,
+    `Three names, three different things. Keep them straight, because a stranger is entitled to know exactly`,
+    `who is telephoning them:`,
+    bullet([
+      `${id.assistantName} — you. The assistant speaking.`,
+      `${id.companyName} — THE BUSINESS placing this call. This is who you are from.`,
+      `${id.productName} — THE PRODUCT you are calling about: ${id.productDescription}.`,
+    ]),
+    ``,
+    `Never say that ${id.productName} is your company, never say you are calling "from ${id.productName}", and`,
+    `never describe ${id.companyName} as the receptionist product. You are from ${id.companyName}; you are`,
+    `calling about ${id.productName}.`,
+    ``,
     `You are calling a locksmith business that has NOT asked to hear from you. They owe you nothing, and the`,
     `call is an interruption. Behave accordingly.`,
     ``,
@@ -297,9 +395,12 @@ function buildAcquisitionAgentPrompt({ identity = DEFAULT_IDENTITY, pricing = nu
     buildAcquisitionOpening(id),
     ``,
     `You say this unprompted, at the start, before anything else. You never wait to be asked what you are.`,
+    `The wording above is a guide — say it naturally rather than reciting it — but every part of it must be`,
+    `there: your name, that you are ${id.disclosure}, that you are from ${id.companyName}, that you are calling`,
+    `about ${id.productName}, and why.`,
     ``,
     `# If they ask whether you are AI, a robot, automated, or a real person`,
-    `Answer immediately and plainly: yes, you are ${id.disclosure} from ${id.company}.`,
+    `Answer immediately and plainly: yes, you are ${id.disclosure} from ${id.companyName}.`,
     `Never say or imply that you are a person, human, or "just like" a member of staff. Never dodge the question,`,
     `change the subject, or answer it with a joke. This rule has no exceptions.`,
     ``,
@@ -448,6 +549,7 @@ module.exports = {
   FIRST_VALUE_QUESTION,
   END_CALL_TRIGGERS,
   buildAcquisitionOpening,
+  describeOpeningSemantics,
   buildAcquisitionAgentPrompt,
   buildAcquisitionAnalysisFields,
   describeAcquisitionAgentPayload,

@@ -498,23 +498,52 @@ Nothing here claims Australian law mandates the words "AI assistant" — M8M
 already established that this repository does not manufacture legal positions,
 and that rule holds here.
 
-### 19.2 THE BRAND DISCREPANCY, reported rather than resolved
+### 19.2 THE IDENTITY MODEL — three roles, three fields
 
-The approved opening says *"calling from AIDA"*. This repository says:
+**Settled by founder decision.** The first draft named the product as the
+caller; that is corrected.
 
-| constant | value |
-|---|---|
-| `PRODUCT_NAME` | **AIDA Locksmith Receptionist** |
-| `PROVIDER_NAME` | **Niche Drops** |
+| role | value | what it is |
+|---|---|---|
+| `assistantName` | **Aida** | the thing speaking |
+| `companyName` | **Niche Drops** | **the business placing the call** |
+| `productName` | **AIDA** | **the product being discussed** |
 
-So **AIDA is the product and Niche Drops is the company**, and the opening also
-names the assistant after the product — *"Aida, … calling from AIDA"*.
+They are three separate fields and stay that way. Merging any two to make a
+sentence flow would put back the ambiguity this correction removes, and the
+prompt states each role explicitly so the agent cannot say "AIDA is my company"
+or describe Niche Drops as the receptionist.
 
-The founder's wording is kept as the **default**, because trading as AIDA is a
-commercial decision this file should not quietly overrule. But `company` is a
-**parameter**, not prose baked into a prompt, so correcting it is one argument
-rather than an edit to a script. **A decision is wanted before the first live
-call.**
+Current opening concept:
+
+> "Hi, this is Aida, an AI assistant from Niche Drops. I'm calling about AIDA,
+> our AI receptionist for locksmiths. We help with missed and after-hours calls,
+> and I was just calling to see if that might be useful for your business."
+
+**This wording is not frozen.** It is founder-tunable concept copy and is
+expected to be refined for speech. No test asserts it verbatim.
+
+### 19.2a The ratchets test MEANING, not copy
+
+`describeOpeningSemantics()` reports what an opening conveys **relative to the
+configured identity**, and the ratchets assert that. Rewording, reordering,
+splitting into two sentences, or writing "artificial intelligence" instead of
+"AI" all pass; dropping a required fact fails.
+
+Two collisions had to be handled, and both come from the same source — **"Aida"
+is a substring of "AIDA"**:
+
+- a plain check for the assistant's name matched an opening that only named the
+  **product**, so self-identification now requires a frame: *"this is Aida"*,
+  *"I'm Aida"*, *"my name is Aida"*;
+- a plain check for the product matched the **assistant's** introduction, so the
+  product now requires a product frame — *"about AIDA"*, *"we provide AIDA"*,
+  *"AIDA handles…"*. An appositive frame (*"AIDA, our AI receptionist"*) is
+  deliberately **not** accepted, because it is indistinguishable from *"Aida, an
+  AI assistant"*.
+
+Proven both ways: four plausible founder rewordings are **accepted**, and seven
+openings that each lose exactly one required fact are **rejected**.
 
 ### 19.3 The tagline may not be spoken
 
