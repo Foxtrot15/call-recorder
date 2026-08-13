@@ -582,6 +582,67 @@ function buildAcquisitionResponseEngine({ identity = DEFAULT_IDENTITY, pricing =
 }
 
 /**
+ * WHAT WAS ACTUALLY SENT TO RETELL, PINNED (E-12B).
+ *
+ * ── THE PROBLEM THIS SOLVES ─────────────────────────────────────────
+ * E-10D(i) created a real Retell response engine from
+ * `describeAcquisitionRetellResources().responseEngine`. That resource now
+ * exists remotely and runs whatever prompt it was given. Nothing about editing
+ * `general_prompt` or `begin_message` in this file would change it, and nothing
+ * would fail — the repository would simply start describing behaviour that the
+ * live engine does not have, and the first place anybody would notice is a
+ * telephone call.
+ *
+ * So the payload is pinned by hash. Changing the copy is still allowed; changing
+ * it SILENTLY is not. A failing ratchet turns an edit into a decision about the
+ * remote resource, which is what it always was.
+ *
+ * ── WHY A HASH RATHER THAN A COPY OF THE TEXT ───────────────────────
+ * A second copy of a 5,373-character prompt in the test tree would be edited in
+ * lockstep with the first by anybody using find-and-replace, which is exactly
+ * the person this is meant to stop.
+ *
+ * ── HOW IT IS COMPUTED ──────────────────────────────────────────────
+ * `payloadHash` from voice-platform-port.js — sha256 over `stableStringify`,
+ * the repository's existing canonical form (recursively sorted keys, so
+ * property order cannot change the hash). Deliberately NOT a new convention:
+ * provisioning-plan.js and provider-resource-registry.js already hash provider
+ * payloads this way.
+ *
+ * ── WHAT IS IN SCOPE ────────────────────────────────────────────────
+ * The four fields of the `create-retell-llm` body and nothing else. Agent
+ * fields — voice, webhook, analysis, the E-12A voicemail policy — are a
+ * different API resource that has never been created, so they must not move
+ * this hash. Tests assert both directions.
+ *
+ * Verified reproducible: the payload built from commit d591262 (the E-10D(i)
+ * provisioning commit), from 31075f2 and from this commit all hash identically.
+ */
+const PROVISIONED_RESPONSE_ENGINE = Object.freeze({
+  payloadHash: "b0b5e21e3fcf7bcd7db9bacc577250689f5096a8705b9dd0d3b4ac18115e0542",
+  provisionedAt: "2026-08-13",
+  provisionedByMilestone: "E-10D(i)",
+  provisionedFromCommit: "d591262",
+  specVersion: SPEC_VERSION,
+  remoteVersionAtCreation: 0,
+  // The llm_id is deployment configuration and lives in the environment as
+  // RETELL_ACQUISITION_LLM_ID. It is deliberately absent here.
+  llmIdEnvVar: "RETELL_ACQUISITION_LLM_ID",
+  fields: Object.freeze(["begin_message", "default_dynamic_variables", "general_prompt", "general_tools"]),
+});
+
+/** The message a drift failure should print. Kept beside the pin it explains. */
+const RESPONSE_ENGINE_DRIFT_MESSAGE = [
+  "The acquisition response engine has ALREADY BEEN PROVISIONED at Retell.",
+  "The local response-engine payload has changed, so this repository now describes",
+  "behaviour the live engine does not have.",
+  "",
+  "Do not silently accept this. Either revert the change, or make it an explicit",
+  "decision: update/re-provision the remote response engine and re-pin",
+  "PROVISIONED_RESPONSE_ENGINE.payloadHash in the same commit.",
+].join("\n");
+
+/**
  * THE ANSWERING-MACHINE POLICY, AS A PROVIDER SETTING (E-12A).
  *
  * ── WHY THIS IS NOT IN THE PROMPT ───────────────────────────────────
@@ -631,6 +692,38 @@ function buildAcquisitionAgent({ config = {}, llmId = null } = {}) {
 }
 
 const isRealId = (v) => typeof v === "string" && v.trim().length > 0;
+
+/**
+ * The canonical hash of a response-engine payload, in the repository's existing
+ * form. Defaults to the current local payload.
+ *
+ * `voice-platform-port` is required lazily so this module keeps its property of
+ * importing nothing that knows what a network is — the port carries the
+ * disabled adapter, and E-10C's ratchets assert the spec stays inert.
+ */
+function responseEnginePayloadHash(payload = buildAcquisitionResponseEngine()) {
+  const { payloadHash } = require("./voice-platform-port");
+  return payloadHash(payload);
+}
+
+/**
+ * Has the local response-engine payload drifted from the provisioned one?
+ *
+ * Returns the finding rather than throwing, so a caller can decide whether it is
+ * a build failure or a line in a report. The ratchet throws; a status page would
+ * not want to.
+ */
+function describeResponseEngineDrift(payload = buildAcquisitionResponseEngine()) {
+  const actual = responseEnginePayloadHash(payload);
+  const expected = PROVISIONED_RESPONSE_ENGINE.payloadHash;
+  return Object.freeze({
+    drifted: actual !== expected,
+    expected,
+    actual,
+    provisionedAt: PROVISIONED_RESPONSE_ENGINE.provisionedAt,
+    message: actual === expected ? null : RESPONSE_ENGINE_DRIFT_MESSAGE,
+  });
+}
 
 /**
  * BOTH resources, their dependency, and an honest account of what is not ready.
@@ -754,6 +847,10 @@ module.exports = {
   buildAcquisitionResponseEngine,
   buildAcquisitionAgent,
   ACQUISITION_VOICEMAIL_OPTION,
+  PROVISIONED_RESPONSE_ENGINE,
+  RESPONSE_ENGINE_DRIFT_MESSAGE,
+  responseEnginePayloadHash,
+  describeResponseEngineDrift,
   describeAcquisitionRetellResources,
   ACQUISITION_RESOURCE_ORDER,
   ACQUISITION_RESOURCE_PREFIX,

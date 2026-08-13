@@ -7,6 +7,7 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 **acquisition response engine is PROVISIONED** on the dev Retell account, §21.
 · **E-11A COMPLETE** — the acquisition webhook ingress is built, mounted in source and DORMANT (§22).
 · **E-12A COMPLETE** — leave-no-message is now a PROVIDER setting, configured locally (§23).
+· **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, and the voice catalogue has been read once (§24). **No voice selected — founder decision.**
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
 voice is UNRESOLVED, webhook is UNRESOLVED, the voicemail hang-up is
@@ -1053,3 +1054,114 @@ created or updated, no voice listing, no webhook configured remotely, no number
 provisioned. No Twilio, no DNCR, no prospect contacted. **Zero DEV writes** — no
 SQL, LPM3 untouched, 23 acquisition rows, calling still paused at revision 1.
 Production untouched.
+
+---
+
+## 24. E-12B — pinning what was provisioned, and reading the voice catalogue
+
+**Status: DRIFT PIN ADDED. VOICE CATALOGUE READ (one read-only request). NO
+VOICE SELECTED — founder decision. Agent still NOT PROVISIONED. Response engine
+UNCHANGED. Number NOT PROVISIONED. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
+
+### 24.1 Why the prompt stopped being a local file
+
+E-10D(i) created a real Retell response engine from this repository's
+`buildAcquisitionResponseEngine()`. From that moment the copy stopped being an
+artefact and became a **claim about a remote resource**. Editing `general_prompt`
+here changes nothing at Retell, and nothing fails — the repository simply begins
+describing behaviour `llm_111ed…` does not have, and the first place anybody
+finds out is a telephone call to a stranger.
+
+### 24.2 The pin
+
+`PROVISIONED_RESPONSE_ENGINE.payloadHash` =
+`b0b5e21e3fcf7bcd7db9bacc577250689f5096a8705b9dd0d3b4ac18115e0542`
+
+Computed with **`payloadHash` from `voice-platform-port.js`** — sha256 over
+`stableStringify`, the repository's existing canonical form with recursively
+sorted keys. Deliberately **not a new convention**: `provisioning-plan.js` and
+`provider-resource-registry.js` already hash provider payloads this way.
+
+**The exact provisioned payload is reproducible**, which is what makes the pin
+honest rather than decorative. The E-10D(i) script sent
+`describeAcquisitionRetellResources().responseEngine` **with no arguments** — no
+environment input, fully deterministic — and that payload hashes identically when
+built from commit `d591262` (the provisioning commit), from `31075f2`, and from
+today. Four fields, nothing else: `general_prompt`, `begin_message`,
+`default_dynamic_variables`, `general_tools`.
+
+The `llm_id` is **not** in the pin. It is deployment configuration and lives in
+`RETELL_ACQUISITION_LLM_ID`; a ratchet asserts no `llm_…` value appears in the
+tracked record.
+
+### 24.3 What it does and does not forbid
+
+It does **not** freeze the copy. E-10A deliberately refused to pin the opening to
+an exact string so a comma could be moved for speech, and that reasoning stands.
+What this forbids is moving it **silently**. A founder-approved rewording is
+still a two-line change — edit the copy, re-pin the hash in the same commit — but
+it now forces the third step that was previously invisible: **update the remote
+engine**. The failure message says exactly that rather than merely reporting a
+mismatch.
+
+**Proven by planting real drift**, not by mutating a copy: adding two words to
+`reasonForCalling` in the actual source made 8 assertions fail with the intended
+message. The change was then reverted and the suite returns to green.
+
+Scope is asserted in both directions. Changing `begin_message` (even one
+character), `general_prompt`, `default_dynamic_variables` or `general_tools`
+fails. Choosing a `voice_id`, setting `webhook_url`, supplying the `llm_id`, or
+the E-12A `voicemail_option` — all **agent** fields, a different API resource —
+must not move it, and do not. That matters immediately: **resolving the voice is
+the very next milestone, and it must not read as prompt drift.**
+
+### 24.4 The voice catalogue — one read, and an inconvenient answer
+
+**One** authorised request: `GET /list-voices`, HTTP 200, **272 voices**. Zero
+writes. The read was performed by a one-off script kept **operational rather than
+committed** — it is a founder-review action, not a pipeline step, and committing
+it would add a second Retell-capable file to the surface the safety story rests
+on. The credential was read from the untracked environment and never printed.
+
+Available metadata: `voice_id`, `voice_name`, `provider`, `gender`, `age`,
+`accent`, `recommended`, `preview_audio_url`, `avatar_url`, `voice_type`.
+
+**Only 2 of 272 voices carry Australian accent metadata, and both are male:**
+
+| voice | id | provider | gender | age |
+|---|---|---|---|---|
+| Noah (en-AU) | `11labs-Noah` | elevenlabs | male | Middle Aged |
+| Charlie (en-Au) | `11labs-charlie` | elevenlabs | male | Middle Aged |
+
+Both are ElevenLabs, consistent with Retell's own guidance that ElevenLabs is
+strongest for niche accents.
+
+**There is no female preset voice with Australian accent metadata.** That is a
+real constraint on the decision, not an oversight in the search: the accent field
+was counted across the whole catalogue (202 American, 22 Mexican, 19 British, 2
+Australian).
+
+The existing receptionist/onboarding default **is** in the catalogue:
+`custom_voice_018b4225b718ffc38a2e1da4d4`, *"Sunny - Australian Female"*,
+ElevenLabs, `voice_type: custom`. Its name claims an Australian female, but it
+carries **no `accent`, `gender` or `age` metadata at all** — so the claim rests
+on the name, which is exactly the inference this milestone was told not to make.
+Only a preview can settle it. It is reported, **not** selected, and reuse is not
+assumed.
+
+### 24.5 Aida / AIDA pronunciation — still not decided
+
+Unchanged and deliberately not encoded. The available later copy decision is to
+**omit the product name from the opening altogether** — the assistant introduces
+itself as Aida and describes the product generically as an AI receptionist,
+which removes the spoken Aida/AIDA collision without any pronunciation rule.
+
+That is a **response-engine copy change** and would require an
+`updateResponseEngine` plus a re-pin under §24.2. **Not authorised, not made.**
+
+### 24.6 What did NOT happen
+
+No Retell write of any kind: no agent, no engine update, no voice created,
+cloned or modified, no number, no call. The response engine is byte-identical to
+the provisioned one. No Twilio, no DNCR, no prospect contacted. **Zero DEV
+writes** — 23 rows, calling paused at revision 1. Production untouched.
