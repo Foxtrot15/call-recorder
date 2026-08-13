@@ -1,7 +1,10 @@
 # E-7B2 — the Retell acquisition provider
 
-**Status:** **E-7B2A COMPLETE (offline adapter + audit). E-7B2B NOT STARTED.
-E-7 REMAINS OPEN. Acquisition calling is PAUSED and no live provider exists.**
+**Status:** **E-7B2A COMPLETE (offline adapter + audit). E-7B2B1 COMPLETE
+(offline agent contract + outcome/reconciliation return path, §14). E-7B2B live
+activation NOT STARTED. E-7 REMAINS OPEN. Acquisition calling is PAUSED, no
+live provider exists, no Retell agent is provisioned and no outbound acquisition
+number is provisioned.**
 
 **Owns (source of truth for):** how an authorised acquisition dial becomes a
 Retell outbound call, what E-7B2B still requires, and why the adapter built in
@@ -358,3 +361,107 @@ as a side effect.
 
 **Items 1–6 are engineering and could be done today. Item 7 is an external
 dependency with a lead time and is the only one nobody here can accelerate.**
+
+---
+
+## 14. E-7B2B1 — the return path, offline
+
+**Status: COMPLETE, OFFLINE. E-7 REMAINS OPEN. No agent provisioned, no number
+provisioned, no route exposed, calling still PAUSED.**
+
+A call that cannot yet be placed still needs a way home. E-7B2B1 builds it:
+verified event → exact dispatch → bound call id → classified outcome → durable
+outcome → and only then the lock.
+
+### 14.1 What the audit found, and what it did not require
+
+| question | answer |
+|---|---|
+| webhook signature verification | **exists** — `retell-webhook-verify.js`, delegating to the SDK, with stale-window, size and content-type checks. **Reused, not reimplemented** |
+| durable webhook idempotency | **exists** — `provider_webhook_events` (lpm3) is unique on `fingerprint`, and a 23505 is treated as a duplicate. **Survives restart** |
+| is `call.metadata` available | **yes** — `validateEventEnvelope` returns the whole raw call object, so `metadata.aida_dispatch_id` is recoverable on every handled event |
+| can LAQ5 bind a call id after a lost response | **yes.** `provider_ref` is **not** in the guard's immutable identity list, so it can be set later provided `resolved_at` is null and `provider_status` is not changed |
+| new SQL required | **NO** |
+| new HTTP route required | **NO** — the handler is a pure function and nothing mounts it |
+
+### 14.2 The LAQ5 constraint that shaped the design
+
+The guard makes `provider_status` **forward-only out of `pending`**. A dispatch
+left `unknown` by a lost response therefore **cannot be promoted** to
+`submitted` — and it is not. Only `provider_ref` is bound.
+
+That is the honest outcome anyway: `unknown` records what we knew *at
+submission*, which a later webhook does not change. What changes is that we now
+know **which call it was**. Promoting the status would have needed a trigger
+change, which is a SQL gate, which this milestone does not cross.
+
+### 14.3 Phases — why a hang-up is not an answer
+
+`call_ended` routinely arrives **before** `call_analyzed`, and outcomes are
+append-only. So a technical outcome is written **only** where no analysis could
+change it:
+
+| Retell `disconnection_reason` | outcome |
+|---|---|
+| `dial_no_answer` | `no_answer` |
+| `voicemail_reached`, `machine_detected` | `voicemail` |
+| `dial_busy` | `no_answer` — nobody was reached |
+| `user_hangup`, `agent_hangup`, `inactivity`, `max_duration_reached` | **nothing.** Somebody talked to us; what they said decides |
+| `error`, `dial_failed` | **nothing.** We cannot tell whether a telephone rang |
+
+Writing "they hung up" at `call_ended` would put a technical fact where a
+business conclusion belongs, in a table that cannot be corrected. So the
+connected cases wait, and if the analysis never arrives the dispatch stays
+unresolved and an operator sees it. **Nothing re-calls because a webhook did not
+arrive.**
+
+### 14.4 The opt-out is held to a higher standard than anything else
+
+`explicit_opt_out: true` is accepted **only** with `confidence: high` **and**
+transcript evidence. Anything weaker returns the whole analysis as
+`analysis_opt_out_unsupported` — **not downgraded to a decline, and not
+dropped**. Nothing is recorded and a human decides.
+
+The asymmetry is deliberate: an opt-out written in error is permanent and
+append-only; an opt-out missed is corrected by the next conversation. Those
+costs are not equal.
+
+`not_interested`, `declined` and `opt_out` stay **distinct**. A callback is a
+callback, never a suppression.
+
+### 14.5 Separation of powers
+
+The handler **classifies**. It never writes a suppression and never sets
+`resolved_at` — ratchets assert both. Suppression belongs to
+`acquisition-outcome.js`, which already owns it; the ordering (outcome first,
+lock second) belongs to `acquisition-dispatch-resolution.js`, which already owns
+that. E-7B2B1 adds no third place for either rule to live.
+
+### 14.6 THE GAP THIS MILESTONE FOUND AND DID NOT PAPER OVER
+
+**Nothing in the pipeline currently makes a prospect contactable.**
+
+`acquisition-outcome` refuses to record against anything not `queued`,
+`attempted`, `connected` or `callback_requested` — "no call could have been made
+to it, so there is no outcome to record". The lifecycle is
+`review_approved → queued → attempted`, and **no batch selection sets `queued`
+and no dispatch sets `attempted`.**
+
+So today the return path would refuse every outcome. It refuses **safely** —
+nothing written, both locks held, a human sees it — and that refusal is proven
+rather than assumed. But it means **E-7B2B must set `queued` at batch selection
+and `attempted` at dispatch** before any live call, and that belongs to the
+dispatch side: a webhook asserting "a call was attempted" would be the wrong
+module making the claim.
+
+### 14.7 Residual gap for live activation, reported not fixed
+
+`provider_ref` has **no unique index**. Two dispatches bound to one Retell
+`call_id` is prevented by application logic (a conflicting id is refused and the
+first is never overwritten) and made implausible by single-use dispatch, but it
+is **not prevented by the database**. Adding
+`unique (provider_ref) where provider_ref is not null` is defence in depth for
+E-7B2B and requires founder approval, so it is **not written here**.
+
+Likewise `lpm3` (the webhook-event idempotency table) must be **applied wherever
+acquisition webhooks are processed**. It is not part of laq1–laq5.

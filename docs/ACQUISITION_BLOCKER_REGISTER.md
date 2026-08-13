@@ -105,6 +105,7 @@ SQL was required to close A-L8.**
 | ~~**M-3**~~ | Lease reaper | **DONE, dormant.** No timer and no scheduler; `sweep()` runs when a human runs it. |
 | **M-4** | Re-run eligibility at the moment of dialling | **MECHANISM DONE (M8E), CALLER IS NOW E-7A — STILL OPEN.** `createDialAuthoriser` re-runs the whole engine at the authorisation instant against durable suppression (M8E) and durable contact history (M8J). Since E-7A it **has** a caller: the executor accepts nothing else, and refuses a slip older than **60 seconds** so an authorisation cannot become a standing permission. It stays open because the caller cannot yet place a call. Closes with **E-7B**. |
 | **M-5** | `service_area` / `operating_status` capture path | **OPEN.** The discovery contract derives neither. |
+| **E-8** | Nothing makes a prospect CONTACTABLE | **OPEN — found by E-7B2B1, and it blocks a first call.** An outcome may only be recorded from `queued`, `attempted`, `connected` or `callback_requested`, and the lifecycle is `review_approved → queued → attempted`. **No batch selection sets `queued` and no dispatch sets `attempted`**, so the return path would refuse every outcome — safely (nothing written, both locks held), but it would refuse. Belongs to the dispatch side, not the webhook: a webhook asserting "a call was attempted" is the wrong module making that claim. See §13.1. |
 | ~~**M-6**~~ | Authoritative public-holiday source | **OPEN** — tracked as **A-L2**, because the blocker is the source decision, not the code. |
 | ~~**M-7**~~ | Cross-process suppression visibility | **CLOSED in M8E.** Proven across two real processes against dev Postgres. |
 | ~~**E-1**~~ | Derive attempt history from `acquisition_contact_outcomes` | **CLOSED in M8J.** `acquisition-history.js` is the one derivation; the authoriser reads it every time and refuses on `contact_history_unavailable`. Proven read-only against real Postgres, 16/16, zero residue. |
@@ -115,6 +116,7 @@ SQL was required to close A-L8.**
 | **E-6** | `service_area` / `operating_status` — same item as M-5 | **OPEN.** |
 | ~~**E-7B1**~~ | Durable dispatch authority + durable emergency stop | **CLOSED ON DEV 2026-08-12 — LAQ5 applied by hand, proven against real Postgres.** `dispatchId` (random UUID) and `batchKey` travel on every genuine slip; the atomic claim is one INSERT **the database arbitrates**, and that was proven by **two separate OS processes** racing to claim one business on one handset — one claimed, one was refused naming the prospect lock. Replay, the prospect lock and the destination lock all refused as designed. The emergency stop is read from the store **twice** per dispatch, `killSwitch` is a forbidden caller option, and the executor refused a caller who supplied one. **No provider result can release a lock** — `resolved_at` is set only by a recorded contact outcome or a named operator, and the proof row is still unresolved. Dev residue **21 → 23** (bootstrap state row + one fictional dispatch); decisions unchanged at 4, queue at 0, calling **paused**. The live schema was then **structurally verified 14/14 PASS** on 2026-08-13, read-only — including both partial unique index predicates and both guard triggers being BEFORE, ROW-level, covering UPDATE and DELETE, and **enabled** (§11). **Production: not applied.** [Runbook §15](ACQUISITION_SQL_RUNBOOK.md), design: [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md). |
 | **E-7B2A** | The Retell provider adapter, offline | **COMPLETE — OFFLINE, NO TRANSPORT, `live: false`.** `acquisition-retell-provider.js` builds the exact outbound call request and maps every answer Retell can give, and **cannot send one**: it imports no transport, reads no environment, holds no credential, names no host, and states `live` as a literal `false` a caller cannot override. Its submitter is **injected**, and a ratchet walks every `acquisition-*.js` proving nothing constructs one. **No SQL** — laq5's `provider_ref` already carries a `call_id`. **No cross-repo change** — there is no second repository (§12). The one substantive decision: the shared voice port marks `provider_timeout` **retryable**, and this provider **discards that flag**, raising ambiguity instead so an unknown submission leaves the dispatch unresolved for a human rather than ringing a business twice. 34 offline proofs. [ACQUISITION_E7B2_RETELL_DESIGN.md](ACQUISITION_E7B2_RETELL_DESIGN.md) |
+| **E-7B2B1** | Acquisition agent contract + the offline return path | **COMPLETE — OFFLINE. No agent provisioned, no number provisioned, no route exposed, no SQL.** The return path exists end to end as a pure function: verified event → **direct** lookup on the exact `aida_dispatch_id` → call-id binding → classification → durable outcome → **and only then** the lock. It reuses the existing signature verification and the existing `provider_webhook_events` fingerprint idempotency rather than building second ones, and it **writes no suppression and sets no `resolved_at` itself** — both belong to services that already own them. A hang-up is **not** an answer: `call_ended` settles only `no_answer`, `voicemail` and `busy`, because it routinely arrives before `call_analyzed` and outcomes are append-only. An opt-out needs **high confidence and transcript evidence** or the whole analysis is held for a human — never downgraded to a decline. 45 offline proofs. See §13 and [ACQUISITION_E7B2_RETELL_DESIGN.md](ACQUISITION_E7B2_RETELL_DESIGN.md) §14. |
 | **E-7B2B** | Live Retell integration | **NOT STARTED — founder-authorised, after DNCR readiness.** Needs a purpose-built acquisition agent (the receptionist and onboarding agents are both wrong for cold calling, §12), its own outbound number and capability gate, a wired transport, `dispatchId` in Retell metadata so an ambiguous submission is reconcilable, an explicit decision on how an opt-out is confirmed, and the webhook → outcome → resolution path in that order. |
 | **E-7** | The dialler, accepting only an `AuthorisedDial` slip | **PARTIAL — E-7A COMPLETE, LIVE PROVIDER ABSENT BY DESIGN.** The execution **seam** is built, provider-disabled: `acquisition-dial-execution.js` is the only thing that may consume a slip, the default provider **refuses**, and the only other provider is an offline fake. **No real provider adapter exists, no network path exists, and no live call is possible.** E-7 does **not** close until a later founder-authorised milestone (**E-7B**) connects a real provider after DNCR operational readiness. See §10. |
 
@@ -930,3 +932,64 @@ are **not** disconnection reasons. Every one of them ends the call as
 `user_hangup` or `agent_hangup`, so they can only come from post-call analysis.
 **How an opt-out is confirmed from a transcript is an open decision with
 permanent, append-only consequences, and E-7B2A does not make it.**
+
+---
+
+## 13. E-7B2B1 — the return path, and the gap it found, 2026-08-13
+
+**Status: COMPLETE, OFFLINE. E-7 REMAINS OPEN. Calling PAUSED at revision 1.
+No agent provisioned. No number provisioned. No route exposed. No SQL.**
+
+### 13.1 A NEW BLOCKER THIS MILESTONE FOUND
+
+**Nothing in the pipeline makes a prospect contactable, so no outcome could be
+recorded today.**
+
+`acquisition-outcome` refuses anything not `queued`, `attempted`, `connected` or
+`callback_requested`: *"no call could have been made to it, so there is no
+outcome to record."* The lifecycle is `review_approved → queued → attempted`,
+and **no batch selection sets `queued`; no dispatch sets `attempted`.**
+
+The refusal is **safe** — nothing is written, both locks stay held, an operator
+sees an unresolved dispatch — and it is now proven rather than assumed. But it
+is a real gap on the path to a first call, and it belongs to the **dispatch**
+side: a webhook asserting "a call was attempted" would be the wrong module
+making that claim. **E-7B2B must close it.**
+
+### 13.2 What was built
+
+| | |
+|---|---|
+| agent contract | Local specification only. Identity, purpose, behaviour, prohibitions. **No agent created, no endpoint named, no credential read** |
+| AI disclosure | **Deliberately undecided.** `decided: false`, `wording: null`. Inventing it would manufacture a compliance position nobody adopted |
+| analysis schema | Closed enum + validator. **Prose is never the durable outcome** |
+| correlation | `metadata.aida_dispatch_id` → **direct primary-key lookup**. No scan, no hash recomputation. A missing or unknown id writes nothing and guesses no prospect |
+| call-id binding | One dispatch, at most one `call_id`. A conflicting id is **refused**, never overwritten |
+| lost response | `provider_ref` bound after the fact; `provider_status` stays `unknown` because the laq5 guard makes it forward-only — and `unknown` remains the truth about what we knew when we submitted |
+| ordering | Outcome first, lock second, through the service that already owns it |
+
+### 13.3 The two refusals that matter most
+
+**A hang-up is not an answer.** `call_ended` settles only `no_answer`,
+`voicemail` and `dial_busy`. `user_hangup`, `agent_hangup`, `inactivity`,
+`error` and `dial_failed` write **nothing** — because `call_ended` routinely
+arrives before `call_analyzed`, outcomes are append-only, and a technical fact
+written early cannot be corrected by the authoritative one later.
+
+**An opt-out is held to a higher standard than anything else.** It needs
+`confidence: high` **and** transcript evidence, or the whole analysis is
+returned for human review — **not downgraded to a decline, not dropped**. An
+opt-out written in error is permanent and append-only; one missed is corrected
+by the next conversation. Those costs are not equal, so the rule leans towards
+refusing. `not_interested`, `declined` and `opt_out` remain **distinct**, and a
+callback is never a suppression.
+
+### 13.4 Reported, not fixed
+
+- **`provider_ref` has no unique index.** Two dispatches sharing one Retell
+  `call_id` is refused by application logic and made implausible by single-use
+  dispatch, but **the database does not prevent it**. Adding
+  `unique (provider_ref) where provider_ref is not null` is defence in depth for
+  **E-7B2B** and needs founder approval, so it is not written.
+- **`lpm3` must be applied wherever acquisition webhooks are processed.** The
+  durable fingerprint idempotency lives there and is not part of laq1–laq5.

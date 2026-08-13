@@ -642,8 +642,12 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
       return frozenCopy(row);
     },
 
-    async listDialExecutions({ prospectId = null, unresolvedOnly = false } = {}) {
+    // `dispatchId` is a PRIMARY KEY lookup, added by E-7B2B1 so the return path
+    // can find a dispatch directly from a webhook rather than listing
+    // unresolved rows and matching in memory.
+    async listDialExecutions({ prospectId = null, unresolvedOnly = false, dispatchId = null } = {}) {
       return dialExecutions
+        .filter((d) => (dispatchId ? d.dispatchId === dispatchId : true))
         .filter((d) => (prospectId ? d.prospectId === prospectId : true))
         .filter((d) => (unresolvedOnly ? !d.resolvedAt : true))
         .map(frozenCopy);
@@ -1594,8 +1598,10 @@ function createSupabaseAcquisitionStore({ client = null } = {}) {
       return fromDialExecutionRow(data);
     },
 
-    async listDialExecutions({ prospectId = null, unresolvedOnly = false } = {}) {
+    async listDialExecutions({ prospectId = null, unresolvedOnly = false, dispatchId = null } = {}) {
       let q = db().from(TABLES.dialExecutions).select("*");
+      // The primary key. One row, by index, not a scan.
+      if (dispatchId) q = q.eq("dispatch_id", dispatchId);
       if (prospectId) q = q.eq("prospect_id", prospectId);
       if (unresolvedOnly) q = q.is("resolved_at", null);
       const { data, error } = await q.order("claimed_at", { ascending: true });
