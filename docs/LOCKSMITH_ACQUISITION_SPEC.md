@@ -3632,3 +3632,27 @@ in the repository constructs these resources at all.
 
 **Neither resource is provisioned.** Voice, webhook and answering-machine
 behaviour all remain unresolved, and readiness reports each by name.
+
+### E-11A — the acquisition webhook ingress (2026-08-13)
+
+`POST /webhooks/retell/acquisition` exists in source, is mounted, and is
+**dormant**: it needs `RETELL_ENABLED`, `RETELL_WEBHOOK_ENABLED` **and**
+`RETELL_ACQUISITION_WEBHOOK_ENABLED`, the third so that switching onboarding
+webhooks on never switches acquisition ingestion on with them. Off by default,
+the path 404s. **Nothing is deployed and no Retell agent points at it.**
+
+It reuses the one signature verifier and the LPM3 fingerprint store, and reuses
+neither the onboarding decision logic nor its processor — acquisition is bound
+by `metadata.aida_dispatch_id` and by nothing else. Signature, parse and
+envelope validation all happen before anything is written, and the "is this
+ours?" check sits before the fingerprint write.
+
+**A permanent call-id conflict answers 204, not 5xx.** Retell retries non-2xx,
+and a conflict that will be refused identically for ever would become a stream
+of redeliveries; it is recorded in the durable log as `failed` for a human
+instead. 503 is reserved for a genuine storage outage.
+
+**Blocker: LPM3 is not applied to dev**, so `provider_webhook_events` does not
+exist and the durable fingerprint has nowhere to go. The route answers 503 on
+that path — the correct direction — and no acquisition webhook may be processed
+live until it is applied. See [ACQUISITION_SQL_RUNBOOK.md](ACQUISITION_SQL_RUNBOOK.md) §17.

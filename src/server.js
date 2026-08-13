@@ -40,6 +40,11 @@ app.use(require("./routes/locksmith-portal"));
 // Mounted with its own express.raw body parser so signature verification sees
 // the exact bytes — this is why it sits apart from the JSON parser above.
 app.use(require("./routes/retell-webhook"));
+// Acquisition Retell webhook (E-11A). Dormant behind a THIRD flag,
+// RETELL_ACQUISITION_WEBHOOK_ENABLED, so switching onboarding webhooks on can
+// never switch acquisition ingestion on with them. No Retell agent points at
+// this path, no webhook_url is configured, and nothing is deployed.
+app.use(require("./routes/acquisition-retell-webhook"));
 
 // Dashboard page requires login. Registered before express.static so it
 // takes priority over static's automatic "serve index.html for /" behaviour.

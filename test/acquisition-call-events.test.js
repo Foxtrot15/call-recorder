@@ -583,14 +583,40 @@ describe("E-7B2B1 cannot call, redial, schedule or reach anything", () => {
     assert.ok(/recordOutcomeAndResolveDispatch/.test(code), "it must go through the service that owns the ordering");
   });
 
-  it("28. no exposed route reaches the acquisition event handler", () => {
+  /**
+   * ── WIDENED BY E-11A, AND ONLY BY ONE FILENAME ────────────────────
+   *
+   * This asserted that NO route reached the acquisition handler, which was
+   * right while no ingress was supposed to exist. E-11A builds one, so the
+   * assertion becomes: exactly ONE named route reaches it, and that route is
+   * signature-verified and dormant behind its own flag.
+   *
+   * The rule being protected is unchanged — acquisition events may not be
+   * reachable from the network by anything unauthenticated or ungated. A second
+   * route touching the handler still fails the build.
+   */
+  const ACQUISITION_INGRESS = "acquisition-retell-webhook-handler.js";
+
+  it("28. exactly one named, gated route reaches the acquisition event handler", () => {
     const dir = path.join(__dirname, "..", "src", "routes");
+    const reachers = [];
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
       const body = fs.readFileSync(path.join(dir, f), "utf8");
-      assert.ok(!/acquisition-call-events/.test(body), `${f} exposes the acquisition event handler to the network`);
+      if (/acquisition-call-events/.test(body)) reachers.push(f);
     }
+    assert.deepStrictEqual(reachers, [ACQUISITION_INGRESS], `only ${ACQUISITION_INGRESS} may reach it — found ${reachers.join(", ")}`);
+
+    // And it is authenticated and dormant, not merely named.
+    const ingress = fs.readFileSync(path.join(dir, ACQUISITION_INGRESS), "utf8");
+    assert.match(ingress, /retell-webhook-verify/, "it must verify before anything else");
+    const route = fs.readFileSync(path.join(dir, "acquisition-retell-webhook.js"), "utf8");
+    assert.match(route, /RETELL_ACQUISITION_WEBHOOK_ENABLED/, "and sit behind its own flag");
+    assert.match(route, /next\("router"\)/, "which 404s the path when off");
+
+    // server.js mounts the ROUTE, never the handler directly.
     const server = fs.readFileSync(path.join(__dirname, "..", "src", "server.js"), "utf8");
-    assert.ok(!/acquisition-call-events/.test(server), "server.js must not mount the acquisition event handler");
+    assert.ok(!/acquisition-call-events/.test(server), "server.js must not mount the event handler directly");
+    assert.match(server, /routes\/acquisition-retell-webhook/, "it mounts the gated route");
   });
 
   it("28b. calling remains paused and no provider is live", async () => {

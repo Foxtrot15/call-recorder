@@ -5,6 +5,7 @@
 COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 (response-engine / agent resource split, §20) · **E-10D(i) COMPLETE** — the
 **acquisition response engine is PROVISIONED** on the dev Retell account, §21.
+· **E-11A COMPLETE** — the acquisition webhook ingress is built, mounted in source and DORMANT (§22).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
 voice is UNRESOLVED, webhook is UNRESOLVED, voicemail provider enforcement is
@@ -780,3 +781,105 @@ No agent. No phone number. No webhook exposed. No voice chosen or listed. No
 transport wired into the acquisition executor. No provider set `live: true`. No
 calling-state change. No DEV write, no SQL. No prospect, Twilio or DNCR contact.
 No call, SMS or email. Production untouched.
+
+---
+
+## 22. E-11A — the acquisition webhook ingress, built and dormant
+
+**Status: LOCAL WEBHOOK INTEGRATION COMPLETE. Route IMPLEMENTED AND MOUNTED IN
+SOURCE, NOT DEPLOYED, NOT EXPOSED, DORMANT BY DEFAULT. Retell webhook_url UNSET.
+LPM3 NOT APPLIED TO DEV — a hard pre-live blocker (§22.5). Response engine
+PROVISIONED · agent NOT PROVISIONED · number NOT PROVISIONED · providers
+`live:false` · calling PAUSED · E-7 OPEN · DNCR-1 OPEN.**
+
+### 22.1 A dedicated route, not the shared ingress
+
+`POST /webhooks/retell/acquisition`, alongside the onboarding
+`POST /webhooks/retell` rather than inside it.
+
+Retell attaches `webhook_url` **per agent**, so the acquisition agent will point
+here and nothing else will. Sharing the onboarding ingress would mean every
+acquisition delivery traversing `decideEventHandling`, whose binding model asks
+*"which onboarding session is this?"* and answers `record_unbound` when there is
+none — so acquisition events would be recorded and never processed, or filed
+against the wrong domain.
+
+### 22.2 What is reused, and what is deliberately not
+
+**Reused:** `verifyRetellWebhook` — the one signature implementation; this
+handler verifies nothing itself and a ratchet asserts it contains no `crypto`,
+`createHmac` or `timingSafeEqual`. Also reused: `provider-webhook-events` for
+envelope validation, the deterministic fingerprint, and the durable LPM3 record.
+
+**Not reused:** `decideEventHandling` and the onboarding processor contract.
+Acquisition is bound by `metadata.aida_dispatch_id` and by nothing else.
+
+### 22.3 Its own third flag
+
+`RETELL_ENABLED` · `RETELL_WEBHOOK_ENABLED` · **`RETELL_ACQUISITION_WEBHOOK_ENABLED`**
+
+The third exists so that switching onboarding webhooks on can never switch
+acquisition ingestion on with them — the same reason acquisition keeps its own
+resource order, and the same reason it will need its own capability gate before
+it can dial. Off by default; the gate `next("router")`s and the path 404s.
+
+### 22.4 Order, and the one transient answer
+
+```
+signature → parse → envelope → is it ours? → fingerprint → correlate → 204 → work
+```
+
+The first three mutate nothing. **The "is it ours?" check sits before the
+fingerprint write**, so somebody else's traffic on a shared provider account
+never fills our event log.
+
+| answer | when |
+|---|---|
+| **204** | processed, duplicate, ignored, not-ours, **and permanent acquisition conflicts** |
+| 400 | malformed body or envelope |
+| 401 | missing, stale or invalid signature |
+| 413 | oversize |
+| **503** | webhook disabled, verifier unavailable, **or our storage is down** — the only genuinely transient cases |
+
+**A permanent call-id conflict returns 204 on purpose.** Retell retries non-2xx;
+a conflict will be refused identically for ever, so a 5xx would turn one
+operator's problem into a stream of them. It is recorded in the durable log as
+`failed` — needing a human — while the HTTP answer says "heard you, stop
+resending".
+
+### 22.5 LPM3 — NOT APPLIED. The hard pre-live blocker.
+
+Probed read-only against dev:
+
+| table | dev |
+|---|---|
+| `provider_webhook_events` | **ABSENT** |
+| `provisioning_plans` | **ABSENT** |
+| `retell_resources` | **ABSENT** |
+| `locksmith_onboarding_sessions` | present |
+| `clients` | present |
+
+So the durable fingerprint has nowhere to go. Today the handler answers **503**
+on that path — the correct direction to fail, and exactly why 503 is reserved
+for it — but **no acquisition webhook may be processed live until LPM3 exists**.
+
+**No new migration is needed.** `supabase/sql/lpm3_create_retell_provisioning.sql`
+already creates `provider_webhook_events` with `constraint pwe_fingerprint_key
+unique (fingerprint)` — that uniqueness *is* the idempotency mechanism. Its
+foreign keys point at `locksmith_onboarding_sessions` (present) and
+`provisioning_plans` (created earlier in the same file), so the migration is
+self-contained given what dev already has.
+
+**It was not applied, and applying it is a founder decision**, because it also
+brings `retell_resources` and `provisioning_plans` — the whole Retell
+provisioning schema — into the acquisition dev project, and acquisition uses
+neither. The manual step is in the runbook.
+
+### 22.6 What did NOT happen
+
+No Retell request of any kind — the response engine was not recreated, no agent,
+no number, no remote webhook configuration, no voice listing. Nothing deployed,
+no tunnel, no public host. `RETELL_ACQUISITION_WEBHOOK_URL` is named as a
+concept and **deliberately unpopulated** — there is no deployed route for it to
+name. No transport wired into the executor, no provider `live: true`, no
+calling-state change, no DEV write, no SQL, production untouched.

@@ -1202,3 +1202,46 @@ reference names one real telephone call for ever.
 
 **Nothing in this repository can perform step 2.** There is no pg driver, no
 connection string, no `exec_sql` RPC, and a test fails the build if any appears.
+
+---
+
+## 17. LPM3 — NOT APPLIED TO DEV, and it blocks live acquisition webhooks
+
+**`supabase/sql/lpm3_create_retell_provisioning.sql` is not applied to dev.**
+Probed read-only on 2026-08-13: `provider_webhook_events`, `provisioning_plans`
+and `retell_resources` are all **ABSENT**.
+
+`provider_webhook_events` is where the **durable webhook idempotency** lives —
+`constraint pwe_fingerprint_key unique (fingerprint)`, which is the whole
+mechanism by which a redelivered Retell event is acknowledged without being
+processed twice. Without it the E-11A route answers **503** on that path, which
+is the correct direction to fail and is why 503 is reserved for it.
+
+**No new migration is needed.** The existing lpm3 file already creates the table
+correctly, and its foreign keys are satisfiable: `locksmith_onboarding_sessions`
+and `clients` are already present on dev, and `provisioning_plans` is created
+earlier in the same file.
+
+### 17.1 The decision, before the step
+
+Applying lpm3 also creates **`retell_resources`** and **`provisioning_plans`** —
+the whole Retell provisioning schema for the locksmith receptionist. **Acquisition
+uses neither.** Bringing them into the acquisition dev project is a founder
+decision, not an engineering convenience, which is why nothing was applied.
+
+If a narrower option is preferred, the alternative is an acquisition-owned
+webhook-events table — **new SQL**, which would need its own review. Reusing
+lpm3 avoids inventing a second idempotency mechanism.
+
+### 17.2 The manual step, if approved
+
+1. **Pre-flight, read-only.** Confirm the three tables are still absent and that
+   `locksmith_onboarding_sessions` and `clients` are present.
+2. **Apply** `supabase/sql/lpm3_create_retell_provisioning.sql` in the dev
+   Supabase SQL editor. Expect *Success. No rows returned.*
+3. **Verify**: `provider_webhook_events` exists, RLS is on, no policies, and
+   `pwe_fingerprint_key` is a UNIQUE constraint on `fingerprint`.
+4. **Confirm acquisition residue is unchanged at 23** — lpm3 creates no
+   acquisition rows and touches no acquisition table.
+
+**Nothing in this repository can perform step 2.**
