@@ -8,6 +8,7 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 · **E-11A COMPLETE** — the acquisition webhook ingress is built, mounted in source and DORMANT (§22).
 · **E-12A COMPLETE** — leave-no-message is now a PROVIDER setting, configured locally (§23).
 · **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, the voice catalogue was read once, and the founder has **SELECTED the acquisition voice** (§24).
+· **E-12C STOPPED AT THE DEPLOYMENT GATE** — there is exactly one environment and it is production, so the webhook was **NOT exposed** and no URL exists (§25).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
 **voice is SELECTED** (Sunny, via `RETELL_ACQUISITION_VOICE_ID`, §24.7), webhook
@@ -1229,3 +1230,130 @@ is implemented and mounted but not deployed. The `llm_id` exists and needs only
 to be present in the provisioning environment. Voice is **no longer a blocker**.
 The outbound number, DNCR-1, A-L2 and enabling calling remain **pre-live-call**
 gates per §24.4a — unchanged, all still OPEN.
+
+---
+
+## 25. E-12C — the webhook was not exposed, and why
+
+**Status: STOPPED AT THE DEPLOYMENT GATE. NOTHING DEPLOYED. NO RETELL REQUEST.
+Acquisition webhook_url still UNSET. Agent still NOT PROVISIONED. Response
+engine UNCHANGED and pin green. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
+
+E-12C was to resolve a real public HTTPS URL for `POST /webhooks/retell/acquisition`.
+It stopped at the audit, for a reason the brief named in advance.
+
+### 25.1 There is exactly one environment, and it is production
+
+The deployment authority is `DEPLOYMENT.md` and the repo's own review docs, not
+inference:
+
+- **Railway**, deploying **`main`** — "Push `main` → Railway auto-deploys."
+- `docs/PRE_REACT_NATIVE_REVIEW.md` §M2: *"Today there is exactly one
+  environment: production."*
+- `docs/LOCKSMITH_PILOT_SPEC.md` §8: *"nothing is deployed and there is no
+  staging target for this branch."*
+- CI (`.github/workflows/ci.yml`) runs syntax and tests only; its smoke job
+  **self-skips** because `SMOKE_BASE_URL` is unset — there is no staging URL to
+  point it at.
+- No `render.yaml`, `fly.toml`, `vercel.json`, `Procfile`, `Dockerfile` or
+  Railway manifest is tracked. One git remote, no deploy hooks.
+
+Standing up a non-production runtime therefore means **a second Railway service
+or a tunnel** — the same doc's words — which is new material infrastructure and
+a founder decision. Both of the brief's stop conditions applied, so nothing was
+deployed and nothing was created.
+
+**Deploying the acquisition branch to the production service to obtain a URL was
+never an option**, and is worth stating rather than leaving implied: it would
+put unreviewed acquisition code into the runtime that answers real customer
+telephone calls, in order to obtain a hostname.
+
+### 25.2 What deployment would actually expose
+
+Not a webhook — **the whole Aida server**. `src/server.js` mounts operator
+login, client auth, the Twilio inbound/outbound/recording webhooks, the calls
+API and the dashboards in the same process. The locksmith page, onboarding,
+portal, VoIP and both Retell webhooks are flag-gated dormant and would stay
+dormant, and the Twilio routes are signature-gated — but the surface being made
+public is the application, not the route. A second service is a **second full
+deployment** needing its own environment, pointed at dev Supabase.
+
+### 25.3 The safety property that made this worth checking carefully
+
+The configuration that opens the ingress must not also be the configuration that
+lets something out. Proven, not assumed — with **all three ingress flags on and
+an API key present**:
+
+| | |
+|---|---|
+| acquisition webhook enabled | **true** |
+| `canWriteLive` (create an agent) | **refused** — live writes off, dry-run on |
+| `canPlaceCall` (dial) | **refused** — live calls off, no outbound number |
+| `isAcquisitionEnabled` | **false** |
+| `acquisitionReady("dial")` | **refused** — `acquisition_disabled` |
+| every provider `live` | **false** |
+| `RETELL_DRY_RUN` | **on** (inverted gate) |
+| `EXTERNAL_SYSTEMS.telephony` | **false** |
+
+Enabling ingestion sets no provider live, creates no transport, enables no
+dispatch, unpauses nothing, provisions no number and creates no agent. Each of
+the three flags is individually load-bearing — drop any one and the path 404s.
+
+### 25.4 Signature authority — no bypass exists to find later
+
+The deployed ingress would still require a genuine Retell signature. The handler
+delegates to the single `verifyRetellWebhook` and implements no crypto of its
+own. There is **no** `NODE_ENV === "development"` bypass, no `allowUnsigned`
+style flag, and no query-string secret substitute — asserted across the verifier,
+the handler and the route. When the SDK is unavailable the verifier returns
+`verifier_unavailable` and the route answers 503: it **fails closed rather than
+improvising an HMAC**.
+
+*Deployment precondition worth carrying forward:* verification needs **Node 20+
+and `retell-sdk` installed**. It is declared as an `optionalDependency`, so a
+deploy that skips optional dependencies would answer 503 to every delivery — a
+loud failure, not a silent one, but it must be checked on the day.
+
+### 25.5 The three acquisition ids — all still unset
+
+| variable | status |
+|---|---|
+| `RETELL_ACQUISITION_LLM_ID` | **NOT SET** — the engine exists at Retell, but the id has not been placed in any environment |
+| `RETELL_ACQUISITION_VOICE_ID` | **NOT SET** — Sunny is chosen (§24.7); the value has not been configured |
+| `RETELL_ACQUISITION_WEBHOOK_URL` | **NOT SET** — and cannot be, until §25.1 is answered |
+
+The boundary from E-12B was **verified rather than redesigned**: the acquisition
+webhook_url resolves only from `RETELL_ACQUISITION_WEBHOOK_URL`, and
+`RETELL_WEBHOOK_BASE_URL`, `RETELL_WEBHOOK_URL` and `BASE_URL` all leave it
+`null`. No sibling worktree `.env` was modified and no `.env` was committed.
+
+### 25.6 Readiness — three blockers, not one
+
+Against the **real** current environment `createAgentReady` is **false** with all
+three unset. Supplied as fixtures, the payload compiles and readiness becomes
+true — which is a statement about wiring, not permission:
+
+```json
+{
+  "agent_name": "aida-acquisition-agent-acq-agent-spec-2026-08-13",
+  "response_engine": { "type": "retell-llm", "llm_id": "<RETELL_ACQUISITION_LLM_ID>" },
+  "voice_id": "<RETELL_ACQUISITION_VOICE_ID — Sunny>",
+  "language": "en-AU",
+  "webhook_url": "<RETELL_ACQUISITION_WEBHOOK_URL — does not exist yet>",
+  "voicemail_option": { "action": { "type": "hangup" } },
+  "post_call_analysis_data": "<10 fields>"
+}
+```
+
+The response engine was untouched: the pin is green at
+`b0b5e21e…0542`, and supplying a voice and a webhook does not move it.
+
+### 25.7 The one decision this needs
+
+**Where should a non-production Aida run?** Everything else is downstream of it.
+The realistic options are a second Railway service pointed at dev Supabase (a
+real, ongoing hosting cost) or a tunnel to a locally-run instance (free, but the
+URL dies with the process — acceptable for a first agent test, not for a pilot).
+
+Until that is answered the acquisition agent cannot be created **correctly
+once**, because its `webhook_url` would have to be either wrong or absent.
