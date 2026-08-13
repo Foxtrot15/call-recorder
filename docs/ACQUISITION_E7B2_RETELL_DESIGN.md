@@ -950,13 +950,20 @@ hostile config shapes in and asserts the payload is unmoved.
 message, no callback, no `text` key to fill in by accident. `template` stays
 `null`. Enabling any of them is a separate founder decision.
 
-**The prompt was deliberately NOT changed.** Adding the sentence to
-`general_prompt` would edit the response engine, which is **already provisioned**
-at `llm_111ed…`; the local spec would then disagree with the live resource and
-require an `updateResponseEngine` call that E-12A does not authorise. The
-provider setting is therefore the only thing carrying this policy today, which is
-the stronger arrangement anyway. Whether to add prompt text as defence in depth —
-and pay for it with an engine update — is a founder decision, recorded as open.
+**The prompt was deliberately NOT changed — DECIDED, not open.** Adding the
+sentence to `general_prompt` would edit the response engine, which is **already
+provisioned** at `llm_111ed…`; the local spec would then disagree with the live
+resource and require an `updateResponseEngine` network write.
+
+**Founder decision, 2026-08-13: do not add it, and leave the response engine
+unchanged.** Machine detection is owned by the provider, the LLM prompt is not
+the detection authority, and an update to the live engine is not justified by
+defence-in-depth wording alone. The provider setting is therefore the only thing
+carrying this policy, which is the stronger arrangement.
+
+The engine is **byte-identical** to the one that was provisioned: building it
+from this commit and from `31075f2` produces the same object, same 5373-character
+`general_prompt`, same `begin_message`. **There is no local/remote drift.**
 
 ### 23.3 Acquisition only
 
@@ -985,6 +992,37 @@ it could never be opened. **It is reported, not retired.**
 `webhook_url` remain unresolved, and E-12A cleared neither. A ratchet pins that
 separately from the fixture-supplied case, so the milestone cannot be misread as
 having moved the agent closer to existing than it did.
+
+### 23.4a Two different gates, previously conflated
+
+**Founder correction, 2026-08-13.** The closing report for E-12A listed the
+outbound number, DNCR-1 and A-L2 among "remaining blockers before agent
+creation". That was wrong, and the distinction matters because conflating the
+two makes agent creation look further away than it is and makes a live call look
+closer than it is.
+
+**To create the agent resource** (`POST /create-agent`) — and nothing more:
+
+| | |
+|---|---|
+| `llm_id` wired into provisioning | `llm_111ed…`, held in the environment, **not in git** |
+| `voice_id` selected | **UNRESOLVED** — a founder choice |
+| `webhook_url` selected/deployed | **UNRESOLVED** — required only while the policy is *create the agent correctly once*, since the alternative is creating it now and updating it later |
+
+**NOT required to create the agent** — these gate the *first live call*, not the
+existence of a Retell resource:
+
+- an outbound acquisition **number**
+- **DNCR-1** first wash — **still OPEN**
+- **A-L2** authoritative holiday source — **still OPEN**
+- a wired live **transport**, `live: true` on a provider
+- **calling-state enable** (still `paused`, revision 1)
+- founder-authorised proof call, and the remaining compliance gates
+- **E-7** — **still OPEN**
+
+An agent that exists cannot ring anybody: it has no number, no transport, and
+calling is paused. Creating it is a provisioning step, not an activation step.
+This paragraph changes no status — DNCR-1, A-L2 and E-7 all remain OPEN.
 
 ### 23.5 Outcome and attempt semantics — unchanged
 
