@@ -105,7 +105,7 @@ SQL was required to close A-L8.**
 | ~~**M-3**~~ | Lease reaper | **DONE, dormant.** No timer and no scheduler; `sweep()` runs when a human runs it. |
 | **M-4** | Re-run eligibility at the moment of dialling | **MECHANISM DONE (M8E), CALLER IS NOW E-7A — STILL OPEN.** `createDialAuthoriser` re-runs the whole engine at the authorisation instant against durable suppression (M8E) and durable contact history (M8J). Since E-7A it **has** a caller: the executor accepts nothing else, and refuses a slip older than **60 seconds** so an authorisation cannot become a standing permission. It stays open because the caller cannot yet place a call. Closes with **E-7B**. |
 | **M-5** | `service_area` / `operating_status` capture path | **OPEN.** The discovery contract derives neither. |
-| **E-8** | Nothing makes a prospect CONTACTABLE | **OPEN — found by E-7B2B1, and it blocks a first call.** An outcome may only be recorded from `queued`, `attempted`, `connected` or `callback_requested`, and the lifecycle is `review_approved → queued → attempted`. **No batch selection sets `queued` and no dispatch sets `attempted`**, so the return path would refuse every outcome — safely (nothing written, both locks held), but it would refuse. Belongs to the dispatch side, not the webhook: a webhook asserting "a call was attempted" is the wrong module making that claim. See §13.1. |
+| ~~**E-8**~~ | Nothing makes a prospect CONTACTABLE | **CLOSED AS ENGINEERING, OFFLINE, 2026-08-13 — no SQL.** Found by E-7B2B1 and fixed at the source: the outcome guard is **untouched**, and the lifecycle now records what actually happened. A durable dispatch claim establishes **`queued`** (an approved batch, a passing eligibility decision, an exclusive hold) and **never `attempted`** — a reservation is not a call, and a claim followed by a pause leaves the business `queued`. A **definite provider acceptance** establishes `attempted`; an **ambiguous** submission establishes nothing, and a later authenticated webhook carrying a real `call_id` recovers it. **`connected` comes only from the analysis reporting a person was reached** — never from `call_started`, which this repository maps to "started" while only `transfer_bridged` maps to "connected". The ladder is walked one compare-and-set at a time and **never backwards**: a suppressed business cannot be dragged into an engagement state. Lifecycle fact first — if it fails, **no outcome and the dispatch stays unresolved**. 32 offline proofs. See §14. |
 | ~~**M-6**~~ | Authoritative public-holiday source | **OPEN** — tracked as **A-L2**, because the blocker is the source decision, not the code. |
 | ~~**M-7**~~ | Cross-process suppression visibility | **CLOSED in M8E.** Proven across two real processes against dev Postgres. |
 | ~~**E-1**~~ | Derive attempt history from `acquisition_contact_outcomes` | **CLOSED in M8J.** `acquisition-history.js` is the one derivation; the authoriser reads it every time and refuses on `contact_history_unavailable`. Proven read-only against real Postgres, 16/16, zero residue. |
@@ -993,3 +993,85 @@ callback is never a suppression.
   **E-7B2B** and needs founder approval, so it is not written.
 - **`lpm3` must be applied wherever acquisition webhooks are processed.** The
   durable fingerprint idempotency lives there and is not part of laq1–laq5.
+
+---
+
+## 14. E-8 — the contact lifecycle bridge, 2026-08-13
+
+**Status: CLOSED AS ENGINEERING, OFFLINE. No SQL. E-7 REMAINS OPEN.**
+
+### 14.1 The defect, and where it actually was
+
+The outcome guard was never wrong. `acquisition-outcome` refuses anything not
+`queued`, `attempted`, `connected` or `callback_requested`, and **that guard is
+untouched.**
+
+The defect was on the other side: the **only** durable lifecycle writer in the
+repository was the M8H/E-2 review projection, which stops at `review_approved`.
+Nothing ever wrote `queued`; nothing ever wrote `attempted`. So a real Retell
+outcome would have been correctly refused and no business could ever be recorded
+as having been called.
+
+### 14.2 The mappings, each argued from what happened
+
+| fact | established by | and explicitly NOT by |
+|---|---|---|
+| `queued` | a **durable LAQ5 dispatch claim** — an approved batch, a passing eligibility decision, and an exclusive hold on this business and this number | founder batch approval alone, which is permission to *consider*, not to dial |
+| `attempted` | a **definite provider acceptance** (a `call_id` came back), or later, an **authenticated webhook carrying a real `call_id`** | a claim; a provider refusal; an **ambiguous** submission |
+| `connected` | the post-call analysis reporting a **person was reached** | `call_analyzed` merely existing; a call ending; a `call_started` event |
+| `callback_requested` | a validated callback classification, after the attempt is a fact | anything that would schedule or dial |
+
+**The queue was deliberately not used.** `queued` is documented as "selected
+into an approved calling batch", and `acquisition_call_queue` exists to hold
+reservations — but the first-call flow does not go through it and the table
+holds zero rows. Adding a lease whose only job is to justify a word would have
+been a second reservation system. **The dispatch claim already is the
+reservation.**
+
+### 14.3 `call_started` proves an attempt, not a conversation
+
+Audited rather than assumed: in this repository `call_started` maps to
+`onboarding_call.started`, and the **only** event mapped to "connected" is
+`transfer_bridged`. So `call_started` supports `attempted` and nothing more.
+Inferring an answer from an event's name is precisely the mistake this milestone
+exists to prevent.
+
+### 14.4 The lost response, recovered honestly
+
+Submit → Retell accepts → **our HTTP response is lost**. `provider_status` stays
+`unknown` and **no attempt is claimed**, because we genuinely do not know whether
+a telephone rang. A later authenticated webhook carrying a real `call_id` is
+evidence the call existed, and **that** establishes `attempted`. No retry, no
+second call, and no guess that could not be taken back.
+
+### 14.5 Ordering, and never walking backwards
+
+Lifecycle fact **first**; if it cannot be established, **no outcome is written**
+and the dispatch stays unresolved. Then the outcome; then, last, the lock —
+through the service that already owns that ordering.
+
+The ladder is `review_approved → queued → attempted → connected`, walked one
+compare-and-set at a time, and **never backwards**: a late `call_started` after
+a conversation leaves the business `connected`, and **a suppressed business is
+never dragged back into an engagement state** by any provider event.
+
+### 14.6 Lifecycle is not attempt policy
+
+`attempted` is what physically happened. Whether it **counts** commercially is
+A-L7, and is unchanged: **a no-answer still consumes no counted attempt; a
+voicemail still does.** `not_interested`, `declined`, `opt_out` and `callback`
+all remain distinct.
+
+### 14.7 provider_ref uniqueness — audited, and NOT required
+
+Two authenticated webhooks cannot bind one Retell `call_id` to two different
+dispatches, because the binding is driven by `metadata.aida_dispatch_id`, which
+**we** set at create time — one call carries one metadata object, so two
+different dispatch ids for one `call_id` is not producible by genuine Retell
+traffic. The harmful overwrite (R2 replacing R1) additionally requires two calls
+for one dispatch, which single-use already prevents.
+
+**The application check is nonetheless a read-then-write and is not atomic**, so
+the claim is "not reachable in practice", not "prevented by the database". A
+`unique (provider_ref) where provider_ref is not null` index remains **defence in
+depth**, needs founder approval and SQL, and is **not written**.

@@ -41,6 +41,7 @@
 
 const { recordOutcomeAndResolveDispatch } = require("./acquisition-dispatch-resolution");
 const { validateAcquisitionAnalysis, classifyAnalysedOutcome } = require("./acquisition-agent-contract");
+const { establishContactFact, CONTACT_FACTS } = require("./acquisition-contact-lifecycle");
 
 const EVENT_CODES = Object.freeze({
   NOT_VERIFIED: "acquisition_event_not_verified",
@@ -56,6 +57,9 @@ const EVENT_CODES = Object.freeze({
   OUTCOME_RECORDED: "acquisition_event_outcome_recorded",
   OUTCOME_FAILED: "acquisition_event_outcome_failed",
   STORE_UNAVAILABLE: "acquisition_event_store_unavailable",
+  // E-8: the lifecycle could not be made to say truthfully what happened, so
+  // nothing was recorded against it.
+  LIFECYCLE_REFUSED: "acquisition_event_lifecycle_refused",
 });
 
 const HANDLED_EVENTS = Object.freeze(["call_started", "call_ended", "call_analyzed"]);
@@ -208,11 +212,46 @@ async function handleAcquisitionCallEvent({
   const settled = (code, message, extra = {}) =>
     Object.freeze({ ok: true, code, message, mutated: bound, outcomeRecorded: false, dispatchResolved: false, dispatchId, callIdBound: bound, ...extra });
 
+  // ── 4b. THE CALL EXISTS, SO THE ATTEMPT IS A FACT (E-8) ──────────
+  //
+  // An authenticated event correlated to dispatch D and carrying a real
+  // Retell call_id is durable evidence that a call was created. That is
+  // `attempted`, and establishing it here is what recovers the case the
+  // executor could not: a LOST HTTP RESPONSE, where provider_status stayed
+  // `unknown` and no attempt could honestly be claimed at submission time.
+  //
+  // It establishes `attempted` and NOTHING MORE. Not connected — a call
+  // existing is not a person answering, and in this repository only
+  // transfer_bridged maps to "connected" while call_started maps to "started".
+  // Inferring an answer from an event name is exactly the mistake this
+  // milestone exists to prevent.
+  //
+  // Idempotent, and never backwards: a prospect already `connected` stays
+  // `connected` when a duplicate call_started arrives, and events do arrive
+  // out of order.
+  let attemptEstablished = null;
+  if (providerCallId) {
+    attemptEstablished = await establishContactFact({
+      store,
+      prospectId: dispatch.prospectId,
+      fact: CONTACT_FACTS.ATTEMPTED,
+      actor,
+      reason: `Retell call ${providerCallId} exists for dispatch ${dispatchId}, so a call was placed.`,
+      at: now().toISOString(),
+    });
+  }
+
   // ── 5. PHASE ─────────────────────────────────────────────────────
   //
   // call_started establishes WHICH CALL, never WHAT HAPPENED.
   if (eventType === "call_started") {
-    return settled(EVENT_CODES.BOUND, `Dispatch ${dispatchId} is bound to call ${providerCallId || "(none supplied)"}. No contact outcome is implied and the dispatch stays unresolved.`);
+    return settled(
+      EVENT_CODES.BOUND,
+      `Dispatch ${dispatchId} is bound to call ${providerCallId || "(none supplied)"}. ` +
+        `${attemptEstablished && attemptEstablished.ok ? `The attempt is recorded as a fact ("${attemptEstablished.to}").` : ""} ` +
+        "No contact outcome is implied and the dispatch stays unresolved.",
+      { lifecycle: attemptEstablished ? attemptEstablished.to : null }
+    );
   }
 
   let classified = null;
@@ -247,7 +286,43 @@ async function handleAcquisitionCallEvent({
     if (!mapped.outcome) {
       return settled(EVENT_CODES.NEEDS_HUMAN, `${mapped.reason} No outcome was recorded and the dispatch needs human review.`);
     }
-    classified = { outcome: mapped.outcome, reason: mapped.reason, callbackAt: mapped.callbackAt || null };
+    classified = { outcome: mapped.outcome, reason: mapped.reason, callbackAt: mapped.callbackAt || null, reachedHuman: verdict.analysis.reachedHuman === true };
+  }
+
+  // ── 5b. THE LIFECYCLE FACT BEFORE THE OUTCOME (E-8) ──────────────
+  //
+  // `connected` is established ONLY from the analysis saying a person was
+  // actually reached — not from call_analyzed merely existing, and not from a
+  // call having ended. The outcome guard then has a state it can legitimately
+  // record from.
+  //
+  // ORDERING: if the lifecycle cannot be established, NO OUTCOME IS WRITTEN and
+  // the dispatch stays unresolved. A business fact recorded against a lifecycle
+  // that denies the call happened is a contradiction in the permanent record,
+  // and the safe half is always the one that leaves work for a human.
+  if (classified.reachedHuman === true) {
+    const connected = await establishContactFact({
+      store,
+      prospectId: dispatch.prospectId,
+      fact: CONTACT_FACTS.CONNECTED,
+      actor,
+      reason: `The post-call analysis for dispatch ${dispatchId} reports a person was reached.`,
+      at: now().toISOString(),
+    });
+    if (!connected.ok) {
+      return outcome(
+        EVENT_CODES.LIFECYCLE_REFUSED,
+        `${connected.message} No outcome was recorded and the dispatch still holds this business and this number.`,
+        { dispatchId, lifecycleCode: connected.code }
+      );
+    }
+  } else if (attemptEstablished && !attemptEstablished.ok) {
+    // A technical outcome still needs the attempt to be a fact.
+    return outcome(
+      EVENT_CODES.LIFECYCLE_REFUSED,
+      `${attemptEstablished.message} No outcome was recorded and the dispatch still holds this business and this number.`,
+      { dispatchId, lifecycleCode: attemptEstablished.code }
+    );
   }
 
   // ── 6. THE BUSINESS FACT FIRST, THE LOCK SECOND ──────────────────

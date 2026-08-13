@@ -316,17 +316,33 @@ describe("E-7B2B1 keeps technical state and business outcome apart", () => {
     assert.strictEqual(OUTCOME_RULES.voicemail.effect, "counts_as_attempt");
   });
 
-  it("a prospect nothing ever staged as called is refused SAFELY", async () => {
-    // The pipeline gap, pinned rather than papered over: no batch selection sets
-    // `queued` and no dispatch sets `attempted`, so a review_approved prospect
-    // cannot carry an outcome. The refusal writes nothing and holds the lock.
+  it("E-8 CLOSED THIS: an unstaged prospect now reaches an outcome honestly", async () => {
+    // This test used to pin the gap — no batch selection set `queued`, no
+    // dispatch set `attempted`, so a review_approved prospect could carry no
+    // outcome and the return path refused every one of them.
+    //
+    // E-8 closed it at the source rather than by relaxing the outcome guard,
+    // which is untouched. The claim now records `queued`, a real call id
+    // records `attempted`, and the outcome has a truthful state to sit on.
     const { store, dispatchId, recorder } = await claimedDispatch({ stage: null });
+    const r = await handleAcquisitionCallEvent({ ...eventFor(dispatchId, { reason: "dial_no_answer" }), store, recorder, now: now() });
+    assert.strictEqual(r.ok, true, r.message);
+    assert.strictEqual(r.outcomeRecorded, true, r.message);
+    assert.strictEqual((await store.listOutcomes({}))[0].outcome, "no_answer");
+  });
+
+  it("a prospect in a state no call may advance from is still refused SAFELY", async () => {
+    // The guard that remains: suppression is terminal, and no provider event
+    // may drag a suppressed business back into an engagement state.
+    const { store, dispatchId, recorder, prospect } = await claimedDispatch({ stage: null });
+    await store.transitionProspectLifecycle({ prospectId: prospect.prospectId, to: "suppressed", actor: "h", reason: "opted out earlier", at: ISO });
+
     const r = await handleAcquisitionCallEvent({ ...eventFor(dispatchId, { reason: "dial_no_answer" }), store, recorder, now: now() });
     assert.strictEqual(r.ok, false);
     assert.strictEqual(r.outcomeRecorded, false);
-    assert.match(r.message, /no call could have been made|not_contactable/i);
     assert.strictEqual((await store.listOutcomes({})).length, 0);
     assert.strictEqual((await store.listDialExecutions({}))[0].resolvedAt, null, "the lock is held for a human");
+    assert.strictEqual((await store.loadProspect(prospect.prospectId)).lifecycle, "suppressed", "and suppression is not walked backwards");
   });
 
   it("13-14. voicemail maps to voicemail, and DOES consume an attempt", async () => {

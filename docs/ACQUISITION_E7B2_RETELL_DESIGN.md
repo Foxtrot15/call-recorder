@@ -437,7 +437,14 @@ The handler **classifies**. It never writes a suppression and never sets
 lock second) belongs to `acquisition-dispatch-resolution.js`, which already owns
 that. E-7B2B1 adds no third place for either rule to live.
 
-### 14.6 THE GAP THIS MILESTONE FOUND AND DID NOT PAPER OVER
+### 14.6 THE GAP THIS MILESTONE FOUND — **CLOSED BY E-8**
+
+> **Closed 2026-08-13 by E-8, with no SQL.** The dispatch claim now establishes
+> `queued`, a definite provider acceptance or a later authenticated webhook
+> establishes `attempted`, and the analysis reporting a person was reached
+> establishes `connected`. The outcome guard was not weakened. See
+> [ACQUISITION_BLOCKER_REGISTER.md](ACQUISITION_BLOCKER_REGISTER.md) §14. The
+> description below is what was true when this section was written.
 
 **Nothing in the pipeline currently makes a prospect contactable.**
 

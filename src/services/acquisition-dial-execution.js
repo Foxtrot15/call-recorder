@@ -88,6 +88,7 @@ const { isGenuineAuthorisedDial } = require("./acquisition-authorisation");
 const { assertDialProvider, PROVIDER_STATUS } = require("./acquisition-dial-provider");
 const { readCallingState, STATE_CODES: CALLING_STATE_CODES } = require("./acquisition-calling-state");
 const { claimAuthorisedDial, recordProviderResult, CLAIM_CODES } = require("./acquisition-dispatch-store");
+const { establishContactFact, CONTACT_FACTS } = require("./acquisition-contact-lifecycle");
 const { createHash } = require("node:crypto");
 
 /**
@@ -391,6 +392,28 @@ async function executeAuthorisedDial(options = {}) {
     return refuse(code, claim.message, { conflictScope: claim.conflictScope || null });
   }
 
+  // ── 6b. THE CLAIM IS A RESERVATION, AND SAYS SO (E-8) ─────────────
+  //
+  // `queued` is "selected into an approved calling batch", and that is exactly
+  // what a successful claim means: an approved batch, a passing eligibility
+  // decision, and an exclusive hold on this business and this number.
+  //
+  // IT IS NOT `attempted`. Nothing has been dialled, the stop below may still
+  // refuse, and a reservation is not a telephone call. A test pins that a claim
+  // followed by a pause leaves this business `queued` and never `attempted`.
+  //
+  // Best effort by design: the claim is already durable, and failing the whole
+  // execution because a projection lagged would spend an authorisation for
+  // nothing. A later authenticated event repairs it by walking the ladder.
+  await establishContactFact({
+    store,
+    prospectId: slip.prospectId,
+    fact: CONTACT_FACTS.QUEUED,
+    actor: claimedBy,
+    reason: `Dispatch ${slip.dispatchId} claimed under approved batch ${slip.batchKey}. Reserved, not yet dialled.`,
+    at: executedAt,
+  }).catch(() => {});
+
   // ── 7. THE EMERGENCY STOP, AGAIN, AT THE LAST INSTANT ─────────────
   //
   // A stop engaged between the preflight and here must still stop the call, and
@@ -498,6 +521,35 @@ async function executeAuthorisedDial(options = {}) {
     errorCode: accepted ? null : (providerResult && providerResult.reason) || "provider_refused",
     now,
   }).catch(() => {});
+
+  // ── 8b. A DEFINITE ACCEPTANCE IS AN ATTEMPT (E-8) ─────────────────
+  //
+  // `attempted` means an outbound call request was actually accepted for
+  // placement. A provider that returned a reference has taken the call; that is
+  // the fact, and it is the strongest one available at this point.
+  //
+  // It is established ONLY on a definite acceptance. Two cases deliberately do
+  // NOT reach here:
+  //
+  //   the provider REFUSED   nothing was placed, so nothing was attempted
+  //   the provider was AMBIGUOUS (it threw)  we do not know whether a telephone
+  //       rang, and the earlier return means this line is never reached. A
+  //       later authenticated webhook can establish the attempt honestly; a
+  //       guess made now could not be taken back.
+  //
+  // It establishes the ATTEMPT and stops there. An acknowledgement is not an
+  // answer, and this file has no business deciding what a person said — a
+  // ratchet forbids it naming any contact outcome at all.
+  if (accepted) {
+    await establishContactFact({
+      store,
+      prospectId: slip.prospectId,
+      fact: CONTACT_FACTS.ATTEMPTED,
+      actor: claimedBy,
+      reason: `Provider "${active.name}" accepted the call request for dispatch ${slip.dispatchId}. Accepted for placement; nobody is known to have answered.`,
+      at: executedAt,
+    }).catch(() => {});
+  }
 
   if (audit) {
     audit.record({
