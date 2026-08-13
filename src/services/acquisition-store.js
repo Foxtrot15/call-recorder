@@ -635,6 +635,38 @@ function createInMemoryAcquisitionStore({ seed = null } = {}) {
       if ("providerStatus" in patch && row.providerStatus !== "pending" && patch.providerStatus !== row.providerStatus) {
         throw new Error(`provider status is already terminal (${row.providerStatus})`);
       }
+
+      // ── laq6 / E-9, MODELLED NOT MIMICKED ─────────────────────────
+      //
+      // Two rules the database enforces, reproduced here so an offline test
+      // exercises the same arbitration rather than a pre-read that pretends to
+      // be atomic. The codes and tokens match what Postgres actually raises, so
+      // the service's classification is tested against the real shapes.
+      if ("providerRef" in patch) {
+        // INVARIANT B — write-once. NULL -> R and R -> R are fine; R -> R2 and
+        // R -> NULL are not.
+        if (row.providerRef !== null && row.providerRef !== undefined && patch.providerRef !== row.providerRef) {
+          const err = new Error(
+            `acq_provider_ref_write_once: dispatch ${dispatchId} is already bound to provider reference ${row.providerRef}; ` +
+              "provider_ref is write-once and may not be changed or cleared"
+          );
+          err.code = "23514";
+          throw err;
+        }
+        // INVARIANT A — one reference, one dispatch, across the whole table.
+        // Not partial on resolvedAt: a reference names one real call for ever.
+        if (patch.providerRef !== null && patch.providerRef !== undefined) {
+          const owner = dialExecutions.find((d) => d.providerRef === patch.providerRef && d.dispatchId !== dispatchId);
+          if (owner) {
+            const err = new Error(
+              `duplicate key value violates unique constraint "idx_acq_dial_exec_provider_ref"`
+            );
+            err.code = "23505";
+            err.constraint = "idx_acq_dial_exec_provider_ref";
+            throw err;
+          }
+        }
+      }
       if (("resolvedAt" in patch) !== ("resolution" in patch)) {
         throw new Error("a resolution must set resolvedAt, resolution and resolvedBy together");
       }
@@ -802,9 +834,30 @@ const fromCallingStateRow = (r) => ({
   reason: r.reason,
 });
 
+/**
+ * Wrap a PostgREST error, KEEPING THE DATABASE'S OWN VERDICT (E-9).
+ *
+ * It used to throw a bare `new Error(message)`, which discarded `code` and
+ * `constraint`. That was survivable while every failure here meant roughly the
+ * same thing, and stopped being survivable once the database began arbitrating
+ * identity: a unique violation and an outage arrived indistinguishable, and the
+ * caller mapped both to "store unavailable" — a TRANSIENT-sounding answer to a
+ * PERMANENT conflict, which would invite a retry of the one thing that must
+ * never be retried.
+ *
+ * The message is unchanged, so callers that only read `.message` behave exactly
+ * as before. The added properties are additive and non-enumerable in effect for
+ * anything doing `String(err)`; `cause` keeps the original for a debugger.
+ */
 function fail(table, verb, error) {
   if (tableMissing(error)) throw provisioningError(table);
-  throw new Error(`acquisition ${verb} failed on ${table}: ${error.message}`);
+  const wrapped = new Error(`acquisition ${verb} failed on ${table}: ${error.message}`);
+  wrapped.code = (error && error.code) || null;
+  wrapped.constraint = (error && error.constraint) || null;
+  wrapped.details = (error && error.details) || null;
+  wrapped.hint = (error && error.hint) || null;
+  wrapped.cause = error;
+  throw wrapped;
 }
 
 const toSuppressionRow = (r) => ({

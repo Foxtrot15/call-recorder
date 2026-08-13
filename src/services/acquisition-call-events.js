@@ -57,6 +57,9 @@ const EVENT_CODES = Object.freeze({
   OUTCOME_RECORDED: "acquisition_event_outcome_recorded",
   OUTCOME_FAILED: "acquisition_event_outcome_failed",
   STORE_UNAVAILABLE: "acquisition_event_store_unavailable",
+  // E-9: this provider call already belongs to a DIFFERENT dispatch. A
+  // permanent identity conflict, not an outage, and never a retry.
+  CALL_ID_TAKEN: "acquisition_event_call_id_taken",
   // E-8: the lifecycle could not be made to say truthfully what happened, so
   // nothing was recorded against it.
   LIFECYCLE_REFUSED: "acquisition_event_lifecycle_refused",
@@ -95,6 +98,28 @@ function classifyTechnicalOutcome(disconnectionReason) {
 
 const outcome = (code, message, extra = {}) =>
   Object.freeze({ ok: false, code, message, mutated: false, outcomeRecorded: false, dispatchResolved: false, ...extra });
+
+/** The laq6 constraint and the token its guard raises. */
+const PROVIDER_REF_INDEX = "idx_acq_dial_exec_provider_ref";
+const WRITE_ONCE_TOKEN = "acq_provider_ref_write_once";
+
+/**
+ * Classify a failed binding: "taken" (another dispatch owns this call),
+ * "write_once" (this dispatch already holds a different one), or "unknown".
+ *
+ * Matched on the SQLSTATE and the constraint first, and on the text only as the
+ * fallback PostgREST sometimes forces — the same two-way match
+ * acquisition-dispatch-store already uses for laq5's indexes, and the reason
+ * `fail()` now preserves `code` and `constraint` at all.
+ */
+function classifyBindFailure(err) {
+  const text = `${(err && err.message) || ""} ${(err && err.details) || ""} ${(err && err.hint) || ""} ${(err && err.constraint) || ""}`;
+  if (text.includes(WRITE_ONCE_TOKEN)) return "write_once";
+  if ((err && err.constraint) === PROVIDER_REF_INDEX) return "taken";
+  if (new RegExp(PROVIDER_REF_INDEX, "i").test(text)) return "taken";
+  if ((err && err.code) === "23505" && /provider_ref/i.test(text)) return "taken";
+  return "unknown";
+}
 
 /**
  * Handle one already-verified Retell event for an acquisition dispatch.
@@ -194,6 +219,32 @@ async function handleAcquisitionCallEvent({
         await store.updateDialExecution(dispatchId, { providerRef: providerCallId });
         bound = true;
       } catch (err) {
+        // ── THE DATABASE'S VERDICT, NOT OUR GUESS (E-9) ────────────
+        //
+        // The pre-read above is a courtesy: it gives a better message and
+        // handles the common case, and it is NOT the authority. Two workers can
+        // both read NULL and both arrive here. What decides is laq6.
+        //
+        // Three outcomes, and telling them apart is the whole point — calling a
+        // permanent identity conflict "store unavailable" would invite a retry
+        // of the one thing that must never be retried.
+        const verdict = classifyBindFailure(err);
+        if (verdict === "taken") {
+          return outcome(
+            EVENT_CODES.CALL_ID_TAKEN,
+            `Call ${providerCallId} already belongs to a different dispatch, so it was NOT bound to ${dispatchId}. ` +
+              "This is a permanent conflict for a human to reconcile; nothing was retried and no outcome was recorded.",
+            { dispatchId, claimedCallId: providerCallId }
+          );
+        }
+        if (verdict === "write_once") {
+          return outcome(
+            EVENT_CODES.CALL_ID_CONFLICT,
+            `Dispatch ${dispatchId} is already bound to a different call, and provider references are write-once. ` +
+              `It was NOT rebound to ${providerCallId}. Nothing was retried and no outcome was recorded.`,
+            { dispatchId, claimedCallId: providerCallId }
+          );
+        }
         return outcome(EVENT_CODES.STORE_UNAVAILABLE, `The call id could not be bound to dispatch ${dispatchId}: ${err.message}`, { dispatchId });
       }
     } else if (dispatch.providerRef !== providerCallId) {

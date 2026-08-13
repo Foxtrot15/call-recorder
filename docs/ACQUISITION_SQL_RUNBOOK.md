@@ -7,9 +7,10 @@ production.** Nothing in this repository applies SQL, and a test asserts that �
 every step below is something a human runs by hand, and every step below was run
 by hand.
 
-**Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3, LAQ4 and LAQ5 are
-applied in, how each is verified, and what can and cannot be rolled back.
-**LAQ5 is applied to dev and not to production** — see §15.
+**Owns (source of truth for):** the order LAQ1, LAQ2, LAQ3, LAQ4, LAQ5 and LAQ6
+are applied in, how each is verified, and what can and cannot be rolled back.
+**LAQ5 is applied to dev and not to production** — see §15. **LAQ6 is written
+and applied NOWHERE** — see §16.
 
 > **The §12 and §13 heading below still reads "there is no LAQ5" in its own
 > section text. That was true of E-5 and M8L and is left standing as the
@@ -1121,3 +1122,67 @@ with both events.
 
 See [ACQUISITION_E7B1_DESIGN.md](ACQUISITION_E7B1_DESIGN.md) for the full
 rationale, and §14.3 above for the superseded sketch it corrects.
+
+---
+
+## 16. LAQ6 — written, APPLIED NOWHERE
+
+**`supabase/sql/laq6_bind_provider_call_once.sql`** exists as of **2026-08-13**
+and has been applied to **neither dev nor production**.
+
+| | state |
+|---|---|
+| dev | **NOT APPLIED** |
+| production | **NOT APPLIED** |
+| rows it creates | **0** |
+| rows it rewrites | **0** |
+| rows it deletes | **0** |
+| dev residue after applying | **UNCHANGED at 23** |
+| RLS / policies | untouched |
+| calling state | untouched |
+| E-7B1 proof dispatch | untouched, still unresolved, `provider_ref` still NULL |
+
+It adds **one partial unique index** and **replaces one guard function body**.
+Nothing else.
+
+### 16.1 What it enforces, and why one rule was not enough
+
+| | invariant | mechanism |
+|---|---|---|
+| **A** | one non-null provider reference belongs to at most one dispatch | `unique (provider_ref) where provider_ref is not null` |
+| **B** | once bound, a reference may not change **or be cleared** | the laq5 guard, extended |
+
+**B is not decoration.** A unique index cannot catch two workers who both read
+`provider_ref` as NULL and want *different* references — R1 and R2 collide with
+nothing, so the index never fires. And without the `R → NULL` half, a caller
+could clear a reference and rebind it to a second dispatch while every
+individual statement satisfied the index.
+
+The index is deliberately **not** partial on `resolved_at`, unlike laq5's two
+locks: a business may be dispatched again after an outcome, but a provider call
+reference names one real telephone call for ever.
+
+### 16.2 Applying it — the exact steps
+
+1. **Pre-flight, read-only.** Run `verification/13_laq6_verify_readonly.sql`.
+   Before laq6 its roll-up says `**FAIL**` on the two E-9 checks — that is
+   correct, not a defect. Confirm §6 reports **0 duplicate refs**; if it does
+   not, **stop** and investigate, because the migration will refuse to build.
+2. **Apply** `supabase/sql/laq6_bind_provider_call_once.sql` in the dev Supabase
+   SQL editor. Expect *Success. No rows returned.* If it raises `23505`, a
+   historical duplicate exists — that is **evidence**, and the migration is
+   correct to refuse. Do not delete anything to make it pass.
+3. **Verify, read-only.** Re-run `13_laq6_verify_readonly.sql`. The roll-up must
+   say `PASS: laq6 is structurally intact in this database`.
+4. **Prove it refuses, zero residue.** Run
+   `verification/14_laq6_mutation_probes.sql`. It is wrapped in
+   `BEGIN … ROLLBACK`, refuses to run unless calling is paused, and never
+   touches the E-7B1 proof dispatch. Expect six `PASS` notices: `NULL→R1`,
+   `R1→R1`, `R1→R2 refused`, `R1→NULL refused`, `D2 claiming R1 refused`,
+   `D1→R1 with D2→R2 permitted`.
+5. **Confirm nothing moved.** Re-run `13_laq6_verify_readonly.sql` §6: still 23
+   rows, calling still `paused` at revision 1, proof dispatch still unresolved
+   with `provider_ref` NULL.
+
+**Nothing in this repository can perform step 2.** There is no pg driver, no
+connection string, no `exec_sql` RPC, and a test fails the build if any appears.

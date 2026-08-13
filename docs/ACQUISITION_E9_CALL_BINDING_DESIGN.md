@@ -1,11 +1,17 @@
 # E-9 — durable unique Retell call binding
 
-**Status: DESIGN READY. SQL AWAITING FOUNDER APPROVAL. NOTHING IS APPLIED.**
+**Status: IMPLEMENTED LOCALLY / DEV MIGRATION PENDING. E-9 IS NOT CLOSED.**
 
-**The constraint described here does not exist.** No migration file has been
-written, nothing has been applied to dev or production, and no claim anywhere in
-this repository says otherwise. E-7 remains OPEN, DNCR-1 remains OPEN, calling
-remains PAUSED.
+**The constraint described here does not exist in any database.** Phase 2 wrote
+the migration (`supabase/sql/laq6_bind_provider_call_once.sql`) and it has been
+applied to **neither dev nor production** — nothing in this repository can
+execute DDL, and a test asserts that. E-7 remains OPEN, DNCR-1 remains OPEN,
+A-L2 remains OPEN, calling remains PAUSED at revision 1, dev residue is 23.
+
+> Sections 1–8 are the **Phase 1 audit** and describe the state before the
+> migration was written. Phase 2 begins at §9, and revises §4: the founder
+> required a second invariant, because a unique index cannot catch the
+> same-dispatch race.
 
 **Owns (source of truth for):** why one Retell `call_id` must belong to at most
 one acquisition dispatch, why application code cannot guarantee that, and the
@@ -105,10 +111,14 @@ unique indexes, and the difference is the point.
 
 ---
 
-## 4. Proposed migration — LAQ6, NOT WRITTEN
+## 4. Proposed migration — LAQ6
+
+> **Superseded by §9.** This index is necessary and **not sufficient**: it
+> cannot catch two workers who both read NULL and want *different* references.
+> Phase 2 adds a write-once guard alongside it. The file now exists at
+> `supabase/sql/laq6_bind_provider_call_once.sql` and **is not applied**.
 
 ```sql
--- PROPOSED. NOT APPLIED. NOT WRITTEN AS A MIGRATION FILE.
 create unique index if not exists idx_acq_dial_exec_provider_ref
   on public.acquisition_dial_executions (provider_ref)
   where provider_ref is not null;
@@ -237,3 +247,113 @@ at **23**, calling stays `paused` at revision 1, `acquisition_decisions` stays 4
 
 Any option that changes those numbers is listed in §7 and needs founder approval
 first.
+
+---
+
+# PHASE 2 — implemented locally, 2026-08-13
+
+**Status: IMPLEMENTED LOCALLY / DEV MIGRATION PENDING. NOTHING IS APPLIED.**
+E-9 is **not closed**. E-7 OPEN, DNCR-1 OPEN, A-L2 OPEN, calling PAUSED.
+
+## 9. The founder revision, and why Phase 1 was insufficient
+
+Phase 1 proposed the uniqueness index and stopped there. That was not enough,
+and the reason is worth stating precisely because it is easy to miss:
+
+**A unique index cannot catch the same-dispatch race.** Two workers both read
+`provider_ref` as NULL; one wants R1 and the other R2. Neither value collides
+with anything, so the index never fires, and whichever commits second silently
+wins. The index solves cross-dispatch collisions and is blind to this one.
+
+So the value must be **write-once**, enforced where the race actually resolves.
+Two invariants, not one:
+
+| | invariant | enforced by |
+|---|---|---|
+| **A** | one non-null reference belongs to at most one dispatch | `idx_acq_dial_exec_provider_ref` |
+| **B** | once bound, a reference may not change or be cleared | the laq5 guard, extended |
+
+## 10. Provider scoping — audited, and the key is `provider_ref` alone
+
+| question | answer |
+|---|---|
+| is `provider_ref` namespaced by AIDA? | **No.** It is the provider's own reference, stored verbatim |
+| is it the raw Retell `call_id`? | **Yes** — `acquisition-retell-provider.js:233`. The fake provider writes `fake_<sha256(executionId)>`, self-namespaced and derived from a random dispatch id |
+| could a future provider collide textually? | Conceivable, implausible, and **no second provider exists** |
+| can `provider` change after binding? | **Not through the application.** `updateDialExecution` maps eight columns and `provider` is not among them, in the adapter or the in-memory twin. It is written once at INSERT |
+| does `provider` need stickiness? | **Only if it were part of the key.** It is not |
+
+**`unique (provider, provider_ref)` was rejected.** It is the strictly correct
+semantic, and it is only *sound* if `provider` is itself write-once — otherwise
+flipping `provider` frees the reference and the index that was supposed to
+arbitrate simply stops applying. That is more machinery, guarding a column
+nothing can write, for a multi-provider case that does not exist.
+
+`provider_ref` alone is **strictly stronger** and cannot be defeated by mutating
+any other column. Its only cost is a hypothetical false conflict if a second
+provider ever issued an identical string — and that **fails safe**: the bind is
+refused, the dispatch keeps its locks and stays unresolved, a human reconciles.
+It never admits a duplicate. If a second live provider is ever added, this is
+revisited with evidence.
+
+## 11. Files
+
+| file | what it is |
+|---|---|
+| `supabase/sql/laq6_bind_provider_call_once.sql` | **the migration. NOT APPLIED** |
+| `supabase/sql/verification/13_laq6_verify_readonly.sql` | structural verifier, **read-only**, safe to re-run anywhere |
+| `supabase/sql/verification/14_laq6_mutation_probes.sql` | the six mutation probes, **`BEGIN … ROLLBACK`, zero residue** |
+
+The migration adds one index and replaces one function body. It creates,
+rewrites and deletes **no rows**, adds no policy, changes no RLS, and touches
+neither the calling-state bootstrap nor the E-7B1 proof dispatch. **It fails
+rather than dedupes**: `create unique index` against duplicate data raises 23505
+and rolls back, because a historical duplicate is evidence that one telephone
+call was attributed to two businesses and must be looked at, not deleted.
+
+## 12. Error metadata — the change without which the migration misleads
+
+`fail()` threw a bare `new Error(message)`, discarding `code` and `constraint`.
+A unique violation and a dropped connection arrived indistinguishable, and the
+caller mapped both to `store_unavailable` — a **transient-sounding** answer to a
+**permanent** conflict, which invites a retry of the one thing that must never
+be retried.
+
+`fail()` now preserves `code`, `constraint`, `details`, `hint` and `cause`. The
+message is byte-identical, so every existing caller behaves exactly as before.
+
+## 13. Service mapping
+
+| case | result | code |
+|---|---|---|
+| dispatch has NULL, bind R | success | `acquisition_event_call_id_bound` |
+| dispatch has R, bind R | idempotent success | `acquisition_event_call_id_bound` |
+| dispatch has R1, bind R2 | permanent conflict | `acquisition_event_call_id_conflict` |
+| **D1 owns R, D2 binds R** | **permanent conflict, DB-refused** | **`acquisition_event_call_id_taken`** |
+| D1→R1 and D2→R2 | allowed | — |
+| genuine outage | still transient | `acquisition_event_store_unavailable` |
+
+The pre-read survives as a **courtesy** — better messages, cheap idempotency —
+and is explicitly not the authority. No conflict retries, resolves a dispatch,
+or records an outcome.
+
+## 14. Offline proofs — 25
+
+Including the race a unique index cannot catch: two workers both shown a stale
+NULL row, both passing the pre-read, exactly one binding surviving and the loser
+mapped to a permanent conflict. The in-memory store **models** laq6 — raising
+Postgres's own `23505` with the real constraint name, and the real write-once
+token — so the service's classification is tested against the shapes the
+database actually produces.
+
+## 15. What was NOT proven, stated plainly
+
+**No two-process race was run against live Postgres, and none is claimed.** The
+founder decided against it, and the reasoning is recorded here rather than
+glossed: `acquisition_dial_executions` refuses DELETE, so a live race needs
+permanent fictional dispatch rows, and contaminating dev to demonstrate standard
+unique-index arbitration is not a trade worth making. What stands in its place
+is the real index and the real guard exercised against real Postgres by
+`14_laq6_mutation_probes.sql`, plus offline tests for the service mapping.
+
+**The database has not seen this migration yet.** Everything above is local.
