@@ -161,7 +161,15 @@ describe("E-12A: acquisition only — the receptionist and onboarding agents do 
     };
     walk(dir);
     assert.deepStrictEqual(emitters, ["services/acquisition-agent-spec.js"], "exactly one emitter");
-    assert.deepStrictEqual(readers, ["services/acquisition-agent-provisioning.js"], "exactly one reader, and it is the gate");
+    // Two non-emitters, both named. The provisioning gate READS the field in
+    // order to refuse a payload whose action is not "hangup"; the proof plan
+    // merely NAMES it in a Phase 0 checklist string. Neither can emit it, and
+    // both would be worse for being forbidden to mention it.
+    assert.deepStrictEqual(
+      readers.sort(),
+      ["services/acquisition-agent-provisioning.js", "services/acquisition-proof-plan.js"],
+      "exactly these two non-emitters"
+    );
   });
 
   it("6-7d. the receptionist's COMPILED payload has no voicemail field", () => {

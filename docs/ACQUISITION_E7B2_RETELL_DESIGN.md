@@ -10,6 +10,7 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 · **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, the voice catalogue was read once, and the founder has **SELECTED the acquisition voice** (§24).
 · **E-12C STOPPED AT THE DEPLOYMENT GATE** — there is exactly one environment and it is production, so the webhook was **NOT exposed** and no URL exists (§25).
 · **E-12D COMPLETE (LOCAL)** — the webhook ingress is now wired to the durable store; **no live authenticated webhook has ever been received** (§26).
+· **E-12I–K COMPLETE (LOCAL)** — LPM4 independently reviewed and **safe to apply** (still unapplied), public webhook negative probes, and the first-proof runbook. **The dial executor is unreachable from the running server** (§28).
 · **E-12E–H COMPLETE (LOCAL)** — agent runner, one-agent authority, acquisition number boundary and the one-call proof preflight. **Agent NOT PROVISIONED, number NOT PROVISIONED, LPM4 NOT APPLIED** (§27).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
@@ -1603,3 +1604,100 @@ mutation, no Retell request of any kind, no agent, no number, no call. DEV
 read-only throughout: **23 acquisition rows, calling paused at revision 1**, and
 `provider_resources`, `provisioning_plans` and `provider_webhook_events` all
 still empty.
+
+---
+
+## 28. E-12I–K — the migration reviewed, the webhook probed, the call planned
+
+All local. Nothing pushed, deployed, applied or sent.
+
+### 28.1 E-12I — LPM4 reviewed by somebody who did not write it in the same breath
+
+**Verdict: LPM4 is SAFE TO APPLY TO DEV.** Still not applied.
+
+One change and one finding.
+
+**Changed:** the DO block matched the purpose constraint with `limit 1`.
+`provider_resources` carries about a dozen CHECK constraints, and silently
+taking the first of several matches is one schema change away from dropping the
+wrong one — removing a protection nobody would notice was gone. It now counts
+candidates and raises unless there is exactly one, and no-ops if already widened.
+
+**Found:** LPM3 does not merely omit a foreign key on `client_id`. It **defers**
+one, records the exact statement, and that statement carries **`ON DELETE
+CASCADE`**. An omitted FK and a deferred FK are different futures. The risk is
+specific: a real client whose slug happened to be `aida-acquisition`, later
+deleted, would cascade our provisioning record away. `15_lpm4_preflight_readonly.sql`
+checks for exactly that collision before you apply anything; `16_lpm4_verify_readonly.sql`
+re-checks it after, along with all six original purpose values **by name** —
+losing one would break receptionist or onboarding provisioning — the other
+constraints, the one-agent index, the RLS posture, and that no row was created.
+
+Both scripts are scanned for writes by a single-pass lexer with negative
+controls, because an earlier verifier here stripped `--` inside a string literal
+and reported phantom writes.
+
+### 28.2 E-12J — negative probes for a webhook that is not public yet
+
+Six probes as data. Every one expects a 4xx; a 2xx is judged **critical**,
+because it would mean something processed an unauthenticated request, and a 5xx
+fails too because a rejection should not be a server error.
+
+**All-404 is reported as DORMANT, not as a pass** — "everything returned 404"
+means the feature is off, not that it is secure.
+
+**It cannot prove the positive case, deliberately.** A valid Retell signature is
+an HMAC over the exact body with the API key; this harness is never given the
+key and computes no hash. Forging one would mean writing a second copy of the
+thing the verifier exists to check. The authenticated-event proof stays reserved
+for a real Retell delivery after the agent exists.
+
+Writing the target validator found a real bug in its first version:
+`new URL("https://[::1]").hostname` returns `[::1]` **with brackets**, so a
+pattern matching a bare `::1` accepted the IPv6 loopback as a public target.
+Brackets are stripped before matching now, and IPv6 unique-local and link-local
+are refused too. Production is refused outright rather than warned about.
+
+### 28.3 E-12K — and the answer to the queue question
+
+**The architectural question:** if the global calling state is enabled for one
+controlled proof, can anything automatically drain the queue or create a second
+dial?
+
+**No — and the reason is better than the gate that was going to be built.**
+
+> **The dial executor is not reachable from the running server at all.**
+> A transitive walk of `require()` from `server.js` reaches **105 modules**, and
+> `acquisition-dial-execution.js` is not one of them. Nothing in that graph calls
+> `executeAuthorisedDial`. No scheduler, cron or interval runs work without a
+> request.
+
+`selectNext` *is* reachable, and that is fine: it reserves a prospect against a
+named worker. **A reservation is not a call**, and nothing converts one into a
+call because the thing that would is unreachable.
+
+So *global enabled + queue 0 + one founder proof* is sufficient **today** — not
+because we expect nothing to be enqueued, but because there is no consumer.
+`assessQueueDrainRisk()` recomputes this from the module graph at runtime rather
+than trusting the paragraph, and a ratchet fails the build if an executor ever
+becomes reachable from a route.
+
+**Provider activation is a code change, not a flag flip.** `live: false` is a
+hardcoded literal, the provider reads **no environment variable at all**, and
+submitting requires a `transport` function passed in by a caller — and nothing
+in `src/` constructs the provider. So the Retell API key being present in
+staging cannot become a call transport by flipping a flag.
+
+The runbook is seven phases as data. Phase 3 checks the queue is empty **before**
+enabling anything and enables by compare-and-set on the current revision; phase
+6 — the one people skip — requires exactly one dispatch, queue still 0, no retry
+pending, calling returned to paused, no provider left live, and the one-shot
+authorisation consumed.
+
+**There is no `--execute` flag, and that is a decision rather than an omission.**
+There is nothing to execute with: no agent, no number, no authorisation, every
+provider `live:false`. A script carrying a live-call path for resources that do
+not exist is a live-call path waiting for them to appear. When the wrapper is
+written it must delegate to `executeAuthorisedDial` — running the M8E gate and
+claiming the durable dispatch — never the Retell adapter, never a list, never a
+retry. Tests pin that contract now so it cannot be written any other way.
