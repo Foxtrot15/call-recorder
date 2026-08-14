@@ -76,22 +76,23 @@ router.use(acquisitionWebhookGate());
 //
 // Memoised on success, and NOT memoised on failure: a transient outage at the
 // moment of first delivery must not disable the route for the process lifetime.
-let _handler = null;
+// E-12L moved WHEN this runs. It is now handed to the handler as a builder and
+// called only after a delivery has verified — so an unsigned request never
+// causes a database connection, and the honest 401 is not replaced by a 503
+// about storage the caller was never entitled to reach.
+let _deps = null;
 let _building = null;
 
-async function resolveHandler(overrides = {}) {
-  if (_handler) return _handler;
+async function resolveDeps(overrides = {}) {
+  if (_deps) return _deps;
   if (!_building) {
-    _building = (async () => {
-      const deps = await createAcquisitionWebhookDeps({ now: () => new Date(), ...overrides });
-      return createAcquisitionWebhookHandler({ store: deps.store, recorder: deps.recorder, now: () => new Date() });
-    })().catch((err) => {
-      _building = null; // let the next delivery try again
+    _building = createAcquisitionWebhookDeps({ now: () => new Date(), ...overrides }).catch((err) => {
+      _building = null; // a transient outage must not disable the route for the process
       throw err;
     });
   }
-  _handler = await _building;
-  return _handler;
+  _deps = await _building;
+  return _deps;
 }
 
 // express.raw gives the exact bytes the signature was computed over.
@@ -101,19 +102,7 @@ const config = getRetellConfig();
 router.post(
   ACQUISITION_WEBHOOK_PATH,
   express.raw({ type: "application/json", limit: config.webhookMaxBytes }),
-  async function acquisitionWebhookEntry(req, res) {
-    let handler;
-    try {
-      handler = await resolveHandler();
-    } catch (err) {
-      // The durable layer could not be built — the database is unreachable or
-      // the acquisition schema is absent. TRANSIENT: 503 so Retell redelivers,
-      // rather than a 2xx that would acknowledge an event we cannot process.
-      console.error(`acquisition.webhook.deps_unavailable code=${err && err.code ? err.code : "unknown"}`);
-      return res.status(503).json({ error: "storage_unavailable" });
-    }
-    return handler(req, res);
-  }
+  createAcquisitionWebhookHandler({ resolveDeps, now: () => new Date() }),
 );
 
 module.exports = router;
@@ -122,8 +111,8 @@ module.exports.isAcquisitionWebhookEnabled = isAcquisitionWebhookEnabled;
 module.exports.ACQUISITION_WEBHOOK_PATH = ACQUISITION_WEBHOOK_PATH;
 // Exported for the composition tests. Resetting is a test affordance, not a
 // runtime one — nothing in src/ calls it.
-module.exports.resolveHandler = resolveHandler;
+module.exports.resolveDeps = resolveDeps;
 module.exports.__resetHandlerForTests = () => {
-  _handler = null;
+  _deps = null;
   _building = null;
 };

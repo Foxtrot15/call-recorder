@@ -95,6 +95,9 @@ function createAcquisitionWebhookHandler(deps = {}) {
   const env = deps.env || process.env;
   const store = deps.store || null;
   const recorder = deps.recorder || null;
+  // An async builder used ONLY when no store was injected, and only after a
+  // delivery has verified. Tests inject `store` directly and never reach it.
+  const resolveDeps = deps.resolveDeps || null;
   const now = deps.now || (() => new Date());
 
   return async function handleAcquisitionWebhook(req, res) {
@@ -184,7 +187,32 @@ function createAcquisitionWebhookHandler(deps = {}) {
       return res.status(204).end();
     }
 
-    // ── 6-7. ACKNOWLEDGE FAST, THEN DO THE WORK ──────────────────
+    // ── 6. THE DURABLE LAYER, AFTER AUTH AND BEFORE THE ACK (E-12L) ──
+    //
+    // Two constraints meet here, and the placement is the only point that
+    // satisfies both.
+    //
+    // NOT EARLIER, because E-12D resolved it in the route entry — so an
+    // UNSIGNED request opened a database connection and, if the acquisition
+    // schema was absent, answered 503 where 401 was the truth. Nothing
+    // unauthenticated may reach storage, including to ask it a question.
+    //
+    // NOT LATER, because after `res.status(204)` there is no way left to ask
+    // for a redelivery. A first draft of this moved it into the background work
+    // and turned a storage outage into a silently-failed event that Retell
+    // would never send again. A verified delivery we cannot process must be
+    // refused while a refusal still means something.
+    let resolved = { store, recorder };
+    if (!store && resolveDeps) {
+      const built = await safely(() => resolveDeps());
+      if (built && built.error) {
+        logger.error("acquisition.webhook.deps_unavailable");
+        return res.status(503).json({ error: "storage_unavailable" });
+      }
+      resolved = built.value;
+    }
+
+    // ── 7. ACKNOWLEDGE FAST, THEN DO THE WORK ──────────────────────
     res.status(204).end();
 
     Promise.resolve()
@@ -194,8 +222,8 @@ function createAcquisitionWebhookHandler(deps = {}) {
           eventType: envelope.eventType,
           providerCallId: envelope.providerCallId,
           call: envelope.call,
-          store,
-          recorder,
+          store: resolved.store,
+          recorder: resolved.recorder,
           now,
         })
       )

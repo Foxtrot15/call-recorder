@@ -192,7 +192,9 @@ describe("E-12D: the route composes real durable dependencies", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "acquisition-retell-webhook.js"), "utf8");
     assert.ok(!/createAcquisitionWebhookHandler\(\)/.test(src), "the dependency-free call is gone");
     assert.match(src, /createAcquisitionWebhookDeps/);
-    assert.match(src, /store: deps\.store, recorder: deps\.recorder/);
+    // E-12L: the route hands the handler a BUILDER rather than built deps, so
+    // that storage is reached only after a delivery has verified.
+    assert.match(src, /createAcquisitionWebhookHandler\(\{ resolveDeps/);
   });
 
   it("2. a disabled route never constructs acquisition persistence", async () => {
@@ -214,7 +216,7 @@ describe("E-12D: the route composes real durable dependencies", () => {
       !/^const\s+\w+\s*=\s*await\s+createAcquisitionWebhookDeps/m.test(src),
       "composition must not run at module scope"
     );
-    assert.match(src, /async function resolveHandler/, "built on demand");
+    assert.match(src, /async function resolveDeps/, "built on demand");
     // And the module really does import clean with no Supabase configuration.
     const saved = { u: process.env.SUPABASE_URL, k: process.env.SUPABASE_SERVICE_KEY };
     try {
@@ -231,7 +233,7 @@ describe("E-12D: the route composes real durable dependencies", () => {
 
   it("2c. a failed composition is not memoised — a later delivery may retry", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "acquisition-retell-webhook.js"), "utf8");
-    assert.match(src, /_building = null; \/\/ let the next delivery try again/);
+    assert.match(src, /_building = null; \/\/ a transient outage must not disable the route/);
   });
 });
 
@@ -518,9 +520,18 @@ describe("E-12D: transient means 503, permanent means 204", () => {
   });
 
   it("24b. an unbuildable durable layer answers 503, never a 2xx", () => {
-    const src = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "acquisition-retell-webhook.js"), "utf8");
+    // E-12L moved this out of the route entry and into the handler, where it
+    // now sits AFTER verification and BEFORE the 204. Both edges matter:
+    // earlier let an unsigned request reach storage; later would have
+    // acknowledged an event that could not be processed, losing the redelivery.
+    const src = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "acquisition-retell-webhook-handler.js"), "utf8");
     assert.match(src, /status\(503\)\.json\(\{ error: "storage_unavailable" \}\)/);
-    assert.match(src, /TRANSIENT: 503/);
+
+    const verifyAt = src.search(/await verify\(/);
+    const depsAt = src.indexOf("resolveDeps()");
+    const ackAt = src.indexOf("res.status(204).end()", depsAt);
+    assert.ok(verifyAt > 0 && depsAt > verifyAt, "deps come after verification");
+    assert.ok(ackAt > depsAt, "and before the acknowledgement");
   });
 
   it("25. permanent semantic conflicts stay 204", async () => {
