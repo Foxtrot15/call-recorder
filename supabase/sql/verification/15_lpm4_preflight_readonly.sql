@@ -72,18 +72,39 @@ select indexdef from pg_indexes
 where schemaname = 'public' and tablename = 'provider_resources' and indexname = 'pr_one_active_per_purpose';
 -- expect: UNIQUE, (client_id, provider, purpose, resource_type) WHERE active
 
--- ── 5. Is there a foreign key on client_id? ───────────────────────────────
+-- ── 5. Is there a foreign key ON client_id specifically? ──────────────────
 -- Expected: NONE. LPM3 defers it. If one exists, the reserved sentinel needs a
--- matching clients row before any acquisition resource can be recorded.
+-- matching clients row before any acquisition resource can be recorded — and
+-- if that FK carries ON DELETE CASCADE, deleting the client would take the
+-- provisioning record with it.
+--
+-- FOUNDER CORRECTION: this counted EVERY foreign key on provider_resources,
+-- so an unrelated FK — on provisioning_plan_id, say — would have raised a
+-- false ATTENTION and stopped an application that was perfectly safe. Worse,
+-- it would have done so for a reason that had nothing to do with the sentinel,
+-- which is the only thing this check exists to protect. It now tests whether
+-- the client_id column actually participates in the constraint, by looking up
+-- its attribute number and asking whether that number appears in conkey.
 select
   'client_id foreign key' as check,
   count(*)                as found,
-  case when count(*) = 0 then 'PASS — no FK; the sentinel is safe'
-       else 'ATTENTION — an FK exists; the reserved client_id needs a clients row' end as verdict
+  case
+    when count(*) = 0 then 'PASS — no FK; the sentinel is safe'
+    else 'ATTENTION — an FK involving client_id exists; inspect before applying LPM4'
+  end as verdict
 from pg_constraint c
 join pg_class t on t.oid = c.conrelid
 join pg_namespace n on n.oid = t.relnamespace
-where n.nspname = 'public' and t.relname = 'provider_resources' and c.contype = 'f';
+where n.nspname = 'public'
+  and t.relname = 'provider_resources'
+  and c.contype = 'f'
+  and (
+    select a.attnum
+    from pg_attribute a
+    where a.attrelid = t.oid
+      and a.attname = 'client_id'
+      and not a.attisdropped
+  ) = any(c.conkey);
 
 -- ── 6. Does a REAL client already use the reserved slug? ──────────────────
 -- This is the collision that would matter: a genuine tenant named
