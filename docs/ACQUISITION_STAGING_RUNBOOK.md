@@ -201,8 +201,17 @@ from a webhook; after it, one can.
 3. **Set `RETELL_ACQUISITION_WEBHOOK_URL`** to that domain + the path.
 4. **Probe the public route** — unsigned and malformed requests must be rejected
    without writing anything.
-5. **Wire the durable store** (§7) — its own milestone.
-6. Only then: create the acquisition agent.
+5. ~~Wire the durable store~~ — **done locally** (E-12D, §7).
+6. **Apply LPM4** (`supabase/sql/lpm4_acquisition_provider_resources.sql`) so the
+   one-agent authority can store a row. Not applied.
+7. Set `RETELL_ACQUISITION_LLM_ID` and `RETELL_ACQUISITION_VOICE_ID` in staging —
+   both are still unset in every environment.
+8. Only then: create the acquisition agent, via
+   `scripts/dev/acquisition-provision-agent.js --create-one-agent`.
+9. Separately, and later: an acquisition outbound number
+   (`RETELL_ACQUISITION_OUTBOUND_NUMBER`), a real DNCR wash, and a founder proof
+   authorisation. `scripts/dev/acquisition-preview-proof.js` reports what is
+   still missing at any time.
 
 Calling stays **paused at revision 1** throughout. DEV acquisition residue stays
 at **23 rows**.

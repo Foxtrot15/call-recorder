@@ -10,6 +10,7 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 · **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, the voice catalogue was read once, and the founder has **SELECTED the acquisition voice** (§24).
 · **E-12C STOPPED AT THE DEPLOYMENT GATE** — there is exactly one environment and it is production, so the webhook was **NOT exposed** and no URL exists (§25).
 · **E-12D COMPLETE (LOCAL)** — the webhook ingress is now wired to the durable store; **no live authenticated webhook has ever been received** (§26).
+· **E-12E–H COMPLETE (LOCAL)** — agent runner, one-agent authority, acquisition number boundary and the one-call proof preflight. **Agent NOT PROVISIONED, number NOT PROVISIONED, LPM4 NOT APPLIED** (§27).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
 **voice is SELECTED** (Sunny, via `RETELL_ACQUISITION_VOICE_ID`, §24.7), webhook
@@ -1484,3 +1485,121 @@ fakes; no Retell request was made and DEV was read-only.
 to write acquisition rows to DEV.** That is a real threshold: until now no
 runtime could write an acquisition row from a webhook, and after staging boots
 with the acquisition flags on, one can.
+
+---
+
+## 27. E-12E–H — everything the first proof call needs, except permission
+
+**Status (all LOCAL, nothing pushed, nothing deployed):**
+
+| | |
+|---|---|
+| Response engine | **PROVISIONED** + hash-pinned |
+| Voice | **SELECTED** — Sunny |
+| Webhook store | **IMPLEMENTED LOCALLY** |
+| Webhook deployment | **PENDING** |
+| Agent provisioning runner | **IMPLEMENTED LOCALLY** |
+| Agent | **NOT PROVISIONED** |
+| Agent provisioning authority | **IMPLEMENTED LOCALLY** — needs LPM4, **NOT APPLIED** |
+| Acquisition number boundary | **IMPLEMENTED LOCALLY** |
+| Number | **NOT PROVISIONED** |
+| One-call proof preflight | **IMPLEMENTED LOCALLY** |
+| Calling | **PAUSED** rev 1 |
+| Provider | **live:false** |
+| DNCR-1 · E-7 · A-L2 | **OPEN** |
+
+### 27.1 E-12E — the runner that refuses
+
+`scripts/dev/acquisition-provision-agent.js`, preview by default, one adapter
+call in the whole file, asserted by reading it. The checks live in
+`acquisition-agent-provisioning.js` rather than inline, because an agent is a
+harder write than an engine: it has a voice, points at a prompt, carries the
+answering-machine policy and names where outcomes go, so a wrong one could speak
+to a stranger in the wrong voice and leave a sales message on their machine.
+
+Refuses: the prod tag, engine drift, a missing llm_id, a missing or mismatched
+acquisition voice, a voicemail action that is not `hangup`, any voicemail option
+carrying text, a language other than `en-AU`, a webhook that is missing, not
+https, or aimed at localhost or a private range Retell could never reach, and an
+agent that is already recorded.
+
+**`NODE_ENV=production` with `RETELL_ALLOWED_TAG=staging` is accepted** — that is
+the real staging shape, and the two describe different things.
+
+No retry. Ambiguous answers exit 2 as UNKNOWN. A create that succeeds and then
+fails to record shouts the id three times and exits 3, because an agent that
+exists and is unrecorded is worse than the reverse.
+
+### 27.2 E-12F — one agent, ever, enforced by an index
+
+LPM3's `provider_resources` already carried the guard:
+
+```
+pr_one_active_per_purpose
+  UNIQUE (client_id, provider, purpose, resource_type) WHERE active
+```
+
+That is a **database** refusal, not an application check. Nothing needed
+building. The only obstacle was `purpose`, whose CHECK lists six
+receptionist/onboarding values, so Postgres would reject an acquisition row.
+
+**`supabase/sql/lpm4_acquisition_provider_resources.sql` widens exactly that one
+constraint and is NOT APPLIED.** No new table, no new index, no data change,
+every existing value preserved, reversible, and it discovers the auto-generated
+constraint name rather than assuming it. Until it is applied, the app builds the
+row and the database refuses it — a loud failure naming the migration, rather
+than the two quietly disagreeing.
+
+Acquisition uses a reserved `client_id` sentinel (`aida-acquisition`); it belongs
+to no tenant, and borrowing a real slug would file our cold-calling agent under
+somebody's business.
+
+**Reconciliation** is modelled explicitly. The dangerous state is not failure but
+success-then-failure: the provider created the agent, persistence did not record
+it, so the agent exists and nothing knows its id. That is
+`reconciliation_required`, forbids creating, and asks for a human. Every state
+except `not_provisioned` forbids creating. An unreadable authority **throws**,
+because returning null would read as "no agent exists" and permit a create.
+
+### 27.3 E-12G — acquisition dials from its own number or none
+
+`canPlaceCall` is satisfied by `RETELL_OUTBOUND_ONBOARDING_NUMBER`. Had
+acquisition leaned on that shared gate, cold calls to strangers would have gone
+out from the caller ID a consenting client was interviewed on.
+
+`RETELL_ACQUISITION_OUTBOUND_NUMBER`, no fallback, E.164 validated at resolution
+so a malformed number is a line in a report rather than an exception on the one
+call that mattered. A resolved number grants nothing — with it set, every
+provider is still `live:false`, the engine still off, `canWriteLive` and
+`canPlaceCall` still refused, telephony still the hardcoded `false`.
+
+### 27.4 E-12H — a view, and a permission slip
+
+**The preflight's `ready` field is hardcoded `false`, permanently.** A readiness
+aggregator is one refactor from becoming a second, weaker authorisation path
+that a future caller consults *instead of* the M8E gate. So it reports and never
+permits; the gate still runs immediately before execution and owns every
+compliance decision. Tests assert the dial path does not import it.
+
+The proof authorisation is **not** `ALLOW_TEST_CALL=true`, because an
+environment variable authorises a state rather than an act: it cannot say who
+decided, about what, when it expires, or whether it has been spent — and it
+stays true afterwards. It follows the two patterns already in the repository: a
+named human approver rejected if the name looks automated, and a canonical
+identity hash over exactly what was approved. One prospect, one destination, one
+from-number, one agent, one bounded window, single use, frozen so it cannot be
+un-spent, and scope-mismatched if any bound fact differs.
+
+**Today's answer is NOT READY with 16 blockers**, which is the truthful state:
+no agent, no number, no webhook URL, no llm_id in the environment, provider
+`live:false`, calling paused, DNCR without an authoritative wash, and no founder
+authorisation. `A-L2` is reported OPEN rather than quietly satisfied — the
+holiday provider is still the fixture.
+
+### 27.5 What did NOT happen
+
+No push, no deploy, no Railway change, no domain, no SQL applied, no Supabase
+mutation, no Retell request of any kind, no agent, no number, no call. DEV
+read-only throughout: **23 acquisition rows, calling paused at revision 1**, and
+`provider_resources`, `provisioning_plans` and `provider_webhook_events` all
+still empty.
