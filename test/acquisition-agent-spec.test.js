@@ -436,14 +436,24 @@ describe("E-10A: voicemail and the unsent payload", () => {
     }
   });
 
-  it("nothing in the repository constructs the agent from this spec", () => {
+  it("only the named agent-gate module builds the agent from this spec", () => {
+    // E-12E adds one reader: the module that decides whether creating the agent
+    // is safe. It builds the payload in order to CHECK it and returns a verdict
+    // — it cannot send anything, which its own suite asserts by reading it for
+    // any transport import. Named explicitly rather than pattern-matched.
+    const ALLOWED = ["acquisition-agent-spec.js", "acquisition-agent-provisioning.js"];
     const dir = path.join(__dirname, "..", "src", "services");
     const offenders = [];
-    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js") && n !== "acquisition-agent-spec.js")) {
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js") && !ALLOWED.includes(n))) {
       const body = fs.readFileSync(path.join(dir, f), "utf8");
       if (/describeAcquisitionRetellResources\s*\(/.test(body)) offenders.push(f);
     }
     assert.deepStrictEqual(offenders, [], offenders.join("; "));
+  });
+
+  it("and that reader is inert — it imports nothing that can reach Retell", () => {
+    const body = fs.readFileSync(path.join(__dirname, "..", "src", "services", "acquisition-agent-provisioning.js"), "utf8");
+    assert.ok(!/retell-adapter|fetch\(|axios|node-fetch/.test(body), "the exception must stay unable to send");
   });
 
   it("the spec defers to the E-7B2B1 contract rather than restating it", () => {

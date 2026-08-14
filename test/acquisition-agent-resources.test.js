@@ -179,14 +179,35 @@ describe("E-10C: acquisition cannot be provisioned as a side effect", () => {
    */
   const PROVISIONING_SCRIPT = "acquisition-provision-response-engine.js";
 
-  it("nothing provisions acquisition resources except the one named script", () => {
+  // E-12E adds the SECOND authorised provisioning act: creating the agent. The
+  // rule is unchanged — acquisition is never provisioned as a side effect of
+  // something else — so the exception grows by NAMED FILES rather than by
+  // relaxing the pattern. Two of them can reach Retell (each hand-run, each
+  // limited to one adapter call); the third builds payloads and returns a
+  // verdict, and a test in acquisition-agent-provisioning.test.js asserts it
+  // imports nothing that can reach the network.
+  const AGENT_SCRIPT = "acquisition-provision-agent.js";
+  const AGENT_GATES = "acquisition-agent-provisioning.js";
+  const NAMED_EXCEPTIONS = ["acquisition-agent-spec.js", PROVISIONING_SCRIPT, AGENT_SCRIPT, AGENT_GATES];
+
+  it("the provisioning exception list is exactly four named files", () => {
+    // Pinned so a fifth cannot be added without this line changing.
+    assert.deepStrictEqual([...NAMED_EXCEPTIONS].sort(), [
+      "acquisition-agent-provisioning.js",
+      "acquisition-agent-spec.js",
+      "acquisition-provision-agent.js",
+      "acquisition-provision-response-engine.js",
+    ]);
+  });
+
+  it("nothing provisions acquisition resources except the named files", () => {
     const dirs = ["src/services", "src/routes", "scripts", "scripts/dev"];
     const offenders = [];
     for (const d of dirs) {
       const dir = path.join(__dirname, "..", d);
       if (!fs.existsSync(dir)) continue;
       for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
-        if (f === "acquisition-agent-spec.js" || f === PROVISIONING_SCRIPT) continue;
+        if (NAMED_EXCEPTIONS.includes(f)) continue;
         const body = fs.readFileSync(path.join(dir, f), "utf8");
         if (/describeAcquisitionRetellResources|buildAcquisitionResponseEngine|buildAcquisitionAgent/.test(body)) {
           offenders.push(`${d}/${f}`);

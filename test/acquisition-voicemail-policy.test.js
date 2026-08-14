@@ -135,20 +135,33 @@ describe("E-12A: acquisition only — the receptionist and onboarding agents do 
     assert.ok(!/voicemail_option/.test(text), "onboarding interviews a client who asked to be interviewed");
   });
 
-  it("6-7b. voicemail_option is defined in exactly one place in src/", () => {
+  it("6-7b. voicemail_option is EMITTED in exactly one place in src/", () => {
     // A shared default is the specific mistake this guards. If a second file
     // starts emitting the field, that is a decision to be argued for here.
+    //
+    // Refined by E-12E: emitting the field and READING it are different acts.
+    // The agent-provisioning gate reads `agent.voicemail_option` precisely in
+    // order to refuse a payload whose action is not "hangup" — banning that
+    // would mean the safety check could not inspect the thing it guards. So
+    // this matches the object-key form, and the reader is asserted separately
+    // below.
     const dir = path.join(__dirname, "..", "src");
-    const hits = [];
+    const emitters = [];
+    const readers = [];
     const walk = (d) => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);
-        if (e.isDirectory()) walk(p);
-        else if (e.name.endsWith(".js") && /voicemail_option/.test(fs.readFileSync(p, "utf8"))) hits.push(path.relative(dir, p));
+        if (e.isDirectory()) { walk(p); continue; }
+        if (!e.name.endsWith(".js")) continue;
+        const body = fs.readFileSync(p, "utf8");
+        const rel = path.relative(dir, p).replace(/\\/g, "/");
+        if (/voicemail_option\s*:/.test(body)) emitters.push(rel);
+        else if (/voicemail_option/.test(body)) readers.push(rel);
       }
     };
     walk(dir);
-    assert.deepStrictEqual(hits.map((h) => h.replace(/\\/g, "/")), ["services/acquisition-agent-spec.js"]);
+    assert.deepStrictEqual(emitters, ["services/acquisition-agent-spec.js"], "exactly one emitter");
+    assert.deepStrictEqual(readers, ["services/acquisition-agent-provisioning.js"], "exactly one reader, and it is the gate");
   });
 
   it("6-7d. the receptionist's COMPILED payload has no voicemail field", () => {
