@@ -38,6 +38,19 @@ const PURPOSES = Object.freeze([
   "receptionist_analysis",
   "onboarding_analysis",
   "inbound_binding",
+  // ── E-12F: cold acquisition ──
+  // Added to the ALLOWLIST only. Acquisition is deliberately not in
+  // provisioning-plan.js's DESIRED_RESOURCE_ORDER — that list is three
+  // hardcoded receptionist entries — so naming a purpose here cannot cause
+  // anything to be provisioned as a side effect of planning a receptionist.
+  //
+  // The database carries the same list as a CHECK constraint, and until
+  // supabase/sql/lpm4_acquisition_provider_resources.sql is applied by hand it
+  // will REJECT these two values. That is the correct failure: the app may
+  // build the row, and the database refuses to store it, rather than either
+  // side quietly disagreeing.
+  "acquisition_agent",
+  "acquisition_response_engine",
 ]);
 
 /**

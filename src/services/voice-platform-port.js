@@ -50,6 +50,10 @@ const RESOURCE_PURPOSES = Object.freeze([
   "receptionist_analysis",
   "onboarding_analysis",
   "inbound_binding",
+  // E-12F: cold acquisition. Allowlist only — see provider-resource-registry.js
+  // for why naming a purpose provisions nothing.
+  "acquisition_agent",
+  "acquisition_response_engine",
 ]);
 
 const OPERATIONS = Object.freeze([

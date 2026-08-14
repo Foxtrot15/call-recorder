@@ -332,11 +332,16 @@ describe("safety ratchets", () => {
     walk("scripts");
   });
 
-  it("the only .sql path in executable code is the one named in an error message", () => {
-    // There IS one, deliberately: acquisition-store's provisioning error names
-    // the migration to apply, which is the most useful thing that error can
-    // say. This pins it to exactly that — one file, one constant, and a check
-    // that nothing does anything with it except interpolate it into a string.
+  it("the only .sql paths in executable code are the ones named in error messages", () => {
+    // There ARE two, deliberately, and for the same reason: a provisioning
+    // error names the migration to apply, which is the most useful thing that
+    // error can say. E-12F adds the second — the acquisition provisioning
+    // authority, whose insert is rejected by Postgres until LPM4 is applied by
+    // hand, and whose error would otherwise leave the reader guessing why.
+    //
+    // This pins them to exactly those two files, exactly those two literals,
+    // and checks that nothing does anything with either except put it in a
+    // string. Nothing here opens or executes a .sql file.
     const found = [];
     const walk = (d) => {
       for (const entry of fs.readdirSync(path.join(ROOT, d), { withFileTypes: true })) {
@@ -358,16 +363,25 @@ describe("safety ratchets", () => {
     walk("scripts");
 
     assert.deepStrictEqual(
-      found.map((f) => f.rel),
-      ["src/services/acquisition-store.js"],
+      found.map((f) => f.rel).sort(),
+      ["src/services/acquisition-resource-authority.js", "src/services/acquisition-store.js"],
       `unexpected .sql literal in executable code: ${JSON.stringify(found)}`
     );
-    assert.strictEqual(found[0].literal, '"supabase/sql/laq2_create_acquisition_queue.sql"');
+    assert.deepStrictEqual(
+      found.map((f) => f.literal).sort(),
+      ['"supabase/sql/laq2_create_acquisition_queue.sql"', '"supabase/sql/lpm4_acquisition_provider_resources.sql"']
+    );
 
-    // And it is only ever interpolated into a message — never opened, never run.
-    const src = fs.readFileSync(path.join(ROOT, "src/services/acquisition-store.js"), "utf8");
-    for (const line of src.split("\n").filter((l) => l.includes("REQUIRED_MIGRATION") && !l.trimStart().startsWith("//"))) {
-      assert.ok(/=\s*"supabase|Apply \$\{REQUIRED_MIGRATION\}|REQUIRED_MIGRATION,$/.test(line.trim()), `REQUIRED_MIGRATION is used somewhere other than a message or an export: ${line.trim()}`);
+    // And each is only ever put into a message — never opened, never run.
+    for (const rel of ["src/services/acquisition-store.js", "src/services/acquisition-resource-authority.js"]) {
+      const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+      for (const line of src.split("\n").filter((l) => l.includes("REQUIRED_MIGRATION") && !l.trimStart().startsWith("//"))) {
+        assert.ok(
+          /=\s*"supabase|Apply \$\{REQUIRED_MIGRATION\}|REQUIRED_MIGRATION,$|=\s*REQUIRED_MIGRATION;$/.test(line.trim()),
+          `${rel}: REQUIRED_MIGRATION is used somewhere other than a message or an export: ${line.trim()}`
+        );
+      }
+      assert.ok(!/readFileSync\([^)]*\.sql|require\([^)]*\.sql/.test(src), `${rel} must never open a .sql file`);
     }
   });
 
