@@ -1,8 +1,9 @@
 # Acquisition staging — the non-production runtime
 
-**Status: SERVICE CREATED, FIRST DEPLOY CRASHED, BOOT FIX APPLIED. No domain
-generated. Acquisition webhook NOT yet reachable. Agent NOT PROVISIONED.
-Calling PAUSED. Production untouched.**
+**Status: SERVICE CREATED. FIRST DEPLOY CRASHED; BOOT FIX APPLIED AND PUSHED.
+DURABLE WEBHOOK STORE WIRED LOCALLY (E-12D, unpushed). No domain generated.
+Acquisition webhook NOT yet reachable. NO LIVE AUTHENTICATED WEBHOOK HAS EVER
+BEEN RECEIVED. Agent NOT PROVISIONED. Calling PAUSED. Production untouched.**
 
 **Owns (source of truth for):** how the staging Railway service is configured,
 why each variable is present or deliberately absent, and what staging is allowed
@@ -176,19 +177,19 @@ rather than improvising an HMAC**.
 
 ---
 
-## 7. Known: the ingress cannot yet complete the return path
+## 7. The durable return path — wired as of E-12D
 
-`routes/acquisition-retell-webhook.js` calls `createAcquisitionWebhookHandler()`
-**with no store**, so a genuine verified event acks `204` and then records:
+The route previously built its handler with no store, so a verified event acked
+`204` and then recorded `acquisition_event_store_unavailable`. **E-12D wired it**
+(design §26): the route now composes the existing durable store, suppression
+list and outcome recorder on **first request**, not at import — production has no
+acquisition schema, so composing at load would have made a production database
+query out of a module simply existing.
 
-```
-acquisition_event_store_unavailable   mutated: false
-```
-
-Signature verification and rejection of unsigned traffic are fully provable
-today. The durable reconciliation path is **not** wired, and doing so is a
-separate, deliberate decision — it would be the first time a *public* runtime
-writes acquisition rows to DEV.
+**Still not proven live.** Every proof is offline. Staging is where this path is
+deliberately allowed to write acquisition rows to DEV for the first time, and
+that is a genuine threshold: before it, no runtime could write an acquisition row
+from a webhook; after it, one can.
 
 ---
 

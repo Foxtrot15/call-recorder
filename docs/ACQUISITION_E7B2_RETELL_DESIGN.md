@@ -9,6 +9,7 @@ COMPLETE** (the acquisition agent specified locally, §19) · **E-10C COMPLETE**
 · **E-12A COMPLETE** — leave-no-message is now a PROVIDER setting, configured locally (§23).
 · **E-12B COMPLETE** — the provisioned response engine is pinned against silent drift, the voice catalogue was read once, and the founder has **SELECTED the acquisition voice** (§24).
 · **E-12C STOPPED AT THE DEPLOYMENT GATE** — there is exactly one environment and it is production, so the webhook was **NOT exposed** and no URL exists (§25).
+· **E-12D COMPLETE (LOCAL)** — the webhook ingress is now wired to the durable store; **no live authenticated webhook has ever been received** (§26).
 **E-7B2B live activation NOT STARTED. E-7 REMAINS OPEN.** Acquisition calling is
 PAUSED, no live provider exists, **the acquisition AGENT is NOT PROVISIONED**,
 **voice is SELECTED** (Sunny, via `RETELL_ACQUISITION_VOICE_ID`, §24.7), webhook
@@ -1357,3 +1358,129 @@ URL dies with the process — acceptable for a first agent test, not for a pilot
 
 Until that is answered the acquisition agent cannot be created **correctly
 once**, because its `webhook_url` would have to be either wrong or absent.
+
+---
+
+## 26. E-12D — the webhook's durable wiring
+
+**Status: DURABLE STORE COMPOSITION IMPLEMENTED LOCALLY. NOT PUSHED. NOT
+DEPLOYED. NO LIVE AUTHENTICATED WEBHOOK HAS EVER BEEN RECEIVED. Agent NOT
+PROVISIONED. Calling PAUSED. E-7 OPEN. DNCR-1 OPEN.**
+
+### 26.1 What was actually wrong
+
+E-11A built the ingress, mounted it, and wired it to nothing. The route called
+the handler factory with no dependencies, so `store` defaulted to `null` and a
+genuine signed Retell event was verified, fingerprinted, acknowledged — and then
+refused with `acquisition_event_store_unavailable`, `mutated: false`.
+
+Fail-safe, and incapable of finishing the job it exists for.
+
+### 26.2 Composition, not reimplementation
+
+Every authority already existed. `acquisition-webhook-deps.js` is 30 lines of
+wiring over three of them:
+
+| reused | from | role |
+|---|---|---|
+| `createSupabaseAcquisitionStore` | E-7B1 / M8C | the durable store — already provides `listDialExecutions`, `updateDialExecution`, `loadProspect`, `transitionProspectLifecycle` |
+| `createDurableSuppression` | M8C | suppression list, hydrated from the store |
+| `createDurableOutcomes` | M8C | outcome → suppression → append, in that order |
+
+**No new table, no SQL, no second persistence model, no ad-hoc Supabase client.**
+No adapter was needed either — the existing store already satisfied the
+handler's contract, which was worth checking rather than assuming.
+
+`audit` is deliberately left `null`: the decision chain is a hash-linked
+append-only structure with its own contention handling, not a drop-in
+collaborator. That does not weaken the outcome path — the recorder still refuses
+`suppression_unavailable` for any outcome that must suppress, so nothing can be
+recorded as an opt-out without the business actually becoming uncallable.
+
+### 26.3 Why composition is lazy, and why that is the load-bearing part
+
+`createDurableSuppression` **hydrates from the database at construction** — it
+calls `store.listSuppressions()` before returning. Building these dependencies
+is a real query, not an object graph.
+
+Production has **no acquisition schema**, and `server.js` imports this router
+unconditionally. Composing at module load would have meant every production
+deploy querying `acquisition_suppressions` and failing: **a module merely
+existing would have become a database access.**
+
+So the route builds it on **first request**, which the gate makes unreachable
+until all three flags are on. Flags off ⇒ never constructed ⇒ no acquisition
+table touched. Asserted, not assumed — including that the route module imports
+cleanly with no Supabase configuration at all.
+
+Failure is **not** memoised: a transient outage during the first delivery must
+not disable the route for the process lifetime.
+
+### 26.4 Ordering is unchanged
+
+```
+gate (3 flags) → raw body, size-capped → signature → parse → envelope
+  → is it ours? → durable fingerprint → correlate → bind → lifecycle
+  → outcome → resolve dispatch LAST
+```
+
+Nothing acquisition-shaped is written before the route is enabled, the signature
+is valid, the payload parses, and the event is identified as ours. Proven
+against the **wired** composition rather than a mock: unsigned → 401,
+malformed → 400, another product's event → 204 **with no fingerprint row**,
+oversize → 413 — and in every case zero outcomes and no binding change.
+
+### 26.5 Semantics preserved
+
+- **Idempotency** stays database-authoritative — the handler obeys `recordEvent`'s
+  duplicate answer rather than an app-side set. Duplicate ⇒ 204, no second
+  outcome, no second resolution.
+- **Correlation** is the exact `metadata.aida_dispatch_id`. A missing id is
+  permanent (204, not a redelivery loop); an unknown id matches nothing — no
+  destination, name, timestamp or hash fallback.
+- **E-9 binding**: unbound binds, same id is idempotent, a different id on a
+  bound dispatch is refused, and an id owned by another dispatch is refused.
+  Both conflicts answer **204** — a permanent refusal repeated for ever would
+  become a stream of Retell redeliveries.
+- **E-8 lifecycle**: an authenticated event repairs a prospect left short of
+  `attempted`; `reached_human: true` records a human-reached outcome.
+- **E-12A voicemail**: `voicemail_reached` and `machine_detected` both still
+  produce the `voicemail` outcome. A-L7 unchanged — voicemail counts, no-answer
+  does not.
+- **Opt-out** is a *flag on* an outcome, not an outcome value. An evidenced,
+  high-confidence opt-out now genuinely suppresses; a low-confidence one records
+  nothing, suppresses nobody, and leaves the dispatch unresolved for a person.
+
+### 26.6 Failure semantics, stated explicitly
+
+| condition | answer | why |
+|---|---|---|
+| bad/absent signature | **401** | authentication |
+| unparseable body / bad envelope | **400** | client error |
+| oversize | **413** | client error |
+| not our traffic | **204** | ignored, no fingerprint |
+| duplicate delivery | **204** | already handled |
+| permanent semantic conflict (call-id, missing dispatch id) | **204** | refusing identically for ever would be a redelivery loop |
+| fingerprint store outage | **503** | transient — redeliver |
+| durable layer unbuildable | **503** | transient — never a 2xx that loses the event |
+
+The outcome is durable **before** the dispatch is resolved, and a failed outcome
+leaves the dispatch **unresolved** — the lock is never released on a failure.
+
+### 26.7 Status of the chain, honestly
+
+| | |
+|---|---|
+| webhook route | **implemented** |
+| signature verification | **implemented** |
+| durable store composition | **implemented locally (E-12D)** |
+| public deployment | **pending** |
+| live authenticated webhook | **NEVER PROVEN** |
+
+No live proof is claimed. Every test above uses an in-memory store and injected
+fakes; no Retell request was made and DEV was read-only.
+
+**Staging will be the first environment where this path is deliberately allowed
+to write acquisition rows to DEV.** That is a real threshold: until now no
+runtime could write an acquisition row from a webhook, and after staging boots
+with the acquisition flags on, one can.
