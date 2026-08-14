@@ -4,14 +4,44 @@ const twilio  = require("twilio");
 const supabase = require("../services/supabase");
 const { fetchLoopGuardData, decidePstnDial } = require("../services/loop-guard");
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// ── WHY THE CLIENT IS BUILT LAZILY ──────────────────────────
+// This used to be `const client = twilio(SID, TOKEN)` at module scope, and a
+// deployment without Twilio credentials therefore died at IMPORT time with
+// "username is required" — before `server.js` had finished mounting anything.
+// One unconfigured integration took down every unrelated route with it,
+// including the acquisition webhook, which never touches Twilio.
+//
+// Deferring construction to first use is the pattern this repository already
+// follows for the same dependency: `routes/recording.js` builds its client
+// inside the handler, and `middleware/auth.js` memoises `twilio.webhook()` on
+// first request. Behaviour with credentials present is unchanged — the client
+// is still built from the same two env vars and cached for the process.
+//
+// It returns null rather than a client when credentials are absent. There is
+// deliberately no placeholder account sid, no empty-string token and no
+// fallback: a Twilio client that exists but cannot authenticate would turn a
+// configuration mistake into a runtime failure at the moment somebody tries to
+// place a real call.
+let _client = null;
+function twilioClient() {
+  if (_client) return _client;
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken) return null;
+  _client = twilio(accountSid, authToken);
+  return _client;
+}
 
 router.post("/initiate", async (req, res) => {
   const { to } = req.body;
   if (!to) return res.status(400).json({ error: "Missing 'to' number" });
+
+  // Fail closed before any work: no telephony configured means this deployment
+  // cannot place calls, and says so rather than half-running the request.
+  const client = twilioClient();
+  if (!client) {
+    return res.status(503).json({ error: "Telephony is not configured on this deployment." });
+  }
 
   try {
     const digits = to.replace(/\D/g, "");
