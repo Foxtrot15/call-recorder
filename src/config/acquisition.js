@@ -245,12 +245,74 @@ function resolveAcquisitionVoiceId(env = process.env) {
 }
 
 /**
+ * THE ACQUISITION OUTBOUND NUMBER — ITS OWN KEY, WITH NO FALLBACK (E-12G).
+ *
+ * ── WHY THIS IS NOT RETELL_OUTBOUND_ONBOARDING_NUMBER ───────────────
+ * Because `canPlaceCall` in config/retell.js is satisfied by exactly that key.
+ * If acquisition leaned on the shared gate, the ONBOARDING number would count
+ * as "acquisition has a number" — and cold calls to strangers would go out
+ * from the number a consenting client was interviewed on. The two are
+ * different activities with different consent, different compliance exposure
+ * and different reputations to lose; they do not share a caller ID by accident.
+ *
+ * ── NO FALLBACK, ON PURPOSE ─────────────────────────────────────────
+ * Same rule as the voice (E-12B): an unset key yields `null` and acquisition
+ * stays unable to dial, rather than quietly borrowing another product's number.
+ * The same number MAY one day be chosen for both — but that has to be a value
+ * somebody typed into this key, not an inheritance.
+ *
+ * ── FORMAT IS CHECKED HERE, NOT ASSUMED DOWNSTREAM ──────────────────
+ * The provider already refuses a non-E.164 `fromNumber` at dial time. Checking
+ * it at resolution means a malformed number is a configuration problem a
+ * founder sees in a readiness report, rather than an exception thrown on the
+ * one call that mattered.
+ */
+const E164 = /^\+[1-9][0-9]{6,14}$/;
+
+function resolveAcquisitionOutboundNumber(env = process.env) {
+  const raw = env.RETELL_ACQUISITION_OUTBOUND_NUMBER;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return E164.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * Is the NUMBER part of acquisition calling ready — and nothing else?
+ *
+ * Deliberately narrow. This answers one question about one resource. It does
+ * not enable a provider, unpause calling, or say anything about DNCR,
+ * suppression, hours or holidays, all of which are separate authorities that
+ * the final pre-dial gate owns. A ready number is a prerequisite for calling,
+ * never a permission to call.
+ */
+function describeAcquisitionNumberReadiness(env = process.env) {
+  const raw = typeof env.RETELL_ACQUISITION_OUTBOUND_NUMBER === "string" ? env.RETELL_ACQUISITION_OUTBOUND_NUMBER.trim() : "";
+  const number = resolveAcquisitionOutboundNumber(env);
+  const blockers = [];
+
+  if (!raw) blockers.push("RETELL_ACQUISITION_OUTBOUND_NUMBER is not set — acquisition has no number of its own");
+  else if (!number) blockers.push("RETELL_ACQUISITION_OUTBOUND_NUMBER is not a valid E.164 number");
+
+  return Object.freeze({
+    ready: blockers.length === 0,
+    number,
+    // Named so a report can say WHY a present onboarding number changed nothing.
+    inheritedFromAnotherProduct: false,
+    blockers: Object.freeze(blockers),
+    note:
+      "A number is one prerequisite among several. It grants no permission to dial: the provider is a " +
+      "separate authority, the global calling state is a separate authority, and the pre-dial gate still runs.",
+  });
+}
+
+/**
  * The config `buildAcquisitionAgent` expects, assembled from acquisition-only
  * environment keys. Reads no receptionist or onboarding key at all.
  */
 function getAcquisitionRetellConfig(env = process.env) {
   return Object.freeze({
     voiceId: resolveAcquisitionVoiceId(env),
+    outboundNumber: resolveAcquisitionOutboundNumber(env),
     // Named here so the agent builder never reaches for the onboarding webhook.
     acquisitionWebhookUrl:
       typeof env.RETELL_ACQUISITION_WEBHOOK_URL === "string" && env.RETELL_ACQUISITION_WEBHOOK_URL.trim()
@@ -312,6 +374,8 @@ module.exports = {
   DEFAULT_MARKET,
   // retell resources — acquisition-only keys, no receptionist fallback
   resolveAcquisitionVoiceId,
+  resolveAcquisitionOutboundNumber,
+  describeAcquisitionNumberReadiness,
   getAcquisitionRetellConfig,
   // assembled
   getAcquisitionConfig,
