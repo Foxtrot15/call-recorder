@@ -1545,7 +1545,18 @@ building. The only obstacle was `purpose`, whose CHECK lists six
 receptionist/onboarding values, so Postgres would reject an acquisition row.
 
 **`supabase/sql/lpm4_acquisition_provider_resources.sql` widens exactly that one
-constraint and is NOT APPLIED.** No new table, no new index, no data change,
+constraint. APPLIED TO DEV BY THE FOUNDER, 2026-08-15, AND VERIFIED.**
+
+Verification was read off `pg_get_constraintdef` rather than inferred from a
+success message, which mattered: the migration reported "Success / no rows
+returned" with its NOTICE lines suppressed, and that is exactly what a silent
+no-op also produces. The constraint now reads as eight values — the six
+originals plus `acquisition_agent` and `acquisition_response_engine` — under the
+name `provider_resources_purpose_check`, it is the ONLY constraint on the table
+mentioning `purpose`, `pr_one_active_per_purpose` is unchanged as
+`UNIQUE (client_id, provider, purpose, resource_type) WHERE active`,
+`pr_idempotency_key` and `pr_superseded_consistency` are intact, no foreign key
+exists on `client_id`, and the table still holds **0 rows**. No new table, no new index, no data change,
 every existing value preserved, reversible, and it discovers the auto-generated
 constraint name rather than assuming it. Until it is applied, the app builds the
 row and the database refuses it — a loud failure naming the migration, rather
