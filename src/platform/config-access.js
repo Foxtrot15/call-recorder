@@ -37,6 +37,18 @@ const CAPABILITIES = Object.freeze([
   "config:approve",   // take responsibility for specific words
   "config:activate",  // make an approved version the current one
   "config:preview",   // compile the behaviour spec and a provider payload
+
+  // ── PROVISIONING (P22A) ──
+  // Separate from the config capabilities on purpose. Configuring what a
+  // business says and changing what exists at a telephone provider are
+  // different acts with different blast radii, and the person allowed to do
+  // the first is not automatically allowed the second.
+  "provisioning:view",       // see the diff and the plans
+  "provisioning:create",     // build a plan from the active configuration
+  "provisioning:validate",   // check a plan against the configuration that is active now
+  "provisioning:approve",    // take responsibility for a set of provider mutations
+  "provisioning:execute",    // run them. NOTHING implements this, and nothing holds it
+  "provisioning:reconcile",  // read provider state and compare it with the registry
 ]);
 
 /**
@@ -49,16 +61,34 @@ const CAPABILITIES = Object.freeze([
  * approve, cannot activate, and cannot even edit a draft directly.
  */
 const ROLES = Object.freeze({
-  client_viewer: Object.freeze(["config:view", "config:preview"]),
-  client_editor: Object.freeze(["config:view", "config:preview", "config:draft", "config:propose", "config:validate"]),
-  client_owner: Object.freeze(["config:view", "config:preview", "config:draft", "config:propose", "config:validate", "config:approve"]),
+  client_viewer: Object.freeze(["config:view", "config:preview", "provisioning:view"]),
+  client_editor: Object.freeze([
+    "config:view", "config:preview", "config:draft", "config:propose", "config:validate",
+    "provisioning:view",
+  ]),
+  client_owner: Object.freeze([
+    "config:view", "config:preview", "config:draft", "config:propose", "config:validate", "config:approve",
+    // A client may SEE what provisioning would do to their own service. They
+    // may not create, approve or run it: those change resources AIDA owns and
+    // pays for at a provider.
+    "provisioning:view",
+  ]),
   // The founder/operator. Activation is deliberately theirs: putting a
   // configuration live is the moment a business's telephone starts being
   // answered differently.
   operator: Object.freeze([
     "config:view", "config:preview", "config:draft", "config:propose",
     "config:validate", "config:approve", "config:activate",
+    "provisioning:view", "provisioning:create", "provisioning:validate",
+    "provisioning:approve", "provisioning:reconcile",
+    // provisioning:execute is DELIBERATELY ABSENT from every role. Nothing
+    // implements execution, so nothing may hold the capability to invoke it.
+    // Adding it here is a decision somebody must make explicitly, in a commit,
+    // alongside an executor that satisfies the twelve preconditions in
+    // provisioning-execution-contract.js.
   ]),
+  // Still exactly one capability. A voice interviewer may propose a wording
+  // change; it may not see, build, approve or run a provider mutation.
   voice_agent: Object.freeze(["config:propose"]),
   // An importer runs a migration. It may create a draft and nothing else —
   // importing is exactly the moment somebody would want to skip approval.
@@ -105,8 +135,13 @@ function createPrincipal({ role, actorId = null, clientId = null, crossTenant = 
   });
 }
 
-/** Operations an operator holding crossTenant may perform outside their own tenant. */
-const CROSS_TENANT_OPERATIONS = Object.freeze(["config:view", "config:preview"]);
+/**
+ * Operations an operator holding crossTenant may perform outside their own
+ * tenant. READS ONLY — a founder console legitimately lists every client and
+ * shows what provisioning would do, and legitimately cannot change any of it
+ * from that screen.
+ */
+const CROSS_TENANT_OPERATIONS = Object.freeze(["config:view", "config:preview", "provisioning:view"]);
 
 /**
  * The whole decision, in one place.

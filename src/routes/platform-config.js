@@ -29,20 +29,25 @@
 // it. See platform-config-handlers.js.
 //
 // ── WHAT IS NOT HERE ────────────────────────────────────────────────
-// No provisioning route. No calling route. No dial, no number, no SMS, no
-// webhook egress. There is no import in this file or the handler file that
-// could reach one, and a ratchet asserts it.
+// Provisioning routes PLAN and PREVIEW (P23); none of them performs anything.
+// There is no execute route — not a disabled one, absent — no calling route,
+// no dial, no number, no SMS and no webhook egress. Nothing this file or its
+// handlers import could reach one, and ratchets assert it.
 //
-// All behaviour lives in routes/platform-config-handlers.js, which imports no
-// express and is therefore testable without node_modules.
+// All behaviour lives in routes/platform-config-handlers.js and
+// routes/platform-provisioning-handlers.js, neither of which imports express,
+// so both are testable without node_modules.
 
 const express = require("express");
 const router = express.Router();
 
 const { requireClientAuth, requireLogin } = require("../middleware/auth");
 const { createPlatformConfigHandlers } = require("./platform-config-handlers");
+const { createPlatformProvisioningHandlers } = require("./platform-provisioning-handlers");
 const { createConfigService } = require("../platform/config-service");
+const { createProvisioningService } = require("../platform/provisioning-service");
 const { createInMemoryBlueprintStore } = require("../platform/blueprint-authority");
+const { createInMemoryPlanStore } = require("../platform/provisioning-plan-authority");
 
 /** Exact-string parse. Anything else — "TRUE", "1", "yes", unset — is off. */
 function platformConfigApiEnabled(env = process.env) {
@@ -67,6 +72,16 @@ const service = createConfigService({
   now: () => new Date(),
 });
 const handlers = createPlatformConfigHandlers({ service });
+
+// PROVISIONING (P23). Same gate, same sessions, same tenant rule. It plans and
+// previews; it cannot provision, and there is no execute route to disable.
+const provisioningService = createProvisioningService({
+  configService: service,
+  planStore: createInMemoryPlanStore(),
+  now: () => new Date(),
+  providerRefs: {},   // deployment facts are injected, never invented. Absent ones are reported by name.
+});
+const provisioning = createPlatformProvisioningHandlers({ service: provisioningService });
 
 const BASE = "/api/clients/:clientId/config";
 
@@ -93,6 +108,27 @@ router.post(`${BASE}/proposals`, requireClientAuth, handlers.proposePatch);
 // and config-access only grants config:activate to the operator role.
 router.post(`${BASE}/versions/:versionId/activate`, requireLogin, handlers.activate);
 router.post(`${BASE}/versions/:versionId/restore`, requireLogin, handlers.restore);
+
+// ── Provisioning: plan and preview, never perform ───────────────────
+// Reads are open to any client session for their own configuration; building,
+// validating and approving a plan need the operator, because they describe
+// changes to resources AIDA owns and pays for at a provider.
+router.get(`${BASE}/provisioning/diff`, requireClientAuth, provisioning.getDiff);
+router.get(`${BASE}/provisioning/desired`, requireClientAuth, provisioning.getDesiredPayloads);
+router.get(`${BASE}/provisioning/plans`, requireClientAuth, provisioning.listPlans);
+router.get(`${BASE}/provisioning/plans/:planId`, requireClientAuth, provisioning.getPlan);
+router.get(`${BASE}/provisioning/plans/:planId/actions`, requireClientAuth, provisioning.getPlanActions);
+router.get(`${BASE}/provisioning/readiness`, requireClientAuth, provisioning.readiness);
+router.get(`${BASE}/provisioning/execution-contract`, requireClientAuth, provisioning.executionContract);
+
+router.post(`${BASE}/provisioning/plans`, requireLogin, provisioning.createPlan);
+router.post(`${BASE}/provisioning/plans/:planId/validate`, requireLogin, provisioning.validatePlan);
+router.post(`${BASE}/provisioning/plans/:planId/approve`, requireLogin, provisioning.approvePlan);
+router.post(`${BASE}/provisioning/plans/:planId/cancel`, requireLogin, provisioning.cancelPlan);
+
+// THERE IS NO EXECUTE ROUTE. Not disabled — absent. Adding one is a decision
+// somebody makes in a commit, alongside an executor that satisfies the twelve
+// preconditions in src/platform/provisioning-execution-contract.js.
 
 module.exports = router;
 module.exports.platformConfigApiEnabled = platformConfigApiEnabled;
