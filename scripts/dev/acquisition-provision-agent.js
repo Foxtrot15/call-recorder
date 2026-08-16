@@ -50,6 +50,40 @@ const PREVIEW_ONLY = !process.argv.includes("--create-one-agent");
 const line = (c = "-") => console.log(c.repeat(74));
 const head = (t) => { console.log(""); line("="); console.log(t); line("="); };
 
+const DEV_REF = "wvwemitmmsdytyutaqbm";
+
+/**
+ * A Supabase client built from THIS command's env file, not from process.env.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────
+ * `services/supabase` reads `process.env` at module load. The runner reads an
+ * env FILE. So pointing `ACQUISITION_ENV_FILE` at a dedicated acquisition env —
+ * the documented mechanism, and the one that carries the correct
+ * RETELL_ALLOWED_TAG — left the durable provisioning authority unreadable with
+ * "supabaseUrl is required", because the two never met.
+ *
+ * The one-agent guard refuses to create when the authority cannot be read, so
+ * this was never dangerous. It was worse than dangerous in a quieter way: the
+ * documented mechanism did not work end to end, and the operator had to know to
+ * ALSO export the Supabase values. The step that records the agent after a
+ * successful Retell write has the same dependency, and that is the one place
+ * where a missing variable turns one authorised write into an agent that exists
+ * and is not recorded anywhere.
+ *
+ * REFUSES ANYTHING BUT DEV, before a client is constructed — the same check the
+ * dispatch proofs make, for the same reason.
+ */
+function makeAuthorityClient(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_KEY) return null;
+  if (!env.SUPABASE_URL.includes(DEV_REF)) {
+    throw new Error(`REFUSING: expected the dev project ref ${DEV_REF} in SUPABASE_URL.`);
+  }
+  const { createClient } = require("@supabase/supabase-js");
+  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
+
 /** Load the env file the dev proofs already use. Values are never printed. */
 function loadEnv() {
   const envPath = process.env.ACQUISITION_ENV_FILE
@@ -102,7 +136,7 @@ async function main() {
   try {
     // eslint-disable-next-line global-require
     const authority = require(path.join(ROOT, "src/services/acquisition-resource-authority"));
-    existingResource = await authority.readAcquisitionAgentResource({ env });
+    existingResource = await authority.readAcquisitionAgentResource({ client: makeAuthorityClient(env) });
     authorityReadable = true;
   } catch (err) {
     if (err && err.code !== "MODULE_NOT_FOUND") {
@@ -242,7 +276,7 @@ async function main() {
     // eslint-disable-next-line global-require
     const { recordAcquisitionAgentResource } = require(path.join(ROOT, "src/services/acquisition-resource-authority"));
     await recordAcquisitionAgentResource({
-      env,
+      client: makeAuthorityClient(env),
       providerResourceId: id,
       providerVersion: result.resource ? result.resource.version : null,
       payload: verdict.payload,
