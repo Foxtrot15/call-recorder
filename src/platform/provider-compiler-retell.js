@@ -118,6 +118,12 @@ function buildGeneralPrompt(spec) {
     out.push("");
   }
 
+  if (spec.compliance.callsMayBeRecorded === true && spec.compliance.recordingDisclosure) {
+    out.push("# Recording");
+    out.push(`Early in the call, say: ${spec.compliance.recordingDisclosure}`);
+    out.push("");
+  }
+
   out.push("# When you are not sure");
   const u = spec.knowledge.uncertaintyPolicy;
   if (u === "say_unsure_and_take_message") out.push("Say you are not sure, take a message and tell them somebody will come back.");

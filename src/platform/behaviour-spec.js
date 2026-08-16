@@ -186,6 +186,20 @@ function compileBehaviourSpec(bp) {
       capability: booking.capabilityTarget ?? null,
     },
 
+    // Recording changes what is said in the first ten seconds, so it belongs
+    // in behaviour rather than in an operations config nobody reads aloud.
+    compliance: {
+      callsMayBeRecorded: (bp.compliance || {}).callsMayBeRecorded ?? null,
+      recordingDisclosure: (bp.compliance || {}).recordingDisclosure ?? null,
+      redactSensitiveData: (bp.compliance || {}).redactSensitiveData ?? null,
+      // Retention is a storage instruction, not something the assistant says.
+      // It is carried so one object answers "what did this client agree to",
+      // and the compiler ignores it.
+      transcriptRetention: (bp.compliance || {}).transcriptRetention ?? null,
+      recordingRetention: (bp.compliance || {}).recordingRetention ?? null,
+      privacyPolicyReference: (bp.compliance || {}).privacyPolicyReference ?? null,
+    },
+
     // Capability description only. Compiling a spec authorises no call, and the
     // spec cannot express permission — there is nowhere to put it.
     outbound: {

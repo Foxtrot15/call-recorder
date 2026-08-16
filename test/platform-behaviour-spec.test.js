@@ -70,14 +70,40 @@ describe("behaviour spec — no provider identifier can reach it", () => {
     /https?:\/\//i,
   ];
 
+  /**
+   * The URL check is about PROVIDER endpoints — a webhook, an API base. One
+   * field legitimately holds a URL that belongs to the business rather than to
+   * a vendor, and it is named here rather than the pattern being loosened,
+   * so a webhook URL appearing anywhere else still fails.
+   */
+  const BUSINESS_OWNED_URL_FIELDS = ["compliance.privacyPolicyReference"];
+
+  const withoutBusinessUrls = (spec) => {
+    const copy = JSON.parse(JSON.stringify(spec));
+    for (const path of BUSINESS_OWNED_URL_FIELDS) {
+      const parts = path.split(".");
+      const last = parts.pop();
+      const parent = parts.reduce((acc, k) => (acc ? acc[k] : undefined), copy);
+      if (parent) delete parent[last];
+    }
+    return copy;
+  };
+
   it("holds none of them for any fixture", () => {
     for (const [clientId, make] of Object.entries(FIXTURE_CLIENTS)) {
       const { spec } = compile(make());
-      const json = JSON.stringify(spec);
+      const json = JSON.stringify(withoutBusinessUrls(spec));
       for (const pattern of PROVIDER_PATTERNS) {
         assert.ok(!pattern.test(json), `${clientId}: spec matched ${pattern}`);
       }
     }
+  });
+
+  it("still catches a URL smuggled into any other field", () => {
+    const bp = locksmithB();
+    bp.knowledge.pricingWording = "See https://api.retellai.com/v2 for pricing.";
+    const json = JSON.stringify(withoutBusinessUrls(compile(bp).spec));
+    assert.ok(/https?:\/\//i.test(json), "removing the privacy URL must not blind the check");
   });
 
   it("holds none of them even when the blueprint smuggles one into free text", () => {

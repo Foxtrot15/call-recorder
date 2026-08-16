@@ -131,6 +131,15 @@ function locksmithA() {
 
   bp.voice = { profileRef: "warm_female_au", language: "en-AU", pronunciationHints: [], tone: "warm, calm, unhurried" };
 
+  bp.compliance = {
+    callsMayBeRecorded: false,
+    recordingDisclosure: null,
+    transcriptRetention: "keep_12_months",
+    recordingRetention: null,
+    redactSensitiveData: true,
+    privacyPolicyReference: null,
+  };
+
   bp.outbound = { ...bp.outbound, enabled: false };
 
   bp.integrations = [
@@ -246,6 +255,15 @@ function locksmithB() {
   };
 
   bp.voice = { profileRef: "neutral_professional_au", language: "en-AU", pronunciationHints: [{ term: "Southbank", hint: "SOUTH-bank" }], tone: "professional, precise" };
+
+  bp.compliance = {
+    callsMayBeRecorded: true,
+    recordingDisclosure: "Just so you know, this call is recorded for quality and training.",
+    transcriptRetention: "keep_12_months",
+    recordingRetention: "keep_6_months",
+    redactSensitiveData: true,
+    privacyPolicyReference: "https://example.invalid/southbank/privacy",
+  };
 
   bp.outbound = { ...bp.outbound, enabled: false };
 
@@ -376,6 +394,15 @@ function plumberC() {
 
   bp.voice = { profileRef: "warm_female_au", language: "en-AU", pronunciationHints: [{ term: "Indooroopilly", hint: "in-doo-roo-PILL-ee" }], tone: "friendly, reassuring" };
 
+  bp.compliance = {
+    callsMayBeRecorded: true,
+    recordingDisclosure: "This call is recorded so we get the job details right.",
+    transcriptRetention: "keep_6_months",
+    recordingRetention: "keep_3_months",
+    redactSensitiveData: true,
+    privacyPolicyReference: null,
+  };
+
   bp.outbound = { ...bp.outbound, enabled: false };
 
   bp.integrations = [
@@ -444,6 +471,7 @@ function garageDoorD() {
 
   bp.booking = { ...bp.booking, enabled: false };
   bp.voice = { profileRef: "neutral_male_au", language: "en-AU", pronunciationHints: [], tone: "plain, practical" };
+  bp.compliance = { callsMayBeRecorded: false, recordingDisclosure: null, transcriptRetention: "keep_3_months", recordingRetention: null, redactSensitiveData: true, privacyPolicyReference: null };
   bp.outbound = { ...bp.outbound, enabled: false };
   bp.integrations = [
     { capability: "sms", enabled: true, adapterRef: "sms_default", notes: null },

@@ -92,6 +92,19 @@ const UNCERTAINTY_POLICIES = Object.freeze([
 
 const DAYS = Object.freeze(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]);
 
+/**
+ * How long a client keeps what was said. Platform-owned because retention is a
+ * compliance position rather than a preference, and because "keep forever" must
+ * be a deliberate choice with a name rather than the absence of one.
+ */
+const RETENTION_PERIODS = Object.freeze([
+  "keep_indefinitely_until_changed",
+  "keep_12_months",
+  "keep_6_months",
+  "keep_3_months",
+  "delete_after_summary",
+]);
+
 const BLUEPRINT_STATUSES = Object.freeze(["draft", "validated", "approved", "active", "superseded"]);
 
 /**
@@ -246,6 +259,18 @@ function emptyBlueprint({ clientId = null, vertical = null } = {}) {
       language: "en-AU",
       pronunciationHints: [],  // { term, hint }
       tone: null,
+    },
+
+    // Recording and retention. Here rather than in an operations config
+    // because whether a call is recorded changes what the assistant SAYS in
+    // its first ten seconds, and that is this object's subject.
+    compliance: {
+      callsMayBeRecorded: null,
+      recordingDisclosure: null,   // the words said aloud, required if recorded
+      transcriptRetention: null,
+      recordingRetention: null,
+      redactSensitiveData: null,
+      privacyPolicyReference: null,
     },
 
     // CAPABILITY ONLY. Never permission — see the header.
@@ -517,6 +542,27 @@ function validateBlueprint(bp) {
     }
   }
 
+  // ── compliance ──
+  const comp = bp.compliance;
+  if (!isObj(comp)) err("compliance", "required");
+  else {
+    if (!isBool(comp.callsMayBeRecorded)) {
+      err("compliance.callsMayBeRecorded", "required boolean — recording is not a question to leave unanswered");
+    } else if (comp.callsMayBeRecorded === true && !isStr(comp.recordingDisclosure)) {
+      // Recording a caller without telling them is the compliance failure that
+      // is invisible until it is a complaint.
+      err("compliance.recordingDisclosure", "required when calls are recorded — the caller has to be told, in words");
+    }
+    for (const field of ["transcriptRetention", "recordingRetention"]) {
+      if (comp[field] != null && !RETENTION_PERIODS.includes(comp[field])) {
+        err(`compliance.${field}`, `one of ${RETENTION_PERIODS.join(", ")}`);
+      }
+    }
+    if (comp.redactSensitiveData != null && !isBool(comp.redactSensitiveData)) {
+      err("compliance.redactSensitiveData", "must be boolean");
+    }
+  }
+
   // ── outbound: capability only ──
   const ob = bp.outbound;
   if (!isObj(ob)) err("outbound", "required");
@@ -544,7 +590,7 @@ function validateBlueprint(bp) {
   // ── extensions: bounded, and never load-bearing ──
   if (!isObj(bp.extensions)) err("extensions", "must be an object");
   else {
-    const reserved = ["identity", "services", "serviceArea", "hours", "callHandling", "knowledge", "booking", "voice", "outbound", "integrations", "metadata", "schemaVersion"];
+    const reserved = ["identity", "services", "serviceArea", "hours", "callHandling", "knowledge", "booking", "voice", "compliance", "outbound", "integrations", "metadata", "schemaVersion"];
     for (const key of Object.keys(bp.extensions)) {
       if (reserved.includes(key)) err(`extensions.${key}`, "reserved — this would be an end-run around a validated field");
     }
@@ -586,5 +632,6 @@ module.exports = {
   CALLER_INFO_FIELDS,
   MANDATORY_PROHIBITED_CLAIMS,
   BLUEPRINT_STATUSES,
+  RETENTION_PERIODS,
   DAYS,
 };
