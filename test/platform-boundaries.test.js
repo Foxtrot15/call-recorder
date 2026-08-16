@@ -202,6 +202,17 @@ const LAYER = Object.freeze({
   "provider-compiler-retell.js": 3,
   "client-cli.js": 4,
   "clients.js": 0, // fixtures: configuration data
+
+  // ── the UI presentation layer (P29-P35) ──
+  // Layer 4 for the same reason the CLIs are: it composes the layers below to
+  // show a person the result. It is not domain, it decides nothing about a
+  // business, and it is legitimately allowed to read the compiler's output
+  // because displaying it is the entire job. Nothing at layer 0-2 may import
+  // any of these, which the downward rule already enforces.
+  "ui-vocabulary.js": 4,
+  "ui-diff.js": 4,
+  "ui-fields.js": 4,
+  "ui-view-models.js": 4,
 });
 
 const DOMAIN_MAX_LAYER = 2;
