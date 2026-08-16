@@ -42,10 +42,23 @@ const keyOf = (r) => `${r.purpose}:${r.resourceType}`;
  * Deliberately narrow: the diff must not depend on the whole row shape.
  */
 function readCurrent(row) {
+  // Normalise FIRST, then build the key from the normalised values.
+  //
+  // These rows arrive in two shapes: camelCase from a domain object, and
+  // snake_case straight from provider_resources. Computing the key before
+  // normalising produced "receptionist_agent:undefined" for every real
+  // database row — so a client who already had resources planned as CREATE
+  // plus a phantom RETIRE, which is the duplicate-resource case. Caught by
+  // the fake end-to-end run, where the payload hashes matched perfectly and
+  // the diff still refused to be a no-op.
+  const purpose = row.purpose;
+  const resourceType = row.resourceType ?? row.resource_type ?? null;
+  const metadata = row.providerMetadata ?? row.provider_metadata ?? null;
+
   return {
-    key: keyOf(row),
-    purpose: row.purpose,
-    resourceType: row.resourceType ?? row.resource_type,
+    key: `${purpose}:${resourceType}`,
+    purpose,
+    resourceType,
     clientId: row.clientId ?? row.client_id,
     provider: row.provider,
     providerResourceId: row.providerResourceId ?? row.provider_resource_id ?? null,
@@ -55,9 +68,9 @@ function readCurrent(row) {
     // What AIDA believes about the last provisioning attempt. Absent means
     // nobody recorded one, which is itself a reason not to trust the row.
     lastOutcome: row.lastOutcome ?? row.last_outcome ?? null,
-    configVersion: row.configVersion ?? (row.providerMetadata && row.providerMetadata.configVersion) ?? null,
-    behaviourHash: row.behaviourHash ?? (row.providerMetadata && row.providerMetadata.behaviourHash) ?? null,
-    producedBy: (row.providerMetadata && row.providerMetadata.producedBy) ?? null,
+    configVersion: row.configVersion ?? (metadata && metadata.configVersion) ?? null,
+    behaviourHash: row.behaviourHash ?? (metadata && metadata.behaviourHash) ?? null,
+    producedBy: (metadata && metadata.producedBy) ?? null,
   };
 }
 
