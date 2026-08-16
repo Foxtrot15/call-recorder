@@ -32,20 +32,29 @@ const { stableStringify } = require("./behaviour-spec");
 
 const RETELL_COMPILER_VERSION = "aida-retell-compiler-2026-08-16";
 
+/** A Retell agent answers OR calls. It is never both, and the opening differs. */
+const CALL_DIRECTIONS = Object.freeze(["inbound", "outbound"]);
+
 const line = (s) => (s === null || s === undefined || s === "" ? null : String(s));
 
 /** Human-readable prompt sections, assembled from the spec in a fixed order. */
-function buildGeneralPrompt(spec) {
+function buildGeneralPrompt(spec, direction) {
   const b = spec.business;
   const a = spec.assistant;
   const out = [];
 
   out.push("# Who you are");
   out.push(
-    `You are ${a.name || "the assistant"}, an AI assistant answering the telephone for ` +
+    `You are ${a.name || "the assistant"}, an AI assistant ` +
+      (direction === "outbound" ? "telephoning people on behalf of " : "answering the telephone for ") +
       `${b.tradingName || b.legalName || "this business"}.`,
   );
-  out.push("If anyone asks whether you are a person, a robot or AI, say plainly that you are an AI assistant. Never imply you are human.");
+  // PLATFORM POLICY, both directions, every client. Assembled from constants:
+  // no blueprint field feeds this line, so no configuration can remove it.
+  out.push("If anyone asks whether you are a person, a real person, a human, a robot, a bot, a machine, a recording or AI — at any point in the call — say plainly and immediately that you are an AI assistant. Never claim to be human. Never dodge the question, and never change the subject instead of answering it.");
+  if (direction === "outbound") {
+    out.push("Say in your opening that you are an AI assistant. This is not optional and does not depend on being asked.");
+  }
   if (b.description) out.push(b.description);
   out.push("");
 
@@ -157,24 +166,39 @@ function buildGeneralPrompt(spec) {
 }
 
 /**
- * The LITERAL first sentence of the call.
+ * The LITERAL first sentence of the call. Direction decides the rule, and the
+ * rule is the founder ruling of 2026-08-16.
  *
- * `greeting.style` is an instruction to the model ("Warm and brief. Name the
- * business, say you are an AI assistant") and belongs in the prompt, where it
- * already appears. Using it here would have the assistant open every call by
- * reading its own stage directions aloud.
+ * `greeting.style` is never used here. It is an instruction to the model
+ * ("Warm and brief. Name the business…") and belongs in the prompt, where it
+ * already appears. Speaking it would open every call with stage directions.
  *
- * Constructed from identity rather than taken from configuration, so the AI
- * disclosure is in the first sentence of every call for every client. A client
- * who wants different opening words is asking for a schema change that goes
- * through the same approval path as anything else — not a free-text field that
- * can quietly drop the disclosure.
+ * ── INBOUND ─────────────────────────────────────────────────────────
+ * The caller rang THIS business. They get the business's own greeting —
+ * "Northside Lock and Key, this is Mel, how can I help?" — and no forced AI
+ * disclosure, exactly as the shipped receptionist behaves today. If they ask,
+ * the assistant answers truthfully; that lives in the prompt and cannot be
+ * configured away.
+ *
+ * ── OUTBOUND ────────────────────────────────────────────────────────
+ * AIDA telephoned a stranger. It discloses in the opening, and the disclosure
+ * clause is ASSEMBLED FROM CONSTANTS HERE — there is no blueprint field, no
+ * patch path and no argument that feeds it. That is what makes it
+ * non-disableable rather than merely mandatory.
  */
-function buildBeginMessage(spec) {
+function buildBeginMessage(spec, direction) {
   const b = spec.business;
   const name = b.tradingName || b.legalName || "the business";
   const who = spec.assistant.name || "an assistant";
-  return `Hi, you've reached ${name}. This is ${who}, an AI assistant. How can I help?`;
+
+  if (direction === "outbound") {
+    // Platform-owned. Client identity is interpolated; the disclosure is not.
+    return `Hi, this is ${who}, an AI assistant calling on behalf of ${name}. Do you have a moment?`;
+  }
+
+  // Inbound: the client's own words if they chose any.
+  if (spec.greeting.inboundLine) return spec.greeting.inboundLine;
+  return `Thanks for calling ${name}, this is ${who}. How can I help?`;
 }
 
 /**
@@ -212,9 +236,13 @@ function buildAnalysisFields(spec) {
 /**
  * @param {object} spec         a compiled behaviour spec
  * @param {object} providerRefs { llmId, voiceId, webhookUrl, agentNamePrefix }
+ * @param {string} direction     "inbound" (default) or "outbound"
  */
-function compileRetellPreview({ spec, providerRefs = {} } = {}) {
+function compileRetellPreview({ spec, providerRefs = {}, direction = "inbound" } = {}) {
   if (!spec || typeof spec !== "object") throw new Error("compileRetellPreview requires a behaviour spec");
+  if (!CALL_DIRECTIONS.includes(direction)) {
+    throw new Error(`compileRetellPreview direction must be one of ${CALL_DIRECTIONS.join(", ")}`);
+  }
 
   const unresolved = [];
   const need = (value, name) => {
@@ -223,8 +251,8 @@ function compileRetellPreview({ spec, providerRefs = {} } = {}) {
   };
 
   const responseEngine = {
-    general_prompt: buildGeneralPrompt(spec),
-    begin_message: buildBeginMessage(spec),
+    general_prompt: buildGeneralPrompt(spec, direction),
+    begin_message: buildBeginMessage(spec, direction),
     default_dynamic_variables: {},
     general_tools: [],
   };
@@ -233,7 +261,7 @@ function compileRetellPreview({ spec, providerRefs = {} } = {}) {
   const prefix = providerRefs.agentNamePrefix || "aida";
 
   const agent = {
-    agent_name: `${prefix}-${clientId || "unknown"}-v${spec.sourceBlueprint ? spec.sourceBlueprint.configVersion : 0}`,
+    agent_name: `${prefix}-${clientId || "unknown"}-${direction}-v${spec.sourceBlueprint ? spec.sourceBlueprint.configVersion : 0}`,
     response_engine: { type: "retell-llm", llm_id: need(providerRefs.llmId, "llmId") },
     voice_id: need(providerRefs.voiceId, "voiceId"),
     language: spec.assistant.language || "en-AU",
@@ -259,6 +287,7 @@ function compileRetellPreview({ spec, providerRefs = {} } = {}) {
 
   return Object.freeze({
     compilerVersion: RETELL_COMPILER_VERSION,
+    direction,
     responseEngine: Object.freeze(responseEngine),
     agent: Object.freeze(agent),
     responseEngineHash,
@@ -269,4 +298,4 @@ function compileRetellPreview({ spec, providerRefs = {} } = {}) {
   });
 }
 
-module.exports = { compileRetellPreview, RETELL_COMPILER_VERSION };
+module.exports = { compileRetellPreview, RETELL_COMPILER_VERSION, CALL_DIRECTIONS };

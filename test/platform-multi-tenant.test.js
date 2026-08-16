@@ -407,14 +407,28 @@ describe("multi-tenant — no client can configure a compliance authority", () =
     }
   });
 
-  it("makes every client's assistant disclose it is AI, in the first sentence", async () => {
+  it("makes every client's assistant answer truthfully when asked, both directions", async () => {
     const { authority } = await threeTenants();
     for (const { clientId } of TENANTS) {
       const active = await authority.getActiveVersion(clientId);
       const { spec } = compileBehaviourSpec(active.version);
-      assert.equal(spec.assistant.disclosesAiWhenAsked, true, clientId);
-      const out = compileRetellPreview({ spec, providerRefs: REFS[clientId] });
-      assert.match(out.responseEngine.begin_message, /AI assistant/i, clientId);
+      assert.equal(spec.disclosure.whenAsked, true, clientId);
+      for (const direction of ["inbound", "outbound"]) {
+        const out = compileRetellPreview({ spec, providerRefs: REFS[clientId], direction });
+        assert.match(out.responseEngine.general_prompt, /say plainly and immediately that you are an AI assistant/i, `${clientId} ${direction}`);
+      }
+    }
+  });
+
+  it("discloses in the OUTBOUND opening for every client, and forces nothing inbound", async () => {
+    const { authority } = await threeTenants();
+    for (const { clientId } of TENANTS) {
+      const active = await authority.getActiveVersion(clientId);
+      const { spec } = compileBehaviourSpec(active.version);
+      assert.equal(spec.disclosure.inOpening.outbound, true, clientId);
+      assert.equal(spec.disclosure.inOpening.inbound, false, clientId);
+      const outbound = compileRetellPreview({ spec, providerRefs: REFS[clientId], direction: "outbound" });
+      assert.match(outbound.responseEngine.begin_message, /AI assistant/i, clientId);
     }
   });
 });

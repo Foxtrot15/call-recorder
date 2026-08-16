@@ -37,6 +37,13 @@ const sortedStrings = (list) => (Array.isArray(list) ? [...list].map(String).sor
 
 const BEHAVIOUR_SPEC_VERSION = "aida-behaviour-spec-2026-08-16";
 
+/**
+ * The founder ruling this spec encodes. Versioned so a compiled spec records
+ * WHICH disclosure policy it was built under — a later ruling produces a
+ * different hash rather than silently reinterpreting old approvals.
+ */
+const DISCLOSURE_POLICY_VERSION = "aida-disclosure-policy-2026-08-16";
+
 /** JSON with recursively sorted keys, so property order cannot affect the hash. */
 function stableStringify(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -99,9 +106,35 @@ function compileBehaviourSpec(bp) {
     },
 
     greeting: {
+      // The literal opening words for an INBOUND call, if the client chose
+      // them. Null means "construct a neutral one from identity".
+      inboundLine: ch.greetingLine ?? null,
       style: ch.greetingStyle ?? null,
       namesBusiness: true,
       namesAssistant: Boolean(id.assistantName),
+    },
+
+    // ── AI DISCLOSURE — PLATFORM POLICY, FOUNDER RULING 2026-08-16 ──
+    //
+    // Not derived from the blueprint, and there is no blueprint field that
+    // feeds it. A client cannot configure any part of this, and a patch
+    // cannot reach it, because it is computed here from constants.
+    //
+    //   whenAsked   ALWAYS. If a caller asks whether they are speaking to a
+    //               person, a robot, a bot or AI, the assistant says plainly
+    //               that it is an AI assistant. Both directions, every client.
+    //
+    //   inOpening   OUTBOUND ONLY. AIDA telephoning a stranger discloses in
+    //               the opening — that was already founder policy for the
+    //               acquisition agent. INBOUND does NOT: somebody who rang a
+    //               locksmith gets the locksmith's own greeting, exactly as
+    //               the shipped receptionist does today. Forcing disclosure
+    //               into an inbound first sentence would have silently changed
+    //               what real callers hear.
+    disclosure: {
+      whenAsked: true,
+      inOpening: { inbound: false, outbound: true },
+      policyRef: DISCLOSURE_POLICY_VERSION,
     },
 
     services,
@@ -234,4 +267,4 @@ function compileBehaviourSpec(bp) {
   return Object.freeze({ spec: Object.freeze(spec), behaviourHash });
 }
 
-module.exports = { compileBehaviourSpec, stableStringify, BEHAVIOUR_SPEC_VERSION };
+module.exports = { compileBehaviourSpec, stableStringify, BEHAVIOUR_SPEC_VERSION, DISCLOSURE_POLICY_VERSION };

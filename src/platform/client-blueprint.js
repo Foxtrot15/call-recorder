@@ -222,7 +222,13 @@ function emptyBlueprint({ clientId = null, vertical = null } = {}) {
     },
 
     callHandling: {
-      greetingStyle: null,     // free text, reviewed
+      // The LITERAL opening words for an INBOUND call, if the client has
+      // chosen them. Founder ruling (P14): an inbound receptionist keeps its
+      // own greeting — "Northside Lock and Key, this is Mel, how can I help?"
+      // — and is NOT forced to disclose AI in the first sentence. If asked, it
+      // still answers truthfully; that part is platform-owned and unremovable.
+      greetingLine: null,
+      greetingStyle: null,     // an INSTRUCTION to the model, never spoken verbatim
       collectAlways: [],       // CALLER_INFO_FIELDS
       collectByService: {},    // serviceId -> CALLER_INFO_FIELDS[]
       additionalQuestions: [], // { id, question, appliesToServices[] }

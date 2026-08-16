@@ -34,8 +34,8 @@ const FAKE_REFS = Object.freeze({
   agentNamePrefix: "aida",
 });
 
-const preview = (make = locksmithA, refs = FAKE_REFS) =>
-  compileRetellPreview({ spec: compileBehaviourSpec(make()).spec, providerRefs: refs });
+const preview = (make = locksmithA, refs = FAKE_REFS, direction = "inbound") =>
+  compileRetellPreview({ spec: compileBehaviourSpec(make()).spec, providerRefs: refs, direction });
 
 describe("retell compiler — it compiles every client through one path", () => {
   it("produces a payload for all four fixtures", () => {
@@ -61,11 +61,19 @@ describe("retell compiler — it compiles every client through one path", () => 
     assert.deepEqual(out.agent.response_engine, { type: "retell-llm", llm_id: FAKE_REFS.llmId });
   });
 
-  it("names the agent after the client and its configuration version", () => {
+  it("names the agent after the client, its direction and its configuration version", () => {
     const bp = plumberC();
     bp.metadata.configVersion = 4;
-    const out = compileRetellPreview({ spec: compileBehaviourSpec(bp).spec, providerRefs: FAKE_REFS });
-    assert.equal(out.agent.agent_name, "aida-riverside_plumbing-v4");
+    const spec = compileBehaviourSpec(bp).spec;
+    assert.equal(compileRetellPreview({ spec, providerRefs: FAKE_REFS }).agent.agent_name, "aida-riverside_plumbing-inbound-v4");
+    assert.equal(compileRetellPreview({ spec, providerRefs: FAKE_REFS, direction: "outbound" }).agent.agent_name, "aida-riverside_plumbing-outbound-v4");
+  });
+
+  it("refuses a direction nobody defined, rather than guessing one", () => {
+    const spec = compileBehaviourSpec(plumberC()).spec;
+    for (const bad of ["both", "INBOUND", "", null]) {
+      assert.throws(() => compileRetellPreview({ spec, providerRefs: FAKE_REFS, direction: bad }), /direction/);
+    }
   });
 });
 
@@ -125,13 +133,18 @@ describe("retell compiler — preview means preview", () => {
     assert.deepEqual(imports.sort(), ["./behaviour-spec", "crypto"]);
   });
 
-  it("exports nothing that could send", () => {
+  it("exports no FUNCTION that could send", () => {
+    // Verb forms against callables. A bare substring sweep flagged the
+    // CALL_DIRECTIONS vocabulary, which is a noun and cannot do anything —
+    // the same self-catching shape the P8 ratchets had to be scoped out of.
     const module = require("../src/platform/provider-compiler-retell");
-    for (const name of Object.keys(module)) {
-      assert.ok(
-        !/(send|post|create|provision|deploy|publish|dial|call|update|delete)/i.test(name),
-        `the compiler must not export "${name}"`,
-      );
+    const ACTING = /^(send|post|create|provision|deploy|publish|dial|call|update|delete)([A-Z]|$)/;
+    for (const [name, value] of Object.entries(module)) {
+      if (typeof value !== "function") continue;
+      assert.ok(!ACTING.test(name), `the compiler must not export a function called "${name}"`);
+    }
+    for (const bad of ["sendPayload", "createAgent", "dialOut", "publish"]) {
+      assert.ok(ACTING.test(bad), `the check would not catch "${bad}"`);
     }
   });
 
@@ -210,13 +223,33 @@ describe("retell compiler — the prompt says what the blueprint said", () => {
     }
   });
 
-  it("makes the first spoken sentence disclose AI, for every client", () => {
-    // begin_message is the literal opening line. The disclosure has to be in
-    // it, not merely somewhere in a prompt the model may paraphrase.
+  it("makes the OUTBOUND opening disclose AI, for every client", () => {
+    // Founder ruling 2026-08-16. Outbound telephones a stranger, so the
+    // disclosure is in the opening and is assembled from constants here.
     for (const [clientId, make] of Object.entries(FIXTURE_CLIENTS)) {
-      const out = preview(make);
+      const out = preview(make, FAKE_REFS, "outbound");
       assert.match(out.responseEngine.begin_message, /AI assistant/i, clientId);
       assert.ok(out.responseEngine.begin_message.includes(make().identity.tradingName), clientId);
+    }
+  });
+
+  it("forces NO disclosure into an inbound opening", () => {
+    for (const [clientId, make] of Object.entries(FIXTURE_CLIENTS)) {
+      const bp = make();
+      bp.callHandling.greetingLine = `${bp.identity.tradingName}, how can I help?`;
+      const out = compileRetellPreview({ spec: compileBehaviourSpec(bp).spec, providerRefs: FAKE_REFS, direction: "inbound" });
+      assert.equal(out.responseEngine.begin_message, bp.callHandling.greetingLine, clientId);
+      assert.ok(!/AI assistant/i.test(out.responseEngine.begin_message), clientId);
+    }
+  });
+
+  it("still tells every assistant, both directions, to answer truthfully when asked", () => {
+    for (const [clientId, make] of Object.entries(FIXTURE_CLIENTS)) {
+      for (const direction of ["inbound", "outbound"]) {
+        const out = preview(make, FAKE_REFS, direction);
+        assert.match(out.responseEngine.general_prompt, /say plainly and immediately that you are an AI assistant/i, `${clientId} ${direction}`);
+        assert.match(out.responseEngine.general_prompt, /Never claim to be human/i, `${clientId} ${direction}`);
+      }
     }
   });
 

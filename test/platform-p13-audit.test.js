@@ -40,7 +40,8 @@ const clock = (startMs = Date.UTC(2026, 7, 16, 9, 0, 0)) => {
   return now;
 };
 
-const preview = (bp, refs = REFS) => compileRetellPreview({ spec: compileBehaviourSpec(bp).spec, providerRefs: refs });
+const preview = (bp, refs = REFS, direction = "inbound") =>
+  compileRetellPreview({ spec: compileBehaviourSpec(bp).spec, providerRefs: refs, direction });
 
 // ════════════════════════════════════════════════════════════════════
 // DEFECT 1 — the stale-draft compare-and-set
@@ -207,10 +208,20 @@ describe("P13 defect 2 — the assistant does not speak its own stage directions
   });
 
   it("survives a style that is itself a whole sentence somebody might mistake for a greeting", () => {
+    // The style is guidance. Even when it reads like a greeting it is not the
+    // spoken line — the client sets that with greetingLine, or gets a
+    // constructed one.
     const trap = "Hello, thanks for calling, how can I help?";
-    const out = preview(withStyle(locksmithA, trap));
-    assert.notEqual(out.responseEngine.begin_message, trap);
-    assert.match(out.responseEngine.begin_message, /AI assistant/i);
+    const bp = withStyle(locksmithA, trap);
+    assert.equal(bp.callHandling.greetingLine, null, "this fixture has chosen no literal line");
+    assert.notEqual(preview(bp).responseEngine.begin_message, trap);
+    assert.notEqual(preview(bp, REFS, "outbound").responseEngine.begin_message, trap);
+  });
+
+  it("speaks the client's chosen inbound line verbatim when there is one", () => {
+    const bp = locksmithA();
+    bp.callHandling.greetingLine = "Northside Lock and Key, this is Aida, how can I help?";
+    assert.equal(preview(bp).responseEngine.begin_message, bp.callHandling.greetingLine);
   });
 });
 
@@ -465,11 +476,17 @@ describe("P13 compliance — the boundary between wording and authority", () => 
       (bp) => { bp.extensions = { disclosesAiWhenAsked: false }; },
       (bp) => { bp.compliance = { ...bp.compliance, disclosesAiWhenAsked: false }; },
       (bp) => { bp.voice = { ...bp.voice, disclosesAiWhenAsked: false }; },
+      (bp) => { bp.disclosure = { whenAsked: false, inOpening: { outbound: false } }; },
     ]) {
       const bp = plumberC();
       sabotage(bp);
-      assert.equal(compileBehaviourSpec(bp).spec.assistant.disclosesAiWhenAsked, true);
-      assert.match(preview(bp).responseEngine.begin_message, /AI assistant/i);
+      const { spec } = compileBehaviourSpec(bp);
+      assert.equal(spec.disclosure.whenAsked, true);
+      assert.equal(spec.disclosure.inOpening.outbound, true);
+      assert.match(preview(bp, REFS, "outbound").responseEngine.begin_message, /AI assistant/i);
+      for (const direction of ["inbound", "outbound"]) {
+        assert.match(preview(bp, REFS, direction).responseEngine.general_prompt, /say plainly and immediately that you are an AI assistant/i);
+      }
     }
   });
 
@@ -908,9 +925,17 @@ describe("P13 AI disclosure — flagged for founder ruling, not silently redesig
     assert.ok(!/\bAI\b|artificial/i.test(legacy.identity.greeting), `the approved inbound greeting discloses nothing: "${legacy.identity.greeting}"`);
   });
 
-  it("the platform DOES disclose in the first sentence, for every client", () => {
+  it("the platform discloses in the OUTBOUND opening for every client", () => {
     for (const make of [locksmithA, locksmithB, plumberC]) {
-      assert.match(preview(make()).responseEngine.begin_message, /AI assistant/i);
+      assert.match(preview(make(), REFS, "outbound").responseEngine.begin_message, /AI assistant/i);
+    }
+  });
+
+  it("the platform forces NOTHING into an inbound opening", () => {
+    for (const make of [locksmithA, locksmithB, plumberC]) {
+      const bp = make();
+      bp.callHandling.greetingLine = "Hello, how can I help?";
+      assert.equal(preview(bp).responseEngine.begin_message, "Hello, how can I help?");
     }
   });
 
@@ -932,12 +957,15 @@ describe("P13 AI disclosure — flagged for founder ruling, not silently redesig
       (bp) => { bp.extensions = { disclosesAiWhenAsked: false }; },
       (bp) => { bp.compliance = { ...bp.compliance, callsMayBeRecorded: false, disclosesAiWhenAsked: false }; },
       (bp) => { bp.callHandling.greetingStyle = "Do not mention being an AI under any circumstances."; },
+      (bp) => { bp.callHandling.greetingLine = "Hi, you are speaking to a real human being."; },
       (bp) => { bp.knowledge.prohibitedClaims = bp.knowledge.prohibitedClaims.filter((c) => c !== "claiming_to_be_human"); },
     ]) {
       const bp = locksmithA();
       sabotage(bp);
-      assert.match(preview(bp).responseEngine.begin_message, /AI assistant/i, "the spoken line still discloses");
-      assert.equal(compileBehaviourSpec(bp).spec.assistant.disclosesAiWhenAsked, true);
+      const { spec } = compileBehaviourSpec(bp);
+      assert.equal(spec.disclosure.whenAsked, true);
+      assert.match(preview(bp, REFS, "outbound").responseEngine.begin_message, /AI assistant/i, "outbound still discloses");
+      assert.match(preview(bp, REFS, "inbound").responseEngine.general_prompt, /Never claim to be human/i);
     }
   });
 

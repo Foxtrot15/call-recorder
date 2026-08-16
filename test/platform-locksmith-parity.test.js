@@ -301,11 +301,35 @@ describe("locksmith parity — what the assistant collects", () => {
     }
   });
 
-  it("carries the greeting, and says that the spoken line now discloses AI", () => {
+  it("carries the legacy greeting VERBATIM as the inbound opening line", () => {
+    // Founder ruling 2026-08-16: an inbound receptionist keeps its own words.
     const legacy = legacyProfile();
     const { blueprint, notes } = migrated();
-    assert.equal(blueprint.callHandling.greetingStyle, legacy.identity.greeting);
-    assert.ok(notes.some((n) => n.path === "identity.greeting" && /AI/.test(n.message)));
+    assert.equal(blueprint.callHandling.greetingLine, legacy.identity.greeting);
+    assert.equal(blueprint.callHandling.greetingStyle, null, "it is words, not a style instruction");
+    assert.ok(notes.some((n) => n.path === "identity.greeting" && /verbatim/i.test(n.message)));
+  });
+
+  it("speaks a byte-identical inbound opening to the shipped receptionist", () => {
+    const legacy = legacyProfile();
+    const { blueprint } = migrated();
+    const { spec } = compileBehaviourSpec(blueprint);
+    const inbound = compileRetellPreview({
+      spec, direction: "inbound",
+      providerRefs: { llmId: "l", voiceId: "v", webhookUrl: "https://example.invalid/h" },
+    });
+    assert.equal(inbound.responseEngine.begin_message, legacy.identity.greeting);
+    assert.ok(!/AI assistant/i.test(inbound.responseEngine.begin_message), "no forced inbound disclosure");
+  });
+
+  it("still discloses in the OUTBOUND opening for the same client", () => {
+    const { blueprint } = migrated();
+    const { spec } = compileBehaviourSpec(blueprint);
+    const outbound = compileRetellPreview({
+      spec, direction: "outbound",
+      providerRefs: { llmId: "l", voiceId: "v", webhookUrl: "https://example.invalid/h" },
+    });
+    assert.match(outbound.responseEngine.begin_message, /AI assistant/i);
   });
 });
 

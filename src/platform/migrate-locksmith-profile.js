@@ -288,7 +288,8 @@ function migrateLocksmithProfile(legacy, { vertical = "locksmith" } = {}) {
 
   bp.callHandling = {
     ...bp.callHandling,
-    greetingStyle: L.identity.greeting ?? null,
+    greetingLine: L.identity.greeting ?? null,
+    greetingStyle: null,
     collectAlways,
     collectByService,
     additionalQuestions,
@@ -322,7 +323,11 @@ function migrateLocksmithProfile(legacy, { vertical = "locksmith" } = {}) {
   };
 
   if (isStr(L.identity.greeting)) {
-    note("identity.greeting", "the legacy greeting became greeting STYLE; the spoken opening line is now built by the platform and always discloses that the assistant is AI");
+    // Founder ruling 2026-08-16: an INBOUND receptionist keeps its own opening
+    // words and is not forced to disclose AI in the first sentence. The legacy
+    // greeting is literal words, so it carries across verbatim and the spoken
+    // line is byte-identical to what ships today.
+    note("identity.greeting", "carried verbatim as the inbound opening line — the spoken greeting is unchanged from the legacy receptionist");
   }
   if (L.transfer.collectDetailsFirst != null) {
     drop("transfer.collectDetailsFirst", "collect-before-transfer has no platform equivalent — express it in preTransferWording or an urgency rule", L.transfer.collectDetailsFirst);
