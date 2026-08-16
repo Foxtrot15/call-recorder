@@ -1,7 +1,7 @@
 # AIDA Client Platform
 
 **Status:** built and tested locally on `feature/aida-client-platform`. Nothing
-is deployed. **SQL CREATED — NOT APPLIED ANYWHERE.** No provider resource was
+is deployed. **SQL CREATED (ACP1 + ACP2) — NOT APPLIED ANYWHERE.** No provider resource was
 touched and the real acquisition Retell agent is parked and was not contacted.
 
 ---
@@ -55,11 +55,11 @@ unlisted.
 
 | Layer | Files | May know about a provider? |
 |---|---|---|
-| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `fixtures/clients.js` | No |
-| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js` | No |
+| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `provisioning-model.js`, `provisioning-execution-contract.js`, `fixtures/clients.js` | No |
+| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js` | No |
 | 2 behaviour | `behaviour-spec.js` | No |
-| 3 provider | `provider-compiler-retell.js` | Yes — the only one |
-| 4 tooling | `client-cli.js`, `config-service.js` | Yes — they compose the compiler to show a person its output |
+| 3 provider | `provider-compiler-retell.js`, `provisioning-desired-state.js` | Yes — they build provider payloads |
+| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js` | Yes — they compose the compiler to show a person its output |
 
 ---
 
@@ -550,6 +550,261 @@ it.
 
 ---
 
+
+## Provisioning lifecycle
+
+Two sentences the rest of this section exists to make true:
+
+> **CONFIG ACTIVE** does not mean **PROVIDER UPDATED**.
+>
+> **PROVISIONING PLAN APPROVED** does not mean **PROVIDER MUTATION EXECUTED**.
+
+```
+  ACTIVE CONFIG
+       |
+  DESIRED STATE      what SHOULD exist at the provider   provisioning-desired-state.js
+       |
+  PROVISIONING DIFF  desired vs recorded                 provisioning-diff.js
+       |
+  PROVISIONING PLAN  bound to one exact configuration    provisioning-plan-authority.js
+       |
+  VALIDATE           and re-check staleness
+       |
+  HUMAN REVIEW       a named person reads the actions
+       |
+  APPROVE            binds to the exact plan hash
+       |
+  ── THIS BATCH ENDS HERE ──────────────────────────────────────────
+       |
+  EXECUTION AUTHORITY   provisioning:execute — held by NOBODY
+       |
+  ONE PROVIDER MUTATION does not exist
+```
+
+**There is no executor and no execute endpoint.** Not a disabled one, not a 501
+placeholder — absent. A route that exists and refuses is a route somebody
+eventually makes work in a hurry.
+
+### Resource purposes: reused, not reinvented
+
+Platform provisioning uses the **existing** vocabulary from
+`voice-platform-port.js` — `receptionist_agent`, `receptionist_analysis`,
+`receptionist_knowledge`, `inbound_binding` — with the existing resource types.
+**No new purpose, no widened CHECK, no migration against `provider_resources`.**
+
+The consequence is a feature. `provider_resources` already carries:
+
+```
+pr_one_active_per_purpose
+  UNIQUE (client_id, provider, purpose, resource_type) WHERE active
+```
+
+so if the legacy locksmith compiler and this platform both try to own one
+client's receptionist agent, **the database refuses the second**. A business has
+one receptionist; two systems quietly creating two agents is precisely what that
+index exists to prevent. The diff engine surfaces it as `reconcile_required`
+for a person rather than resolving it.
+
+Acquisition purposes are explicitly forbidden for a client plan. Acquisition is
+AIDA's own outbound activity under the reserved `aida-acquisition` client id.
+
+### What is produced, and what is deliberately not
+
+| Purpose | Type | Produced | Why |
+|---|---|---|---|
+| `receptionist_agent` | `response_engine` | **yes** | the prompt lives here; E-10C established that prompt+agent as one object creates an agent with no brain |
+| `receptionist_agent` | `voice_agent` | **yes** | carries voice and webhook, and *references* the engine |
+| `receptionist_analysis` | `analysis_schema` | no | the provider carries post-call analysis on the agent, not as a separate resource |
+| `receptionist_knowledge` | `knowledge_base` | no | facts compile into the prompt; a second home for a client's words is a second source of truth |
+| `inbound_binding` | `phone_number_binding` | **no — deferred** | a telephone number is a billable, portable, externally visible asset with its own lifecycle. **A plan never silently acquires one**; readiness reports it absent |
+
+### Traceability (P20A)
+
+Every desired resource carries the chain that produced it:
+
+```
+clientId -> configVersion -> behaviourHash -> payloadHash
+```
+
+recorded at execution time into `provider_resources.provider_metadata`, which
+already exists and is bounded — so **config-to-resource traceability needs no
+schema change**.
+
+A resource is never mutated in a way that makes its recorded provenance lie: a
+changed payload is a new `payloadHash` and therefore a new action, never a quiet
+edit under the old provenance. Where an older config produced byte-identical
+output, the diff records a **provenance refresh with `providerMutation: false`**
+— rewriting the resource merely to update its provenance would be a remote write
+with no remote effect.
+
+The agent name is deliberately **not** versioned (`aida-{client}-{direction}`).
+An earlier draft embedded the config version, which made every version bump a
+payload change — turning "nothing the assistant says has changed" into a
+provider write, and destroying the no-op guarantee across versions.
+
+### Diff classifications
+
+| Classification | When |
+|---|---|
+| `create` | no active recorded resource for that purpose and type |
+| `no_change` | recorded payload hash equals desired payload hash |
+| `update` | payload differs and the type is updatable in place |
+| `replace` | payload differs and the type cannot be updated in place |
+| `retire` | an active recorded resource the desired set no longer wants |
+| `reconcile_required` | the recorded state is **not trustworthy** |
+
+Two rules govern the last one:
+
+> **A DATABASE ROW IS NOT PROOF A REMOTE RESOURCE EXISTS.**
+>
+> **UNKNOWN IS NEVER CREATE.**
+
+A recorded row becomes `reconcile_required` — never `create`, never
+`no_change` — when its last provisioning outcome was anything but a definite
+success, when it records no provider resource id, or when another authority
+produced it.
+
+**Dependency cascade:** if the response engine is *replaced* it gets a new
+provider id, so the agent that references it becomes `update` even though its
+own payload is unchanged. Actions are ordered so a dependency precedes what
+references it.
+
+### Ambiguity (P21A)
+
+The acquisition lesson generalised. A create that times out **may have
+succeeded**.
+
+| Outcome | Resource state | May re-create? | Needs a human |
+|---|---|---|---|
+| `definite_success` | recorded | no | no |
+| `definite_failure` | absent | **yes — the only one** | no |
+| `ambiguous` | unknown | **no** | **yes** |
+| `provider_success_persist_failed` | unknown | **no** | **yes** |
+| `durable_exists_provider_unverified` | unknown | **no** | no |
+
+An unrecorded resource that **exists** is far more dangerous than a recorded one
+that does not.
+
+### Reconciliation (P21B)
+
+Read-only, designed now and fed by injected observations until a real provider
+read is authorised: `match`, `drift`, `missing_provider_resource`,
+`unrecorded_provider_resource`, `unknown`, `manual_review_required`.
+
+The distinction that stops a second agent being created: **"could not ask" is
+`unknown`, not "nothing there"**. An unrecorded provider resource is never
+adopted automatically — it may belong to something else entirely.
+
+### Plan lifecycle and its five invariants
+
+`draft → validated → approved` · `cancelled` · `superseded`
+(`executing`, `completed`, `failed`, `unknown` are declared and **unreachable**)
+
+1. **A plan binds to one exact configuration** — client, version, behaviour hash
+   and content hash together.
+2. **If the configuration moves, the plan is stale** and can never execute. It
+   is never silently regenerated — regeneration produces actions nobody
+   approved.
+3. **Approval binds to the exact plan hash**, which covers the actions *and* the
+   configuration binding. Re-checked at approval, not merely at validation.
+4. **Editing is not execution authority.** Build, approve and execute are three
+   separate capabilities.
+5. **Nothing executes.** `assertExecutable` answers a question; `executable` is
+   hardcoded `false` and always carries the blocker `no_executor_exists`.
+
+One open plan per client — a database partial unique index. Two open plans is
+two people about to change the same telephone service.
+
+### Authority
+
+| Capability | operator | client_owner | client_editor | voice_agent |
+|---|---|---|---|---|
+| `provisioning:view` | ✓ | ✓ | ✓ | |
+| `provisioning:create` | ✓ | | | |
+| `provisioning:validate` | ✓ | | | |
+| `provisioning:approve` | ✓ | | | |
+| `provisioning:reconcile` | ✓ | | | |
+| `provisioning:execute` | **nobody** | | | |
+
+A client may **see** what provisioning would do to their own service; they may
+not create, approve or run it, because it changes resources AIDA owns and pays
+for at a provider. Operators may read across tenants (a founder console) and
+**never write** across them.
+
+### Readiness — a view, never authority
+
+`ready` is **hardcoded false**. Not computed, not conditional. There is no input
+that makes it true, because execution does not exist. When it does, the executor
+will ask the plan authority and `config-access` — never this. A test asserts the
+literal.
+
+Dimensions: `client_record`, `configuration`, `provisioning`, `provider`,
+`phone`, `routing`, `integrations`, `compliance`. "Not ready" is useless; "no
+durable clients row, no active configuration, and the voice id is unresolved" is
+a morning's work.
+
+### Client identity — the slug ruling
+
+`clients.slug` is the **single canonical tenant authority**, already resolved
+server-side from a Twilio number or a verified Supabase user. Provisioning
+**never invents a slug from a business name**. A durable `clients` row is
+therefore a **prerequisite**, surfaced as the first readiness dimension, not
+something provisioning creates on the way past.
+
+### Storage
+
+| | |
+|---|---|
+| `provider_resources` | **reused unchanged** — existing purposes, existing types, existing one-active index, provenance in existing `provider_metadata` |
+| `provisioning_plans` (LPM3) | **not reused** — see below |
+| `platform_provisioning_plans` (ACP2) | **new, and NOT APPLIED** |
+
+`provisioning_plans` was assessed properly and does not fit: it carries
+`approved_profile_version` (a *locksmith profile* version), a hard FK to
+`locksmith_onboarding_sessions`, two locksmith template-version columns, and no
+place for the configuration content hash or an approval bound to a plan hash.
+It is also **applied to dev**, and widening a live table to fit a second meaning
+is the change most likely to break the system already depending on it.
+
+### Migration status
+
+| File | Status |
+|---|---|
+| `supabase/sql/acp1_create_client_configuration.sql` | **NOT APPLIED ANYWHERE** |
+| `supabase/sql/acp2_create_platform_provisioning_plans.sql` | **NOT APPLIED ANYWHERE** |
+| `verification/19_acp1_preflight_readonly.sql` · `20_acp1_verify_readonly.sql` | read-only, never run |
+| `verification/21_acp2_preflight_readonly.sql` · `22_acp2_verify_readonly.sql` | read-only, never run |
+
+### Store binding
+
+The application uses the **in-memory** store because ACP1 is unapplied. That is
+a default, not an accident — and **there is no silent fallback**. Requesting
+`postgres` mode refuses outright unless a schema probe confirms ACP1 is present:
+no db handle, no probe, probe says absent, or probe throws all return `ok:false`
+with **no store at all**, never a memory one. A configuration subsystem that
+quietly serves from memory when the database is unavailable answers a business
+telephone with an empty configuration and reports success.
+
+### The future execution contract (P23E)
+
+Twelve ordered preconditions in `provisioning-execution-contract.js` — a module
+that imports nothing. Authority → approved → plan hash exact → configuration
+still exact → tenant/resource ownership → provider tag re-read late → the
+one-active database index → final stop gate → exactly one mutation → durable
+result → ambiguity is unknown → **no automatic retry**.
+
+Borrowed from acquisition because it is generic to one authorised remote write:
+ambiguity is not failure; no auto-retry; provider-success-with-failed-persistence
+is louder; one authorisation spent once; tag re-read late.
+
+**Not** borrowed, because they gate cold-calling a stranger rather than
+configuring a receptionist a business asked for: DNCR washing, suppression
+lists, calling-hours policy, the dial authorisation slip, the global calling
+stop. Importing them would couple the two systems so one's incident stops the
+other.
+
+---
+
 ## What is NOT built
 
 Stated plainly so the next batch can be scoped against it.
@@ -560,10 +815,10 @@ Stated plainly so the next batch can be scoped against it.
   production**, so the HTTP router is still wired to the in-memory store.
 - **No voice configuration agent.** The domain contract exists; the speech
   pipeline does not.
-- **No provisioning.** The compiler builds objects and imports no transport. A
-  compiler that can also send is a compiler that will eventually send by
-  accident, so creating provider resources stays a separate, hand-run,
-  explicitly-authorised act.
+- **No provisioning EXECUTION.** Planning, diffing, approving and previewing
+  all exist (P19–P23). What does not exist is an executor: no code path leads
+  from an approved plan to a provider, there is no execute endpoint, and
+   is held by no role.
 - **No UI.** The CLI and the (gated-off) HTTP API are the only interfaces.
 - **No real adapters.** Every integration adapter is an in-memory fake.
 - **Nothing at runtime reads a blueprint yet.** The configuration router is

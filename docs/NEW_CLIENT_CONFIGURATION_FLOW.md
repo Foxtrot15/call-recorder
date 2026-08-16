@@ -247,6 +247,59 @@ active version or preview. It holds exactly one capability.
 
 ---
 
+## Screen 9 — Provisioning (operator console)
+
+> *"What would change at the provider, and has anybody agreed to it?"*
+
+```
+GET  /api/clients/:clientId/config/provisioning/diff
+GET  /api/clients/:clientId/config/provisioning/desired
+GET  /api/clients/:clientId/config/provisioning/plans
+GET  /api/clients/:clientId/config/provisioning/plans/:planId/actions
+GET  /api/clients/:clientId/config/provisioning/readiness
+GET  /api/clients/:clientId/config/provisioning/execution-contract
+
+POST /api/clients/:clientId/config/provisioning/plans                  operator
+POST /api/clients/:clientId/config/provisioning/plans/:planId/validate operator
+POST /api/clients/:clientId/config/provisioning/plans/:planId/approve  operator
+POST /api/clients/:clientId/config/provisioning/plans/:planId/cancel   operator
+```
+
+A client may **see** what provisioning would do to their own service. Only an
+operator may build, validate or approve a plan.
+
+**Render the actions as a list a person can argue with**, not as JSON. Each
+carries a purpose, a resource type, a classification and a reason.
+
+| Classification | Show it as |
+|---|---|
+| `create` | "will be created" |
+| `no_change` | "already correct — nothing will happen" |
+| `update` | "will be changed" |
+| `replace` | "will be recreated with a new id" |
+| `retire` | "will be retired" |
+| `reconcile_required` | **stop the user.** "We cannot tell what exists at the provider. Somebody must look before anything else happens." |
+
+Send `expectedPlanHash` with the approval — the hash of the plan actually
+displayed. A **409** means the plan moved between the screen and the button:
+reload and re-read, never retry.
+
+The approval response carries `providerMutated: false` and `executable: false`.
+**The UI must not present approving a plan as provisioning anything.** A good
+pattern: *"Approved. Nothing has been created yet — provisioning is a separate
+step that does not exist in this build."*
+
+## Screen 10 — Readiness
+
+```
+GET /api/clients/:clientId/config/provisioning/readiness
+```
+
+`ready` is always `false` and the response also carries `isPermission: false`.
+**Do not build a "Go live" button from this.** Render the dimensions as a
+checklist so a person can see what is missing: client record, configuration,
+provisioning, provider, phone, routing, integrations, compliance.
+
 ## What the UI must never build
 
 - A button that provisions, deploys or "pushes to Retell". No endpoint does it.
@@ -255,6 +308,11 @@ active version or preview. It holds exactly one capability.
 - A merge on conflict. A 409 means reload, never retry-with-force.
 - An "approve and activate" combined button. They are two decisions, made by two
   roles, on purpose.
+- **Any button that provisions, deploys or "pushes to Retell".** There is no
+  execute endpoint and no executor; `provisioning:execute` is held by nobody.
+- A "Go live" button driven by readiness. Readiness is a view, never a
+  permission.
+- Anything that treats an approved provisioning plan as a completed one.
 
 ---
 
