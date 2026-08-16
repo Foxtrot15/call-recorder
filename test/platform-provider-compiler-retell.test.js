@@ -61,12 +61,33 @@ describe("retell compiler — it compiles every client through one path", () => 
     assert.deepEqual(out.agent.response_engine, { type: "retell-llm", llm_id: FAKE_REFS.llmId });
   });
 
-  it("names the agent after the client, its direction and its configuration version", () => {
+  it("names the agent after the client and its direction, and NOT its version", () => {
     const bp = plumberC();
     bp.metadata.configVersion = 4;
     const spec = compileBehaviourSpec(bp).spec;
-    assert.equal(compileRetellPreview({ spec, providerRefs: FAKE_REFS }).agent.agent_name, "aida-riverside_plumbing-inbound-v4");
-    assert.equal(compileRetellPreview({ spec, providerRefs: FAKE_REFS, direction: "outbound" }).agent.agent_name, "aida-riverside_plumbing-outbound-v4");
+    assert.equal(compileRetellPreview({ spec, providerRefs: FAKE_REFS }).agent.agent_name, "aida-riverside_plumbing-inbound");
+    assert.equal(compileRetellPreview({ spec, providerRefs: FAKE_REFS, direction: "outbound" }).agent.agent_name, "aida-riverside_plumbing-outbound");
+  });
+
+  it("keeps the agent name STABLE across configuration versions", () => {
+    // A versioned name made every config bump a payload change, so a change
+    // touching nothing the assistant says still classified as a provider
+    // UPDATE. The version belongs in the provenance chain, not the name.
+    const names = [1, 2, 99].map((v) => {
+      const bp = plumberC();
+      bp.metadata.configVersion = v;
+      return compileRetellPreview({ spec: compileBehaviourSpec(bp).spec, providerRefs: FAKE_REFS }).agent.agent_name;
+    });
+    assert.equal(new Set(names).size, 1, `the name moved across versions: ${names.join(", ")}`);
+  });
+
+  it("keeps the whole payload hash stable when only the version number moves", () => {
+    const hashes = [1, 2, 99].map((v) => {
+      const bp = plumberC();
+      bp.metadata.configVersion = v;
+      return compileRetellPreview({ spec: compileBehaviourSpec(bp).spec, providerRefs: FAKE_REFS }).payloadHash;
+    });
+    assert.equal(new Set(hashes).size, 1, "a version bump alone must not change what would be sent");
   });
 
   it("refuses a direction nobody defined, rather than guessing one", () => {

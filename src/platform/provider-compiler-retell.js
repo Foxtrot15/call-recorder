@@ -261,7 +261,11 @@ function compileRetellPreview({ spec, providerRefs = {}, direction = "inbound" }
   const prefix = providerRefs.agentNamePrefix || "aida";
 
   const agent = {
-    agent_name: `${prefix}-${clientId || "unknown"}-${direction}-v${spec.sourceBlueprint ? spec.sourceBlueprint.configVersion : 0}`,
+    // Stable per (client, direction). Deliberately NOT versioned: embedding
+    // the config version made every version bump a payload change, which
+    // turned "nothing the assistant says has changed" into a provider write.
+    // The version lives in the provenance chain instead.
+    agent_name: `${prefix}-${clientId || "unknown"}-${direction}`,
     response_engine: { type: "retell-llm", llm_id: need(providerRefs.llmId, "llmId") },
     voice_id: need(providerRefs.voiceId, "voiceId"),
     language: spec.assistant.language || "en-AU",
