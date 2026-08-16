@@ -384,7 +384,7 @@ describe("client blueprint — the provider boundary", () => {
   it("refuses a provider voice id in the blueprint", () => {
     for (const providerId of [
       "11labs-Adrian",
-      "custom_voice_018b4225b718ffc38a2e1da4d4",
+      "custom_voice_000000000000000000000000",
       "retell-sunny",
       "cartesia-aurora",
       "openai-alloy",

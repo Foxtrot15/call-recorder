@@ -479,7 +479,7 @@ describe("config patch — voice configuration cannot bypass approval", () => {
     const { authority, clientId } = await liveClient();
     const result = await proposeConfigPatch({
       authority, clientId, source: "voice",
-      patch: patch([{ op: "set", path: "voice.profileRef", value: "custom_voice_018b4225b718ffc38a2e1da4d4" }]),
+      patch: patch([{ op: "set", path: "voice.profileRef", value: "custom_voice_000000000000000000000000" }]),
     });
     // Recorded as a draft so a person can see what was heard, and plainly invalid.
     assert.equal(result.ok, true);
