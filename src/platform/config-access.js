@@ -81,11 +81,27 @@ const ROLES = Object.freeze({
     "config:validate", "config:approve", "config:activate",
     "provisioning:view", "provisioning:create", "provisioning:validate",
     "provisioning:approve", "provisioning:reconcile",
-    // provisioning:execute is DELIBERATELY ABSENT from every role. Nothing
-    // implements execution, so nothing may hold the capability to invoke it.
-    // Adding it here is a decision somebody must make explicitly, in a commit,
-    // alongside an executor that satisfies the twelve preconditions in
-    // provisioning-execution-contract.js.
+    // provisioning:execute is DELIBERATELY ABSENT even here. Approving a set
+    // of provider mutations and running them are different acts, and an
+    // ordinary operator session must not be able to do the second merely
+    // because it can do the first. See operator_executor below.
+  ]),
+
+  /**
+   * The ONLY role holding provisioning:execute. It cannot be reached from an
+   * HTTP request: principalFromRequest never returns it, so no session, cookie
+   * or token produces one. It exists to be constructed DELIBERATELY, in code,
+   * by an operator tool — which today means a CLI run by a person who typed
+   * --fake-provider.
+   *
+   * Narrow and explicit was the requirement, and "you must build this object
+   * on purpose" is the narrowest form of explicit there is.
+   */
+  operator_executor: Object.freeze([
+    "config:view", "config:preview",
+    "provisioning:view", "provisioning:create", "provisioning:validate",
+    "provisioning:approve", "provisioning:reconcile",
+    "provisioning:execute",
   ]),
   // Still exactly one capability. A voice interviewer may propose a wording
   // change; it may not see, build, approve or run a provider mutation.
@@ -204,6 +220,10 @@ function principalFromRequest(req) {
   if (!isStr(req.clientId)) return null;
 
   // An operator session: requireLogin resolved OPERATOR_CLIENT_ID.
+  //
+  // Deliberately "operator", never "operator_executor". No HTTP request can
+  // obtain provisioning:execute, whatever it sends, because this is the only
+  // place a request becomes a principal and it cannot produce that role.
   if (req.operatorSession === true || (req.session && req.session.authenticated === true && !req.clientAuth)) {
     return createPrincipal({
       role: "operator",
@@ -228,6 +248,19 @@ function principalFromRequest(req) {
   return null;
 }
 
+/**
+ * A principal that may run provisioning. Constructed only in code, never from
+ * a request, and only ever handed to an executor alongside a provider adapter
+ * that must also be supplied explicitly.
+ *
+ * Two things must be true before a provider is contacted: somebody built this
+ * object, and somebody handed in an adapter. Neither can happen by accident,
+ * and in this build the only adapters that exist are fakes.
+ */
+function executionPrincipal({ clientId, actorId }) {
+  return createPrincipal({ role: "operator_executor", actorId, clientId });
+}
+
 /** A principal for a voice interviewer. Propose-only, by construction. */
 function voicePrincipal({ clientId, actorId = "voice interviewer" }) {
   return createPrincipal({ role: "voice_agent", actorId, clientId });
@@ -237,6 +270,7 @@ module.exports = {
   authorise,
   createPrincipal,
   principalFromRequest,
+  executionPrincipal,
   voicePrincipal,
   CAPABILITIES,
   ROLES,
