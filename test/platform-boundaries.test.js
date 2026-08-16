@@ -166,10 +166,12 @@ describe("platform ratchets — no vertical branching", () => {
 const LAYER = Object.freeze({
   "client-blueprint.js": 0,
   "blueprint-diff.js": 0,
+  "stable-json.js": 0,
   "blueprint-authority.js": 1,
   "config-patch.js": 1,
   "migrate-locksmith-profile.js": 1,
   "integrations.js": 1,
+  "blueprint-store-postgres.js": 1,
   "behaviour-spec.js": 2,
   "provider-compiler-retell.js": 3,
   "client-cli.js": 4,

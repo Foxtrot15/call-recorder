@@ -44,13 +44,10 @@ const BEHAVIOUR_SPEC_VERSION = "aida-behaviour-spec-2026-08-16";
  */
 const DISCLOSURE_POLICY_VERSION = "aida-disclosure-policy-2026-08-16";
 
-/** JSON with recursively sorted keys, so property order cannot affect the hash. */
-function stableStringify(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
-}
+// Canonical JSON lives at layer 0 — the durable store needs it too, and a
+// layer-1 module importing this one would point the dependency upward.
+// Re-exported here so existing callers are unaffected.
+const { stableStringify } = require("./stable-json");
 
 function compileBehaviourSpec(bp) {
   if (!isObj(bp)) throw new Error("compileBehaviourSpec requires a blueprint");

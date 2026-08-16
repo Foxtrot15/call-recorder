@@ -482,7 +482,10 @@ describe("blueprint authority — restore creates a new version", () => {
     assert.equal(restored.ok, true);
     assert.equal(restored.version.metadata.status, "draft", "a restore is a proposal, not a fact");
     assert.equal(restored.version.identity.description, "The original description.");
-    assert.equal(restored.version.metadata.supersedes, first.metadata.configVersion);
+    assert.equal(restored.version.metadata.restoredFrom, first.metadata.configVersion,
+      "restore states what it restored FROM");
+    assert.equal(restored.version.metadata.supersedes, null,
+      "and does not claim to have replaced anything — it has not been approved yet");
     assert.ok(restored.version.metadata.configVersion > first.metadata.configVersion);
     assert.equal(restored.version.metadata.approvedAt, null);
     assert.equal(restored.version.metadata.approvedBy, null);

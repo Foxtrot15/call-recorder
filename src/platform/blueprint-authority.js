@@ -50,6 +50,8 @@ const AUTHORITY_CODES = Object.freeze({
   NOT_APPROVED: "version_not_approved",
   NOT_A_PERSON: "approver_is_not_a_person",
   CROSS_TENANT: "cross_tenant_reference_refused",
+  STORE_UNAVAILABLE: "configuration_store_unavailable",
+  STORE_REFUSED: "configuration_store_refused_the_write",
 });
 
 /** The same rejection the acquisition approvals use. A system cannot approve itself. */
@@ -126,7 +128,7 @@ function createBlueprintAuthority({ store, now } = {}) {
     return all.reduce((m, v) => Math.max(m, v.metadata.configVersion || 0), 0) + 1;
   }
 
-  async function createDraft({ clientId, blueprint, createdBy, source = "ui", supersedes = null }) {
+  async function createDraft({ clientId, blueprint, createdBy, source = "ui", supersedes = null, restoredFrom = null }) {
     if (!clientId) return fail(AUTHORITY_CODES.NOT_FOUND, "clientId is required");
     if (!blueprint) return fail(AUTHORITY_CODES.INVALID, "a blueprint body is required");
     if (blueprint.identity && blueprint.identity.clientId && blueprint.identity.clientId !== clientId) {
@@ -136,6 +138,13 @@ function createBlueprintAuthority({ store, now } = {}) {
     const version = clone(blueprint);
     version.schemaVersion = BLUEPRINT_SCHEMA_VERSION;
     version.identity = { ...version.identity, clientId };
+    // EVERY lifecycle field is reset, not merely the obvious ones. Restoring
+    // from a superseded version used to carry supersededAt/validatedAt/
+    // activatedAt into the new draft, because the spread kept whatever the
+    // source body had. In memory nothing complained; the durable store's
+    // `pcv_draft_is_clean` constraint refused the write outright, which is the
+    // correct answer — a fresh draft that looks approved, activated or
+    // superseded is fabricated history.
     version.metadata = {
       ...(version.metadata || {}),
       configVersion: await nextVersionNumber(clientId),
@@ -144,14 +153,21 @@ function createBlueprintAuthority({ store, now } = {}) {
       createdBy: createdBy || null,
       source,
       supersedes,
+      restoredFrom: restoredFrom ?? null,
       // A new draft has never been edited. Stated as null rather than left
       // absent, so "never edited" is a value an editor can hold and present
       // back as an expectation — see updateDraft.
       updatedAt: null,
       updatedBy: null,
+      validatedAt: null,
       approvedAt: null,
       approvedBy: null,
+      approvalReason: null,
       activatedAt: null,
+      activatedBy: null,
+      supersededAt: null,
+      supersededBy: null,
+      supersedeReason: null,
     };
     const saved = await store.putVersion(version);
     return okay({ version: saved });
@@ -351,11 +367,23 @@ function createBlueprintAuthority({ store, now } = {}) {
       blueprint: body,
       createdBy,
       source,
-      supersedes: configVersion,
+      // Lineage is stated precisely: this draft was RESTORED FROM that version.
+      // Calling it "supersedes" would claim it replaced something it did not.
+      restoredFrom: configVersion,
     });
   }
 
-  return Object.freeze({
+  /**
+   * Every operation returns a RESULT. A store that is unreachable, or that
+   * refuses a write because a database constraint said no, must not become an
+   * exception thrown out of a route handler — a 500 tells a caller nothing and
+   * an unhandled rejection tells them less. It becomes a coded refusal, and
+   * the coded refusal is fail-closed: nothing is served, nothing is activated.
+   *
+   * This was found by running the durable store against the shared contract:
+   * an activation interrupted mid-write threw instead of reporting.
+   */
+  const operations = {
     createDraft,
     getDraft,
     updateDraft,
@@ -367,7 +395,24 @@ function createBlueprintAuthority({ store, now } = {}) {
     listVersions,
     supersedeVersion,
     restoreFromVersion,
-  });
+  };
+
+  const guarded = {};
+  for (const [name, fn] of Object.entries(operations)) {
+    guarded[name] = async (...args) => {
+      try {
+        return await fn(...args);
+      } catch (error) {
+        const kind = error && error.kind;
+        const code = kind === "refused" || kind === "conflict" || kind === "lineage"
+          ? AUTHORITY_CODES.STORE_REFUSED
+          : AUTHORITY_CODES.STORE_UNAVAILABLE;
+        return fail(code, `${name}: ${(error && error.message) || "the configuration store failed"}`);
+      }
+    };
+  }
+
+  return Object.freeze(guarded);
 }
 
 module.exports = {
