@@ -49,6 +49,13 @@ function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/** Data is not code. Strings carry prose that legitimately names what code may not do. */
+function stripStrings(source) {
+  return source
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''");
+}
+
 const requiresIn = (source) => [...stripComments(source).matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
 
 describe("platform ratchets — the files are actually being checked", () => {
@@ -170,6 +177,14 @@ const LAYER = Object.freeze({
   "config-access.js": 0,
   "config-audit.js": 1,
   "config-service.js": 4,
+  "provisioning-model.js": 0,
+  "provisioning-execution-contract.js": 0,
+  "provisioning-diff.js": 1,
+  "provisioning-plan-authority.js": 1,
+  "provisioning-readiness.js": 1,
+  "store-binding.js": 1,
+  "provisioning-desired-state.js": 3,
+  "provisioning-service.js": 4,
   "blueprint-authority.js": 1,
   "config-patch.js": 1,
   "migrate-locksmith-profile.js": 1,
@@ -218,15 +233,58 @@ describe("platform ratchets — only one module knows what Retell is", () => {
    */
   const REJECTION_DECLARATION = /const PROVIDER_VOICE_ID_PREFIXES = \/[^\n]*\/i;/;
 
+  /**
+   * The second exemption, and the last. `provisioning-model.js` mirrors the
+   * `provider` CHECK that provider_resources already declares, so the domain
+   * can refuse early what the database would refuse late. It is a vocabulary
+   * the schema owns, not a dependency: nothing imports, calls or knows
+   * anything about a vendor beyond the string being permitted.
+   *
+   * Exempted by its exact declaration, like the rejection above, so a provider
+   * named on any OTHER line in the domain still fails.
+   */
+  const SCHEMA_VOCABULARY_DECLARATION =
+    /const PROVIDERS = Object\.freeze\(\[[^\]]*\]\);\s*\/\/ mirrors provider_resources CHECK/;
+
   it("names no provider anywhere in the domain", () => {
     const PROVIDERS = ["retell", "twilio", "11labs", "elevenlabs", "cartesia", "vapi", "bland"];
     for (const file of FILES) {
       if (!isDomain(file)) continue;
-      const code = stripComments(read(file)).replace(REJECTION_DECLARATION, "").toLowerCase();
+      // Exemptions are applied to the RAW source, before comments are
+      // stripped: the schema-vocabulary declaration is anchored on its own
+      // trailing comment, which stripComments would remove first.
+      const code = stripComments(
+        read(file).replace(SCHEMA_VOCABULARY_DECLARATION, ""),
+      ).replace(REJECTION_DECLARATION, "").toLowerCase();
       for (const provider of PROVIDERS) {
         assert.ok(!code.includes(provider), `${rel(file)} mentions ${provider} in code`);
       }
     }
+  });
+
+  it("keeps the schema-vocabulary exemption real, narrow and non-blinding", () => {
+    const model = read(FILES.find((f) => f.endsWith("provisioning-model.js")));
+    assert.match(model, SCHEMA_VOCABULARY_DECLARATION, "the exempted declaration must exist as written");
+    assert.equal(
+      model.split("\n").filter((l) => /\/\/ mirrors provider_resources CHECK/.test(l)).length,
+      1,
+      "the exemption must cover one line, not become a licence",
+    );
+    // It must mirror what the database ACTUALLY declares, or it is not a mirror.
+    const lpm3 = fs.readFileSync(
+      path.join(__dirname, "..", "supabase", "sql", "lpm3_create_retell_provisioning.sql"), "utf8",
+    );
+    assert.match(lpm3, /check \(provider in \('retell','mock','dry_run'\)\)/,
+      "the database CHECK this claims to mirror must still say exactly that");
+    const { PROVIDERS: mirrored } = require("../src/platform/provisioning-model");
+    assert.deepEqual([...mirrored], ["retell", "mock", "dry_run"], "the mirror must match the CHECK");
+
+    // And exempting it must not swallow a second mention.
+    const smuggled = `${model}\nconst client = makeRetellClient();`;
+    assert.ok(
+      stripComments(smuggled.replace(SCHEMA_VOCABULARY_DECLARATION, "")).toLowerCase().includes("retell"),
+      "a second mention must survive the exemption",
+    );
   });
 
   it("keeps that one exemption real, and narrow", () => {
@@ -392,8 +450,12 @@ describe("platform ratchets — nothing in src/platform can reach the world", ()
     // Configuration that reads env is configuration that behaves differently
     // in production than in a test, which is how a live call happens by
     // accident. Deployment facts are injected.
+    //
+    // String literals are stripped as well as comments: the execution contract
+    // EXPLAINS the acquisition process.env lesson in its data, and a raw sweep
+    // matched the explanation rather than any read.
     for (const file of FILES) {
-      const code = stripComments(read(file));
+      const code = stripStrings(stripComments(read(file)));
       assert.ok(!/process\.env/.test(code), `${rel(file)} reads process.env`);
     }
   });
@@ -408,8 +470,20 @@ describe("platform ratchets — nothing in src/platform can reach the world", ()
 
   it("holds no credential-shaped literal", () => {
     const SECRET = /(sk_live|sk_test|key_[0-9a-f]{16}|Bearer\s+[A-Za-z0-9._-]{16}|eyJ[A-Za-z0-9_-]{20})/;
+    // ONE declaration in the domain names credential shapes, and it names them
+    // only in order to REFUSE them. Exempted by its exact text, so a credential
+    // appearing anywhere else still fails — the same treatment
+    // PROVIDER_VOICE_ID_PREFIXES gets.
+    const DETECTION_DECLARATION = /const CREDENTIAL_SHAPED = \/[^\n]*\/i;/;
     for (const file of FILES) {
-      assert.ok(!SECRET.test(read(file)), `${rel(file)} contains something credential-shaped`);
+      assert.ok(!SECRET.test(read(file).replace(DETECTION_DECLARATION, "")),
+        `${rel(file)} contains something credential-shaped`);
     }
+    // The exemption must be real, exactly one line, and must not blind the check.
+    const model = read(FILES.find((f) => f.endsWith("provisioning-model.js")));
+    assert.match(model, DETECTION_DECLARATION, "the exempted declaration must exist as written");
+    assert.equal(model.split("\n").filter((l) => DETECTION_DECLARATION.test(l)).length, 1);
+    assert.ok(SECRET.test('const k = "sk_live_abc";'.replace(DETECTION_DECLARATION, "")),
+      "a genuine secret elsewhere must still fail");
   });
 });

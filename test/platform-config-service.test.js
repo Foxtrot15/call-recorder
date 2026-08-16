@@ -974,13 +974,44 @@ describe("HTTP surface — the route file is gated OFF by default", () => {
     assert.match(SOURCE, /restore`,\s*requireLogin/);
   });
 
-  it("declares no provisioning, calling or dial route", () => {
-    // Comments stripped: the file's own header explains it declares none of
-    // these, and a raw sweep would match the explanation.
+  it("declares no EXECUTION, calling or dial route", () => {
+    // Comments stripped: the file's own header explains what it declares.
+    //
+    // Provisioning PLANNING routes are legitimate here (P23) and bring nothing
+    // into existence. Provisioning EXECUTION is what must never appear, so the
+    // check is scoped to that rather than to the word "provisioning" — which
+    // would now flag the very routes the founder asked for.
     const code = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-    for (const forbidden of ["provision", "/dial", "enable-calling", "phone-number", "/sms"]) {
+    for (const forbidden of ["/execute", "enable-calling", "/dial", "phone-number", "/sms", "/numbers"]) {
       assert.ok(!code.includes(forbidden), `the router must not declare ${forbidden}`);
     }
-    assert.ok('router.post("/provision", h)'.includes("provision"), "the check still bites");
+    assert.ok(!/provisioning\.execute/.test(code), "there must be no execute handler");
+    assert.ok(!/router\.(get|post|patch)\([^)]*execute/.test(code), "there must be no execute route");
+
+    // Non-vacuity, on realistic bad fixtures.
+    const wouldCatch = (line) =>
+      ["/execute", "/dial", "enable-calling"].some((f) => line.includes(f)) || /provisioning\.execute/.test(line);
+    for (const bad of [
+      "router.post(`${BASE}/provisioning/plans/:planId/execute`, requireLogin, provisioning.execute);",
+      'router.post("/dial", handler);',
+      'router.post("/enable-calling", handler);',
+    ]) {
+      assert.ok(wouldCatch(bad), `the ratchet would not catch: ${bad}`);
+    }
+  });
+
+  it("mounts the provisioning PLANNING routes, none of which performs anything", () => {
+    const code = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    for (const path of [
+      "provisioning/diff", "provisioning/desired", "provisioning/plans",
+      "provisioning/readiness", "provisioning/execution-contract",
+    ]) {
+      assert.ok(code.includes(path), `expected the ${path} route`);
+    }
+    // Building, validating and approving a plan are operator-only: they
+    // describe changes to resources AIDA owns and pays for at a provider.
+    for (const guarded of ["provisioning/plans`, requireLogin", "validate`, requireLogin", "approve`, requireLogin"]) {
+      assert.ok(code.includes(guarded), `expected "${guarded}" to be operator-guarded`);
+    }
   });
 });
