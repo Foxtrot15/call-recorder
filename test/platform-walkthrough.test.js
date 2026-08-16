@@ -215,9 +215,40 @@ describe("documentation — it has not drifted from the code", () => {
 
   it("is honest about what is not built", () => {
     assert.match(PLATFORM_DOC, /What is NOT built/);
-    for (const gap of ["No durable store", "No provisioning", "No voice configuration agent", "No real adapters"]) {
+    for (const gap of ["No provisioning", "No voice configuration agent", "No real adapters", "No UI"]) {
       assert.ok(PLATFORM_DOC.includes(gap), `the doc does not admit: ${gap}`);
     }
-    assert.match(PLATFORM_DOC, /no migration has been written, and none has been applied/i);
+  });
+
+  it("is honest that the durable store exists but its migration is UNAPPLIED", () => {
+    // The gap moved rather than closing: P14/P15 built the store, and the SQL
+    // has still been applied nowhere. Saying "no durable store" would now be
+    // wrong; saying nothing would be worse.
+    assert.match(PLATFORM_DOC, /SQL CREATED — NOT APPLIED ANYWHERE/);
+    assert.match(PLATFORM_DOC, /NOT APPLIED TO DEV/);
+    assert.match(PLATFORM_DOC, /NOT APPLIED TO PRODUCTION/);
+    assert.match(PLATFORM_DOC, /durable store is BUILT but UNAPPLIED/i);
+    assert.match(PLATFORM_DOC, /router is still wired to the in-memory store/i);
+  });
+
+  it("records the AI-disclosure ruling as decided, not as an open question", () => {
+    assert.match(PLATFORM_DOC, /FOUNDER RULING, 2026-08-16, IMPLEMENTED/);
+    assert.ok(!PLATFORM_DOC.includes("REVIEW BEFORE LIVE MERGE"), "the P13 blocker is resolved and must not still be advertised");
+    assert.ok(!PLATFORM_DOC.includes("unresolved product-policy decision"));
+    assert.match(PLATFORM_DOC, /byte-identically/, "the inbound parity result is stated");
+  });
+
+  it("documents the durable architecture the code actually has", () => {
+    for (const heading of [
+      "Durable configuration architecture", "Storage model", "Database invariants",
+      "Tenant authority", "HTTP surface", "Activation semantics", "Provider preview",
+      "Voice configuration path", "Audit history", "Migration status",
+    ]) {
+      assert.ok(PLATFORM_DOC.includes(heading), `the doc is missing the "${heading}" section`);
+    }
+    // The tables must name the real artefacts.
+    assert.ok(PLATFORM_DOC.includes("pcv_one_active_per_client"));
+    assert.ok(PLATFORM_DOC.includes("acp1_create_client_configuration.sql"));
+    assert.ok(PLATFORM_DOC.includes("PLATFORM_CONFIG_API_ENABLED"));
   });
 });

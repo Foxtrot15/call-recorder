@@ -1,8 +1,8 @@
 # AIDA Client Platform
 
 **Status:** built and tested locally on `feature/aida-client-platform`. Nothing
-is deployed, no migration exists or has been applied, and no provider resource
-was touched. The real acquisition Retell agent is parked and was not contacted.
+is deployed. **SQL CREATED — NOT APPLIED ANYWHERE.** No provider resource was
+touched and the real acquisition Retell agent is parked and was not contacted.
 
 ---
 
@@ -104,11 +104,10 @@ No module under `src/platform` imports any of them, and none may import from
 
 **Two things are platform-owned and cannot be switched off by anybody:**
 
-1. **AI disclosure.** Every compiled spec carries
-   `assistant.disclosesAiWhenAsked: true`, and the literal first sentence of
-   every call names the business and says "an AI assistant". A blueprint has no
-   field that could change this. **This is a policy decision, not a settled
-   requirement — see the section below before merging.**
+1. **AI disclosure.** Resolved by founder ruling — see the section below.
+   Outbound discloses in the opening; inbound keeps the client greeting; both
+   answer truthfully when asked. A blueprint has no field that changes any of
+   it.
 2. **The mandatory prohibited claims** — guaranteed arrival time, guaranteed
    price, guaranteed outcome, legal or regulatory advice, insurance coverage
    assurance, and claiming to be human. A client may *add* prohibitions. They
@@ -116,52 +115,272 @@ No module under `src/platform` imports any of them, and none may import from
 
 ---
 
-## ⚠ AI disclosure — FOUNDER / PLATFORM POLICY, REVIEW BEFORE LIVE MERGE
+## AI disclosure — FOUNDER RULING, 2026-08-16, IMPLEMENTED
 
-**Status: unresolved product-policy decision. Do not merge to a live path
-without a founder ruling.**
+P13 raised this and deferred it. It is now decided and built.
 
-The platform currently puts AI disclosure in the **literal first spoken
-sentence of every call, for every client, inbound and outbound**, and gives a
-blueprint no field that could change it.
+| | Opening line | If the caller asks |
+|---|---|---|
+| **Outbound** — AIDA telephoned a stranger | **Must disclose.** Not client-disableable | Must answer truthfully |
+| **Inbound** — the caller rang this business | **No forced disclosure.** The client keeps their own greeting | Must answer truthfully |
 
-That is **stricter than what AIDA ships today**, and the existing product
-policy does *not* unambiguously require it for both directions. The evidence:
+The inbound half preserves what ships today. The legacy receptionist opens with
+*"Northside Lock and Key, this is Mel, how can I help?"* and the migrated
+blueprint now produces that **byte-identically**, because the legacy greeting is
+literal words and is carried across as `callHandling.greetingLine` rather than
+mistaken for a style instruction. Migrating a real client no longer changes what
+a real caller hears.
 
-| | Existing policy | Existing implementation | Platform |
-|---|---|---|---|
-| **Outbound** (acquisition / BDM) | **Requires it.** Unprompted, in the opening — `LOCKSMITH_ACQUISITION_SPEC.md` §"It discloses", `OUTBOUND_BDM_ARCHITECTURE.md` ("identity + on-behalf-of + AI disclosure + recording notice + reason, all within the first breath"). Recorded as **founder product policy, not a legal requirement** | matches | matches |
-| **Inbound** (locksmith receptionist) | **Silent.** No document requires first-sentence disclosure for an inbound receptionist | `locksmith-receptionist-compiler.js` sets `begin_message` to the client's own greeting **verbatim**. The approved demonstration greeting is *"Northside Lock and Key, this is Mel, how can I help?"* — **no AI disclosure**, and none anywhere in the inbound prompt | **diverges — the platform adds it** |
+The same client's outbound opening is *"Hi, this is Mel, an AI assistant calling
+on behalf of Northside Lock and Key. Do you have a moment?"*
 
-So a locksmith migrated onto the platform would start disclosing in its opening
-line where today it does not. That is a change to what a real caller hears, and
-it belongs to the founder, not to this batch.
+**Why the mandatory half is structural, not merely required.** The outbound
+disclosure clause and the answer-truthfully instruction are assembled from
+constants in `provider-compiler-retell.js`. No blueprint field feeds them, no
+patch path reaches them, and only `name` and `who` are interpolated — a ratchet
+parses the template literal and asserts exactly that. There is nothing to switch
+off, which is a stronger guarantee than a validation rule that refuses to let
+somebody switch it off.
 
-**What was deliberately NOT done:** the ambiguity was not resolved by making
-disclosure client-disableable. A configurable AI disclosure is a switch
-somebody eventually turns off, and the outbound side has an explicit policy
-requiring it. It stays platform-owned and on.
+Ten sabotage attempts are tested, including a `greetingLine` reading *"You are
+speaking to a human"* and an invented `disclosure: { whenAsked: false }` block.
+All ten fail.
 
-**The decision to make before merge — pick one:**
+**Versioned.** The compiled spec carries
+`disclosure.policyRef: "aida-disclosure-policy-2026-08-16"`, so a later ruling
+produces a different behaviour hash rather than quietly reinterpreting
+configurations somebody has already approved.
 
-1. **Adopt it as written.** First-sentence disclosure for every client, both
-   directions. Nothing to change; record the policy and note that inbound
-   greetings will change for existing clients.
-2. **Split it by direction.** Mandatory first-sentence for outbound (as today's
-   policy already requires); for inbound, disclose *plainly when asked* but let
-   the client keep their own opening line. This needs a platform-owned rule
-   keyed on direction — **not** a client-facing switch.
-3. **Keep it on, soften placement.** Disclosure guaranteed within the first
-   exchange rather than the first sentence.
+**Two fields, three rules:**
 
-Whichever is chosen, `assistant.disclosesAiWhenAsked` should stay `true` and
-stay unconfigurable. The open question is *placement in the opening line*, not
-*whether the assistant admits what it is*.
+```js
+spec.disclosure = {
+  whenAsked: true,                                  // always, both directions
+  inOpening: { inbound: false, outbound: true },    // the ruling
+  policyRef: "aida-disclosure-policy-2026-08-16",
+}
+```
 
-Tracked in `test/platform-p13-audit.test.js` — the sabotage tests assert the
-disclosure survives every attempt to configure it away, so option 2 or 3 is a
-deliberate code change with a failing test, not a quiet drift.
+`knowledge.prohibitedClaims` still carries `claiming_to_be_human` as one of the
+six mandatory prohibitions a client may not remove.
 
+---
+
+## Durable configuration architecture
+
+**SQL CREATED — NOT APPLIED TO DEV, NOT APPLIED TO PRODUCTION, NOT APPLIED
+ANYWHERE.** Nothing in this repository applies SQL, and a ratchet asserts no
+source file even references the migration.
+
+### The chain
+
+```
+  UI / future voice configurator / operator API
+                    |
+          Client Configuration Service      config-service.js
+                    |                       authority + audit on every operation
+          tenant + capability authority     config-access.js
+                    |
+          durable versioned store           blueprint-store-postgres.js
+                    |
+   draft -> validate -> diff -> approve -> activate
+                    |
+          Agent Behaviour Spec compiler     behaviour-spec.js
+                    |
+          provider configuration PREVIEW    provider-compiler-retell.js
+```
+
+**No live provider write follows activation.** "Active" means *this is the
+configuration AIDA considers current for this client*. It does not mean
+*deploy this to Retell*.
+
+### Storage model
+
+Two tables, `supabase/sql/acp1_create_client_configuration.sql`.
+
+`platform_config_versions` — the row **is** the version. There is no separate
+"current pointer" table, because a pointer and a status are two truths that can
+disagree.
+
+Lifecycle is **normalised into columns**: tenancy, version identity, schema
+version, status, provenance (`created_at/by`, `source`), lineage (`supersedes`,
+`restored_from`, `superseded_by`), the CAS token (`updated_at`), validation,
+approval (`approved_at/by/hash`, reason), activation (`activated_at/by`) and
+supersession. Those are the fields a decision switches on.
+
+The blueprint **body** is one `jsonb` column, minus its metadata. It is not a
+blob store: the application validates against `client-blueprint.js` before every
+write, and the database asserts the body agrees with the row about who owns it
+and which schema it is. Metadata therefore lives in exactly one place, stripped
+on write and reassembled on read.
+
+`platform_config_events` — append-only history, including **refusals**. Version
+rows cannot answer "who tried and was refused", "what did the voice agent
+propose" or "who has been reading this".
+
+### Database invariants
+
+| Invariant | Mechanism |
+|---|---|
+| One active version per client | `pcv_one_active_per_client` — a partial unique index. Two active versions are **unreachable**, whatever the application does |
+| A version number belongs to one client | `unique (client_id, config_version)` |
+| Lineage cannot cross tenants | Three composite self-referential FKs on `(client_id, …)` — cross-client lineage is **unrepresentable**, not merely checked |
+| Approved content cannot be swapped | `pcv_approved_hash_is_content_hash` — a row whose body changed after approval cannot satisfy the database |
+| Approved / active / superseded content is frozen | `pcv_guard_frozen_rows` trigger |
+| No lifecycle regression | Same trigger: active may only be superseded, superseded is terminal, nothing returns to draft |
+| Approval and activation completeness | `pcv_draft_is_clean`, `pcv_approved_is_complete`, `pcv_active_is_complete`, `pcv_activation_only_when_earned` |
+| History is not deletable | `pcv_refuse_delete` trigger |
+| The audit log is not editable | `pce_append_only` trigger |
+| No credential can be stored | There is no column for one, and the verifier asserts it |
+
+RLS enabled on both tables in the same transaction, **zero policies** —
+service-role only, matching LPM3. A portal showing a client their own
+configuration reads a narrow projection through the server, which already
+resolves the tenant from a verified session.
+
+Verifiers: `verification/19_acp1_preflight_readonly.sql` and
+`20_acp1_verify_readonly.sql`. Both read-only, both raw material rather than
+computed verdicts, per the LPM4 transport lesson.
+
+### The adapter, and why you can believe it
+
+`createPostgresBlueprintStore({ db, now })` implements the same four-method
+contract the in-memory store does. The database handle is **injected** — the
+module imports only `crypto` and `stable-json`, reads no environment, and a
+ratchet asserts it.
+
+**Both stores run one shared contract suite**
+(`test/helpers/blueprint-store-contract.js`). The in-memory store is the
+executable specification; if the two can diverge, the durable one will diverge
+in production and no test will notice. The Postgres side runs against a fake
+that **enforces the migration's constraints** and raises the same SQLSTATEs, and
+a drift test cross-checks the fake's rule names against the SQL file. Another
+test proves the suite fails against a store that accepts writes and forgets
+them, so it cannot be vacuously green.
+
+**Activation under interrupt.** Activation is two writes — supersede the
+incumbent, then activate the successor — and this codebase has no cross-table
+transaction. The order makes the reachable failure the safe one:
+
+- **two active** — unreachable; the partial unique index rejects it
+- **zero active** — what an interrupt leaves. Fail-closed: nothing is served,
+  and simply re-running activation recovers completely
+
+All three are tested.
+
+### Tenant authority
+
+Nothing here authenticates. `src/middleware/auth.js` already resolves
+`req.clientId` server-side from a verified session; `config-access.js` takes
+that and decides. It imports nothing and reads no request field a caller
+controls.
+
+| Role | view | preview | draft | propose | validate | approve | activate |
+|---|---|---|---|---|---|---|---|
+| `client_viewer` | ✓ | ✓ | | | | | |
+| `client_editor` | ✓ | ✓ | ✓ | ✓ | ✓ | | |
+| `client_owner` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| `operator` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `voice_agent` | | | | ✓ | | | |
+| `import` | ✓ | | ✓ | | | | |
+| `system` | | | | | | | |
+
+An operator may read across tenants (a founder console lists every client) and
+may **not** write across them. Tenancy is checked before capability, so a
+cross-tenant probe returns one indistinguishable refusal.
+
+### HTTP surface
+
+Gated OFF by `PLATFORM_CONFIG_API_ENABLED="true"` — the exact string, D7 house
+rule. Unset, every path 404s as if the file did not exist. That is the state
+today.
+
+```
+GET    /api/clients/:clientId/config/active
+GET    /api/clients/:clientId/config/versions
+GET    /api/clients/:clientId/config/versions/:versionId
+GET    /api/clients/:clientId/config/versions/:versionId/diff?from=N
+GET    /api/clients/:clientId/config/history
+GET    /api/clients/:clientId/config/preview/:versionId      ("active" allowed)
+                                            ?direction=inbound|outbound
+
+POST   /api/clients/:clientId/config/drafts
+PATCH  /api/clients/:clientId/config/drafts/:versionId
+POST   /api/clients/:clientId/config/drafts/:versionId/validate
+POST   /api/clients/:clientId/config/drafts/:versionId/approve
+POST   /api/clients/:clientId/config/proposals
+
+POST   /api/clients/:clientId/config/versions/:versionId/activate   operator only
+POST   /api/clients/:clientId/config/versions/:versionId/restore    operator only
+```
+
+`:clientId` says which client the caller **wants**. Authority comes from the
+session. A `clientId` in the query or body is ignored entirely.
+
+No endpoint provisions a Retell resource, enables calling, alters calling state,
+executes a dial, enqueues a call, creates a number or mutates
+`provider_resources`. There is no import path from the subsystem to any of them.
+
+### Activation semantics
+
+`POST .../activate` returns:
+
+```json
+{ "providerUpdated": false,
+  "meaning": "This is now the configuration AIDA considers current for this client.",
+  "note": "No provider resource was created or updated. Provisioning is a separate, explicitly authorised act." }
+```
+
+Provisioning, when it exists, will **read** an active version. It will never be
+triggered by one.
+
+### Provider preview
+
+Returns `configVersion`, `blueprintHash`, `behaviourHash`, `responseEngineHash`,
+`agentHash`, `payloadHash`, `ready`, `unresolved[]`, the literal opening line and
+the whole prompt. No API key, no socket. It refuses to preview an invalid
+configuration, and names unresolved provider references rather than inventing
+them.
+
+### Voice configuration path
+
+A proposal from any source becomes a **draft**. `config:propose` is strictly
+weaker than `config:draft`, and a voice principal holds only that one
+capability — it cannot approve, activate, validate, edit a draft, read the
+active version or even preview.
+
+Worked examples, all tested:
+
+| Heard | Result |
+|---|---|
+| *"we now close at 4pm Saturday"* | new draft; active version unmoved |
+| *"stop telling people we're AI"* (inbound wording) | allowed — the client's greeting is theirs |
+| *"stop telling people we're AI"* (outbound disclosure) | survives all four attack routes; removing the mandatory prohibition produces a plainly invalid draft |
+| *"call every lead now"* | maps to no operation capable of enabling calling |
+
+### Audit history
+
+`draft_created`, `draft_updated`, `validated`, `validation_failed`, `approved`,
+`approval_refused`, `activated`, `activation_refused`, `superseded`, `restored`,
+`voice_patch_proposed`, `voice_patch_refused`, `previewed`.
+
+Each carries actor, role, tenant, version, instant and a bounded ≤500-character
+detail. Never a blueprint body, a transcript reference, an integration
+credential or a recipient list — asserted by test.
+
+### Migration status
+
+| File | Status |
+|---|---|
+| `supabase/sql/acp1_create_client_configuration.sql` | **NOT APPLIED ANYWHERE** |
+| `supabase/sql/verification/19_acp1_preflight_readonly.sql` | read-only, never run |
+| `supabase/sql/verification/20_acp1_verify_readonly.sql` | read-only, never run |
+
+The HTTP router is deliberately wired to the **in-memory** store: binding it to
+Postgres would bind it to tables that do not exist. Swapping it is one line once
+the migration is applied and reviewed.
+
+---
 ---
 
 ## The four versioning rules
@@ -335,20 +554,21 @@ it.
 
 Stated plainly so the next batch can be scoped against it.
 
-- **No durable store.** `createInMemoryBlueprintStore()` is the only
-  implementation. The store contract is four methods (`listVersions`,
-  `getVersion`, `putVersion`, `replaceVersion`) and a Postgres one would satisfy
-  it — but **no migration has been written, and none has been applied
-  anywhere.**
+- **The durable store is BUILT but UNAPPLIED.** The Postgres adapter exists and
+  passes the same contract suite as the in-memory one, but
+  `acp1_create_client_configuration.sql` **has not been applied to dev or to
+  production**, so the HTTP router is still wired to the in-memory store.
 - **No voice configuration agent.** The domain contract exists; the speech
   pipeline does not.
 - **No provisioning.** The compiler builds objects and imports no transport. A
   compiler that can also send is a compiler that will eventually send by
   accident, so creating provider resources stays a separate, hand-run,
   explicitly-authorised act.
-- **No UI.** The CLI is the only interface.
+- **No UI.** The CLI and the (gated-off) HTTP API are the only interfaces.
 - **No real adapters.** Every integration adapter is an in-memory fake.
-- **Not wired into `src/server.js`.** Nothing at runtime reads a blueprint yet.
+- **Nothing at runtime reads a blueprint yet.** The configuration router is
+  mounted in `src/server.js` but gated off; no receptionist or acquisition path
+  consults an active version.
 - **No `activate` in the CLI**, by design — see above.
 
 ## Known pre-existing test failures

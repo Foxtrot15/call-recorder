@@ -939,16 +939,23 @@ describe("P13 AI disclosure — flagged for founder ruling, not silently redesig
     }
   });
 
-  it("is classified in documentation as a founder decision pending review", () => {
-    assert.match(PLATFORM_DOC, /FOUNDER \/ PLATFORM POLICY, REVIEW BEFORE LIVE MERGE/);
-    assert.match(PLATFORM_DOC, /unresolved product-policy decision/i);
-    assert.match(PLATFORM_DOC, /stricter than what AIDA ships today/i);
-    assert.match(CHECKLIST, /founder ruling on AI\s*\n?\s*disclosure placement/i);
+  it("is documented as RULED ON, with both halves stated", () => {
+    // P13 raised this and deferred it. The founder ruled on 2026-08-16, so the
+    // doc must record the decision rather than still advertising a blocker.
+    assert.match(PLATFORM_DOC, /FOUNDER RULING, 2026-08-16, IMPLEMENTED/);
+    assert.ok(!PLATFORM_DOC.includes("REVIEW BEFORE LIVE MERGE"), "the blocker language must be gone");
+    assert.ok(!PLATFORM_DOC.includes("unresolved product-policy decision"));
+    assert.match(PLATFORM_DOC, /Must disclose/);
+    assert.match(PLATFORM_DOC, /No forced disclosure/);
+    assert.match(PLATFORM_DOC, /Must answer truthfully/);
+    assert.match(CHECKLIST, /AI disclosure/i);
   });
 
-  it("records that it was NOT resolved by making disclosure optional", () => {
-    assert.match(PLATFORM_DOC, /deliberately NOT done/);
-    assert.match(PLATFORM_DOC, /not.*client-facing switch|not\*\* a client-facing switch/i);
+  it("records WHY the mandatory half is structural rather than merely required", () => {
+    assert.match(PLATFORM_DOC, /assembled from\s*\n?\s*constants/i);
+    assert.match(PLATFORM_DOC, /nothing to switch\s*\n?\s*off/i);
+    assert.match(PLATFORM_DOC, /policyRef/, "the ruling is versioned, so a later one rehashes rather than reinterprets");
+    assert.match(PLATFORM_DOC, /byte-identical/i, "and the inbound parity result is stated");
   });
 
   it("and it is genuinely not optional — every route to switching it off is refused", () => {
