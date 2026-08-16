@@ -75,10 +75,32 @@ function buildGeneralPrompt(spec) {
     out.push("");
   }
 
+  // Always-ask and depending-on-the-job are separated deliberately. Emitting
+  // them as one list told a plumber's assistant to ask "is anyone still
+  // inside, go outside and don't use switches" on a call about a dripping tap
+  // — absurd for most of them and alarming for the gas one.
+  const alwaysAsk = new Set(spec.intake.collectAlways);
   out.push("# What you always find out");
   for (const f of spec.intake.collectAlways) out.push(`- ${f.replace(/_/g, " ")}`);
-  for (const q of spec.intake.additionalQuestions) out.push(`- ${q.question}`);
+  for (const q of spec.intake.additionalQuestions) {
+    if (q.appliesToServices.length === 0) out.push(`- ${q.question}`);
+  }
   out.push("");
+
+  const perService = [];
+  for (const s of spec.services) {
+    const extraFields = s.collect.filter((f) => !alwaysAsk.has(f));
+    const extraQuestions = spec.intake.additionalQuestions.filter((q) => q.appliesToServices.includes(s.serviceId));
+    if (!extraFields.length && !extraQuestions.length) continue;
+    const bits = extraFields.map((f) => f.replace(/_/g, " "));
+    perService.push(`- ${s.name}${bits.length ? `: ${bits.join(", ")}` : ""}`);
+    for (const q of extraQuestions) perService.push(`  Ask: ${q.question}`);
+  }
+  if (perService.length) {
+    out.push("# What you also ask, depending on the job");
+    out.push(...perService);
+    out.push("");
+  }
 
   if (spec.urgency.rules.length) {
     out.push("# Urgency");

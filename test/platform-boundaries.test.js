@@ -147,6 +147,61 @@ describe("platform ratchets — no vertical branching", () => {
   });
 });
 
+/**
+ * The layers, declared once and used by every check below.
+ *
+ *   0  the model            what a business told us
+ *   1  authority over it    versions, approval, patches, legacy import
+ *   2  behaviour            what the assistant should do — still no vendor
+ *   3  the provider         the ONE module allowed to know what Retell is
+ *   4  tooling              composes the layers below to show a person the
+ *                           result; not domain, and legitimately allowed to
+ *                           import the compiler because displaying its output
+ *                           is its entire job
+ *
+ * "The domain" means layers 0-2. Those are the ones a provider must never
+ * reach. Adding a file without a layer fails the first test in this block, so
+ * a new module cannot quietly escape the rules by not being listed.
+ */
+const LAYER = Object.freeze({
+  "client-blueprint.js": 0,
+  "blueprint-diff.js": 0,
+  "blueprint-authority.js": 1,
+  "config-patch.js": 1,
+  "migrate-locksmith-profile.js": 1,
+  "integrations.js": 1,
+  "behaviour-spec.js": 2,
+  "provider-compiler-retell.js": 3,
+  "client-cli.js": 4,
+  "clients.js": 0, // fixtures: configuration data
+});
+
+const DOMAIN_MAX_LAYER = 2;
+const layerOf = (file) => LAYER[path.basename(file)];
+const isDomain = (file) => layerOf(file) <= DOMAIN_MAX_LAYER;
+
+describe("platform ratchets — every module is placed in a layer", () => {
+  it("leaves no file unlayered, so nothing escapes the rules by omission", () => {
+    for (const file of FILES) {
+      assert.notEqual(layerOf(file), undefined, `${rel(file)} has no declared layer — add one, and mean it`);
+    }
+  });
+
+  it("points every dependency downward", () => {
+    for (const file of FILES) {
+      for (const imported of requiresIn(read(file))) {
+        if (!imported.startsWith(".")) continue;
+        const target = `${path.basename(imported).replace(/\.js$/, "")}.js`;
+        if (!(target in LAYER)) continue;
+        assert.ok(
+          LAYER[target] <= layerOf(file),
+          `${path.basename(file)} (layer ${layerOf(file)}) imports ${target} (layer ${LAYER[target]}) — that is upward`,
+        );
+      }
+    }
+  });
+});
+
 describe("platform ratchets — only one module knows what Retell is", () => {
   const RETELL_COMPILER = "provider-compiler-retell.js";
 
@@ -158,10 +213,10 @@ describe("platform ratchets — only one module knows what Retell is", () => {
    */
   const REJECTION_DECLARATION = /const PROVIDER_VOICE_ID_PREFIXES = \/[^\n]*\/i;/;
 
-  it("names no provider outside the compiler", () => {
+  it("names no provider anywhere in the domain", () => {
     const PROVIDERS = ["retell", "twilio", "11labs", "elevenlabs", "cartesia", "vapi", "bland"];
     for (const file of FILES) {
-      if (file.endsWith(RETELL_COMPILER)) continue;
+      if (!isDomain(file)) continue;
       const code = stripComments(read(file)).replace(REJECTION_DECLARATION, "").toLowerCase();
       for (const provider of PROVIDERS) {
         assert.ok(!code.includes(provider), `${rel(file)} mentions ${provider} in code`);
@@ -189,9 +244,9 @@ describe("platform ratchets — only one module knows what Retell is", () => {
     );
   });
 
-  it("keeps the blueprint from importing the provider compiler", () => {
+  it("keeps the domain from importing the provider compiler", () => {
     for (const file of FILES) {
-      if (file.endsWith(RETELL_COMPILER)) continue;
+      if (!isDomain(file)) continue;
       for (const imported of requiresIn(read(file))) {
         assert.ok(
           !imported.includes("provider-compiler"),
@@ -201,30 +256,6 @@ describe("platform ratchets — only one module knows what Retell is", () => {
     }
   });
 
-  it("points the dependency one way only: compiler -> spec -> blueprint", () => {
-    const layer = {
-      "client-blueprint.js": 0,
-      "blueprint-diff.js": 0,
-      "blueprint-authority.js": 1,
-      "config-patch.js": 1,
-      "migrate-locksmith-profile.js": 1,
-      "behaviour-spec.js": 2,
-      "provider-compiler-retell.js": 3,
-    };
-    for (const file of FILES) {
-      const name = path.basename(file);
-      if (!(name in layer)) continue;
-      for (const imported of requiresIn(read(file))) {
-        if (!imported.startsWith(".")) continue;
-        const target = path.basename(imported).replace(/\.js$/, "") + ".js";
-        if (!(target in layer)) continue;
-        assert.ok(
-          layer[target] <= layer[name],
-          `${name} (layer ${layer[name]}) imports ${target} (layer ${layer[target]}) — that is upward`,
-        );
-      }
-    }
-  });
 });
 
 describe("platform ratchets — configuration cannot become permission", () => {

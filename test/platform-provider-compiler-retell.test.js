@@ -327,15 +327,17 @@ describe("retell compiler — analysis fields follow the client, not a vertical"
 
 describe("retell compiler — three trades, no vertical branching", () => {
   it("has no `if vertical ===` anywhere in it", () => {
+    // The trade-literal sweep lives in test/platform-boundaries.test.js, which
+    // strips comments first and covers every platform file. A copy here caught
+    // this file's own explanatory prose — a ratchet failing on the writing that
+    // describes it, rather than on the code.
     const source = fs.readFileSync(
       path.join(__dirname, "..", "src", "platform", "provider-compiler-retell.js"),
       "utf8",
     );
-    assert.ok(!/vertical\s*===/.test(source));
+    assert.ok(!/vertical\s*[=!]==/.test(source));
     assert.ok(!/===\s*["'](locksmith|plumbing|plumber|garage_doors)["']/.test(source));
-    for (const trade of ["locksmith", "lockout", "plumber", "plumbing", "garage"]) {
-      assert.ok(!new RegExp(`["'\`][^"'\`]*${trade}`, "i").test(source), `"${trade}" must not be a literal here`);
-    }
+    assert.ok(!/switch\s*\(\s*[\w.]*vertical/.test(source));
   });
 
   it("produces the same payload SHAPE for every trade", () => {
