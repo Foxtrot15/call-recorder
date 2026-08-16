@@ -186,13 +186,44 @@ async function proposeConfigPatch({ authority, clientId, patch, proposedBy = nul
     return fail(PATCH_CODES.BAD_SOURCE, `source must be one of ${PATCH_SOURCES.join(", ")}`);
   }
 
+  // ── WHAT A PATCH IS APPLIED TO ────────────────────────────────────
+  // Normally the ACTIVE version: this is somebody changing a working assistant.
+  //
+  // But a brand-new client being interviewed has no active version yet — the
+  // whole point of an interview is to build the first one — and refusing there
+  // meant a voice session could ask a new business fourteen questions and then
+  // have nowhere to put the answers. Found by P37-P45 when the first new-client
+  // transcript was run end to end.
+  //
+  // So an open DRAFT is a legitimate base when nothing is active, and
+  // `basedOnVersion`/`basedOn` record which was used. An APPROVED version is
+  // never a base: those words are frozen because a named person took
+  // responsibility for them, and a later proposal belongs on a new draft rather
+  // than on top of theirs.
   const active = await authority.getActiveVersion(clientId);
-  if (!active.ok) return fail(PATCH_CODES.NO_ACTIVE, `no active configuration for ${clientId} to change`);
+  let base = active.ok ? active.version : null;
+  let baseKind = "active";
 
-  const applied = applyPatchToBlueprint(active.version, patch);
+  if (!base && typeof authority.listVersions === "function") {
+    const listed = await authority.listVersions(clientId);
+    const open = listed.ok
+      ? (listed.versions || []).filter((v) => v.status === "draft" || v.status === "validated")
+      : [];
+    if (open.length) {
+      const newest = open.reduce((a, b) => ((b.configVersion ?? 0) > (a.configVersion ?? 0) ? b : a));
+      const full = await authority.getDraft(clientId, newest.configVersion);
+      if (full.ok) { base = full.version; baseKind = "draft"; }
+    }
+  }
+
+  if (!base) {
+    return fail(PATCH_CODES.NO_ACTIVE, `no active configuration or open draft for ${clientId} to change`);
+  }
+
+  const applied = applyPatchToBlueprint(base, patch);
   if (!applied.ok) return applied;
 
-  const diff = diffBlueprints(active.version, applied.blueprint);
+  const diff = diffBlueprints(base, applied.blueprint);
   if (!diff.hasChanges) {
     return fail(PATCH_CODES.NOT_APPLIED, "the patch would change nothing", { diff });
   }
@@ -204,7 +235,7 @@ async function proposeConfigPatch({ authority, clientId, patch, proposedBy = nul
     blueprint: applied.blueprint,
     createdBy: proposedBy,
     source,
-    supersedes: active.version.metadata.configVersion,
+    supersedes: base.metadata.configVersion,
   });
   if (!created.ok) return created;
 
@@ -222,7 +253,8 @@ async function proposeConfigPatch({ authority, clientId, patch, proposedBy = nul
       proposedBy,
       explanation: typeof patch.explanation === "string" ? patch.explanation : null,
       transcriptRef: typeof patch.transcriptRef === "string" ? patch.transcriptRef : null,
-      basedOnVersion: active.version.metadata.configVersion,
+      basedOnVersion: base.metadata.configVersion,
+      basedOn: baseKind,
     }),
   });
 }
