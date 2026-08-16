@@ -27,10 +27,24 @@
 // is a rumour rather than a record.
 
 const EVENT_TYPES = Object.freeze([
+  // ── configuration (P17/P18) ──
   "draft_created", "draft_updated", "validated", "validation_failed",
   "approved", "approval_refused", "activated", "activation_refused",
   "superseded", "restored", "voice_patch_proposed", "voice_patch_refused",
   "previewed",
+
+  // ── provisioning planning (P19–P23) ──
+  "provisioning_plan_created", "provisioning_plan_approved", "provisioning_plan_refused",
+
+  // ── provisioning execution (P24–P28) ──
+  // Every one of these is emitted by the executor. They live in the SAME log
+  // as the configuration events, because "who changed what for this client"
+  // is one question and answering it from two places is how half an answer
+  // gets given.
+  "execution_requested", "execution_refused", "execution_claimed",
+  "provider_attempted", "provider_succeeded", "provider_failed", "provider_unknown",
+  "registry_recorded", "registry_persist_failed", "execution_completed",
+  "reconciliation_requested", "reconciliation_completed", "manual_review_required",
 ]);
 
 const isStr = (v) => typeof v === "string" && v.trim().length > 0;

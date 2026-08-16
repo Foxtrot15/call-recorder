@@ -371,12 +371,27 @@ create table if not exists public.platform_config_events (
   client_id         text        not null check (length(client_id) between 1 and 64),
   config_version    integer     check (config_version is null or config_version >= 1),
 
+  -- WIDENED IN P24-P28, BEFORE THIS FILE WAS EVER APPLIED.
+  -- The provisioning and execution vocabularies arrived after ACP1 was first
+  -- written and reviewed. Shipping an ALTER in a later migration would be the
+  -- right answer for a table that EXISTS somewhere; this one has been applied
+  -- nowhere, so completing the list is simpler and leaves no migration
+  -- altering a table that never existed. The application's audit sink
+  -- (src/platform/config-audit.js) carries exactly this list.
   event_type        text        not null
     check (event_type in (
+      -- configuration (P17/P18)
       'draft_created','draft_updated','validated','validation_failed',
       'approved','approval_refused','activated','activation_refused',
       'superseded','restored','voice_patch_proposed','voice_patch_refused',
-      'previewed'
+      'previewed',
+      -- provisioning planning (P19-P23)
+      'provisioning_plan_created','provisioning_plan_approved','provisioning_plan_refused',
+      -- provisioning execution (P24-P28)
+      'execution_requested','execution_refused','execution_claimed',
+      'provider_attempted','provider_succeeded','provider_failed','provider_unknown',
+      'registry_recorded','registry_persist_failed','execution_completed',
+      'reconciliation_requested','reconciliation_completed','manual_review_required'
     )),
 
   -- WHO. Text rather than a foreign key: an actor may be an operator, a client
