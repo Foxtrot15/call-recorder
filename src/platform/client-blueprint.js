@@ -162,6 +162,16 @@ const isBool = (v) => typeof v === "boolean";
 const isArr = (v) => Array.isArray(v);
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const SLUG = /^[a-z][a-z0-9_]{1,60}$/;
+
+/**
+ * The one place in the domain that may name a voice vendor, and it names them
+ * only to REFUSE them. A provider voice id in the blueprint would make the
+ * whole model provider-specific, so the prefixes are listed here as a
+ * rejection rather than an integration. Kept as a named constant so the
+ * boundary ratchet can exempt this single declaration and still fail on any
+ * other mention of a provider anywhere in src/platform.
+ */
+const PROVIDER_VOICE_ID_PREFIXES = /^(11labs-|custom_voice_|retell-|cartesia-|openai-)/i;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const E164 = /^\+[1-9][0-9]{6,14}$/;
 
@@ -537,7 +547,7 @@ function validateBlueprint(bp) {
     if (!isStr(v.language)) err("voice.language", "required");
     // A provider voice id here would make the blueprint provider-specific,
     // which is the boundary this whole model exists to hold.
-    if (isStr(v.profileRef) && /^(11labs-|custom_voice_|retell-|cartesia-|openai-)/i.test(v.profileRef)) {
+    if (isStr(v.profileRef) && PROVIDER_VOICE_ID_PREFIXES.test(v.profileRef)) {
       err("voice.profileRef", "looks like a PROVIDER voice id — the blueprint holds a provider-independent reference");
     }
   }

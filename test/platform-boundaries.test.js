@@ -1,0 +1,379 @@
+// AIDA PLATFORM P8 — the ratchets.
+//
+// Everything else in this batch can be argued about. These cannot: they are
+// the properties that make the architecture true rather than merely intended,
+// and each one would be easy to break and hard to notice.
+//
+//   1. No vertical branching. A plumber differs from a locksmith by its
+//      CONFIGURATION. The moment `if (vertical === "plumber")` appears, the
+//      platform has a second locksmith hardcoded in it.
+//
+//   2. No provider inside the domain. Only the Retell compiler may know what
+//      Retell is, and only it may import from it.
+//
+//   3. No compliance authority in configuration. DNCR, suppression, dial
+//      authorisation, the calling stop, dispatch uniqueness, webhook
+//      authenticity, lifecycle truth and provider-resource uniqueness are
+//      platform-owned. Nothing in src/platform may import them, and no client
+//      may configure them.
+//
+//   4. No transport anywhere in src/platform. Not http, not a Supabase client,
+//      not the dial executor. Configuration cannot make a call.
+//
+// These read source text on purpose. An import that cannot be seen in the file
+// is an import that got past review.
+
+const { describe, it } = require("node:test");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const PLATFORM_DIR = path.join(__dirname, "..", "src", "platform");
+
+/** Every .js file under src/platform, recursively. */
+function platformFiles(dir = PLATFORM_DIR, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) platformFiles(full, out);
+    else if (entry.name.endsWith(".js")) out.push(full);
+  }
+  return out;
+}
+
+const FILES = platformFiles();
+const rel = (f) => path.relative(path.join(__dirname, ".."), f).replace(/\\/g, "/");
+const read = (f) => fs.readFileSync(f, "utf8");
+
+/** Comments carry explanations that legitimately name the things below. */
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+const requiresIn = (source) => [...stripComments(source).matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
+
+describe("platform ratchets — the files are actually being checked", () => {
+  it("finds every platform module", () => {
+    assert.ok(FILES.length >= 8, `expected the platform modules, found ${FILES.length}`);
+    for (const expected of [
+      "client-blueprint.js",
+      "blueprint-authority.js",
+      "blueprint-diff.js",
+      "config-patch.js",
+      "behaviour-spec.js",
+      "provider-compiler-retell.js",
+      "migrate-locksmith-profile.js",
+    ]) {
+      assert.ok(FILES.some((f) => f.endsWith(expected)), `${expected} is not being checked`);
+    }
+  });
+
+  it("strips comments without stripping code", () => {
+    const stripped = stripComments('const a = 1; // if (vertical === "plumber")\n/* vertical === "x" */\nconst b = 2;');
+    assert.ok(!stripped.includes("plumber"));
+    assert.ok(stripped.includes("const a = 1;"));
+    assert.ok(stripped.includes("const b = 2;"));
+    assert.ok(stripComments('const u = "https://example.invalid/x";').includes("https://example.invalid/x"),
+      "a URL in a string must survive, or the transport check below proves nothing");
+  });
+});
+
+describe("platform ratchets — no vertical branching", () => {
+  it("never selects behaviour from a vertical", () => {
+    // Scoped to the three ways a vertical could actually STEER something.
+    // Reading the field is fine — validating it is exactly what a schema does.
+    for (const file of FILES) {
+      const code = stripComments(read(file));
+      assert.ok(!/vertical\s*[=!]==/.test(code), `${rel(file)} compares vertical to a value`);
+      assert.ok(!/switch\s*\(\s*[\w.]*vertical/.test(code), `${rel(file)} switches on vertical`);
+      assert.ok(!/\[\s*[\w.]*vertical\s*\]/.test(code), `${rel(file)} looks something up by vertical`);
+    }
+  });
+
+  it("would catch a vertical branch if one were added", () => {
+    // The check above is narrow on purpose, so prove it is not vacuous.
+    for (const branch of [
+      'if (vertical === "plumber") { x(); }',
+      'if (bp.identity.vertical !== "locksmith") return;',
+      "switch (vertical) { case 'x': break; }",
+      "const rules = BY_TRADE[vertical];",
+      "const rules = BY_TRADE[bp.identity.vertical];",
+    ]) {
+      const caught =
+        /vertical\s*[=!]==/.test(branch) ||
+        /switch\s*\(\s*[\w.]*vertical/.test(branch) ||
+        /\[\s*[\w.]*vertical\s*\]/.test(branch);
+      assert.ok(caught, `the ratchet would not catch: ${branch}`);
+    }
+  });
+
+  it("names no trade in any code literal", () => {
+    // Fixtures are configuration DATA — that is the whole point, so they are
+    // the one exemption, named rather than pattern-matched.
+    const TRADE_WORDS = ["locksmith", "lockout", "plumber", "plumbing", "garage", "electrician", "drain", "rekey"];
+    for (const file of FILES) {
+      if (rel(file).includes("/fixtures/")) continue;
+      // The locksmith migration is BY NAME a legacy adapter for one vertical;
+      // it exists precisely so no other module has to know that word.
+      if (rel(file).endsWith("migrate-locksmith-profile.js")) continue;
+
+      const code = stripComments(read(file));
+      const literals = [...code.matchAll(/["'`]([^"'`\n]*)["'`]/g)].map((m) => m[1]);
+      for (const literal of literals) {
+        for (const trade of TRADE_WORDS) {
+          assert.ok(
+            !literal.toLowerCase().includes(trade),
+            `${rel(file)} has "${trade}" in the literal ${JSON.stringify(literal)}`,
+          );
+        }
+      }
+    }
+  });
+
+  it("keeps the one legacy adapter honest about being one", () => {
+    // It may name the vertical it converts FROM, but it must not branch on one
+    // and must not be imported by any other platform module.
+    const file = FILES.find((f) => f.endsWith("migrate-locksmith-profile.js"));
+    const code = stripComments(read(file));
+    assert.ok(!/vertical\s*[=!]==/.test(code), "even the legacy adapter must not branch on vertical");
+    assert.match(code, /vertical = "locksmith"/, "and it must let the caller name the vertical");
+
+    for (const other of FILES) {
+      if (other === file) continue;
+      assert.ok(
+        !requiresIn(read(other)).some((r) => r.includes("migrate-locksmith")),
+        `${rel(other)} imports the locksmith adapter — nothing else may depend on one vertical`,
+      );
+    }
+  });
+});
+
+describe("platform ratchets — only one module knows what Retell is", () => {
+  const RETELL_COMPILER = "provider-compiler-retell.js";
+
+  /**
+   * One declaration in the domain legitimately names vendors, and it names
+   * them only to REFUSE them: the blueprint rejects a provider voice id
+   * outright. Exempted by its exact declaration rather than by pattern, so any
+   * OTHER mention of a provider anywhere still fails.
+   */
+  const REJECTION_DECLARATION = /const PROVIDER_VOICE_ID_PREFIXES = \/[^\n]*\/i;/;
+
+  it("names no provider outside the compiler", () => {
+    const PROVIDERS = ["retell", "twilio", "11labs", "elevenlabs", "cartesia", "vapi", "bland"];
+    for (const file of FILES) {
+      if (file.endsWith(RETELL_COMPILER)) continue;
+      const code = stripComments(read(file)).replace(REJECTION_DECLARATION, "").toLowerCase();
+      for (const provider of PROVIDERS) {
+        assert.ok(!code.includes(provider), `${rel(file)} mentions ${provider} in code`);
+      }
+    }
+  });
+
+  it("keeps that one exemption real, and narrow", () => {
+    const blueprint = FILES.find((f) => f.endsWith("client-blueprint.js"));
+    const code = read(blueprint);
+    assert.match(code, REJECTION_DECLARATION, "the exempted declaration must still exist as written");
+
+    // It is a rejection, and it still rejects.
+    const { validateBlueprint } = require("../src/platform/client-blueprint");
+    const { locksmithA } = require("../src/platform/fixtures/clients");
+    const bp = locksmithA();
+    bp.voice.profileRef = "retell-sunny";
+    assert.ok(validateBlueprint(bp).errors.some((e) => e.path === "voice.profileRef"));
+
+    // And exempting it does not blind the check to a second mention.
+    const smuggled = `${code}\nconst client = makeRetellClient();`;
+    assert.ok(
+      stripComments(smuggled).replace(REJECTION_DECLARATION, "").toLowerCase().includes("retell"),
+      "the exemption must not swallow other mentions",
+    );
+  });
+
+  it("keeps the blueprint from importing the provider compiler", () => {
+    for (const file of FILES) {
+      if (file.endsWith(RETELL_COMPILER)) continue;
+      for (const imported of requiresIn(read(file))) {
+        assert.ok(
+          !imported.includes("provider-compiler"),
+          `${rel(file)} imports a provider compiler — the domain must not depend on one`,
+        );
+      }
+    }
+  });
+
+  it("points the dependency one way only: compiler -> spec -> blueprint", () => {
+    const layer = {
+      "client-blueprint.js": 0,
+      "blueprint-diff.js": 0,
+      "blueprint-authority.js": 1,
+      "config-patch.js": 1,
+      "migrate-locksmith-profile.js": 1,
+      "behaviour-spec.js": 2,
+      "provider-compiler-retell.js": 3,
+    };
+    for (const file of FILES) {
+      const name = path.basename(file);
+      if (!(name in layer)) continue;
+      for (const imported of requiresIn(read(file))) {
+        if (!imported.startsWith(".")) continue;
+        const target = path.basename(imported).replace(/\.js$/, "") + ".js";
+        if (!(target in layer)) continue;
+        assert.ok(
+          layer[target] <= layer[name],
+          `${name} (layer ${layer[name]}) imports ${target} (layer ${layer[target]}) — that is upward`,
+        );
+      }
+    }
+  });
+});
+
+describe("platform ratchets — configuration cannot become permission", () => {
+  /**
+   * The eight authorities the founder named as never client-configurable.
+   * Each entry is the module that owns it in the existing codebase.
+   */
+  const COMPLIANCE_AUTHORITIES = Object.freeze([
+    "acquisition-dncr",
+    "acquisition-suppression",
+    "acquisition-authorisation",
+    "acquisition-calling-state",
+    "acquisition-calling-approval",
+    "acquisition-calling-policy",
+    "acquisition-dispatch-store",
+    "acquisition-dispatch-resolution",
+    "acquisition-dial-execution",
+    "acquisition-dial-provider",
+    "acquisition-attempt-policy",
+    "acquisition-resource-authority",
+    "acquisition-agent-provisioning",
+    "provider-resource-registry",
+  ]);
+
+  it("imports none of them, anywhere in src/platform", () => {
+    for (const file of FILES) {
+      for (const imported of requiresIn(read(file))) {
+        for (const authority of COMPLIANCE_AUTHORITIES) {
+          assert.ok(
+            !imported.includes(authority),
+            `${rel(file)} imports ${authority} — a compliance authority must not be reachable from configuration`,
+          );
+        }
+      }
+    }
+  });
+
+  it("imports nothing at all from src/services", () => {
+    for (const file of FILES) {
+      for (const imported of requiresIn(read(file))) {
+        assert.ok(
+          !imported.includes("services/") && !imported.includes("../services"),
+          `${rel(file)} reaches into src/services (${imported}) — the platform domain stands alone`,
+        );
+      }
+    }
+  });
+
+  it("has no field, anywhere, that could express permission to call", () => {
+    const { emptyBlueprint } = require("../src/platform/client-blueprint");
+    const { compileBehaviourSpec } = require("../src/platform/behaviour-spec");
+    const { FIXTURE_CLIENTS } = require("../src/platform/fixtures/clients");
+
+    const FORBIDDEN_FIELDS = [
+      "callingEnabled", "callingState", "dialAuthorised", "dialAuthorized",
+      "authorisation", "authorization", "approvedToCall", "canDial",
+      "dncrWashed", "dncrStatus", "suppressed", "suppressionOverride",
+      "dispatchId", "webhookVerified", "signatureValid", "providerResourceId",
+    ];
+
+    const blueprints = [emptyBlueprint(), ...Object.values(FIXTURE_CLIENTS).map((m) => m())];
+    const specs = blueprints.map((bp) => compileBehaviourSpec(bp).spec);
+
+    for (const obj of [...blueprints, ...specs]) {
+      const json = JSON.stringify(obj);
+      for (const field of FORBIDDEN_FIELDS) {
+        assert.ok(!json.includes(`"${field}"`), `"${field}" must not exist in a blueprint or spec`);
+      }
+    }
+  });
+
+  it("exposes no function whose name suggests it could act", () => {
+    const MODULES = [
+      "client-blueprint", "blueprint-authority", "blueprint-diff",
+      "config-patch", "behaviour-spec", "provider-compiler-retell",
+      "migrate-locksmith-profile",
+    ];
+    // Verb forms only: `callTheProvider` is an action, `CALLER_INFO_FIELDS` is
+    // a vocabulary. Matching the bare prefix caught the second, which is the
+    // ratchet failing on the code it exists to protect.
+    const ACTING = /^(dial|call|send|post|provision|deploy|publish|enable|disable|suppress|wash|authorise|authorize|authorisation|authorization)([A-Z]|$)/;
+    for (const name of MODULES) {
+      const module = require(`../src/platform/${name}`);
+      for (const [exported, value] of Object.entries(module)) {
+        if (typeof value !== "function") continue; // only a function can act
+        assert.ok(!ACTING.test(exported), `${name} exports a function called "${exported}"`);
+      }
+    }
+  });
+
+  it("would catch an acting export if one were added", () => {
+    const ACTING = /^(dial|call|send|post|provision|deploy|publish|enable|disable|suppress|wash|authorise|authorize|authorisation|authorization)([A-Z]|$)/;
+    for (const bad of ["dialProspect", "sendSms", "provisionAgent", "enableCalling", "authoriseDial", "call", "washDncrList", "suppressClient"]) {
+      assert.ok(ACTING.test(bad), `the ratchet would not catch "${bad}"`);
+    }
+    for (const fine of ["CALLER_INFO_FIELDS", "compileBehaviourSpec", "postcodeOf", "intakeDefaults"]) {
+      assert.ok(!ACTING.test(fine), `the ratchet would wrongly reject "${fine}"`);
+    }
+  });
+});
+
+describe("platform ratchets — nothing in src/platform can reach the world", () => {
+  it("imports no transport, database or process facility", () => {
+    const ALLOWED_NODE_BUILTINS = new Set(["crypto"]);
+    const FORBIDDEN = ["http", "https", "net", "tls", "dns", "child_process", "fs", "node-fetch", "axios", "undici", "@supabase/supabase-js", "twilio", "ws"];
+    for (const file of FILES) {
+      for (const imported of requiresIn(read(file))) {
+        if (imported.startsWith(".")) continue;
+        const bare = imported.replace(/^node:/, "");
+        assert.ok(
+          ALLOWED_NODE_BUILTINS.has(bare),
+          `${rel(file)} imports "${imported}" — only ${[...ALLOWED_NODE_BUILTINS].join(", ")} is permitted`,
+        );
+        assert.ok(!FORBIDDEN.includes(bare), `${rel(file)} imports ${imported}`);
+      }
+    }
+  });
+
+  it("calls no global that reaches the network", () => {
+    for (const file of FILES) {
+      const code = stripComments(read(file));
+      for (const global of ["fetch(", "XMLHttpRequest", "WebSocket(", "navigator."]) {
+        assert.ok(!code.includes(global), `${rel(file)} calls ${global}`);
+      }
+    }
+  });
+
+  it("reads no environment variable", () => {
+    // Configuration that reads env is configuration that behaves differently
+    // in production than in a test, which is how a live call happens by
+    // accident. Deployment facts are injected.
+    for (const file of FILES) {
+      const code = stripComments(read(file));
+      assert.ok(!/process\.env/.test(code), `${rel(file)} reads process.env`);
+    }
+  });
+
+  it("takes its clock by injection rather than reading one", () => {
+    for (const file of FILES) {
+      const code = stripComments(read(file));
+      assert.ok(!/Date\.now\(\)/.test(code), `${rel(file)} calls Date.now()`);
+      assert.ok(!/new Date\(\s*\)/.test(code), `${rel(file)} calls new Date() with no argument`);
+    }
+  });
+
+  it("holds no credential-shaped literal", () => {
+    const SECRET = /(sk_live|sk_test|key_[0-9a-f]{16}|Bearer\s+[A-Za-z0-9._-]{16}|eyJ[A-Za-z0-9_-]{20})/;
+    for (const file of FILES) {
+      assert.ok(!SECRET.test(read(file)), `${rel(file)} contains something credential-shaped`);
+    }
+  });
+});
