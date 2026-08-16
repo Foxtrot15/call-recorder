@@ -583,6 +583,86 @@ describe("P28B failure matrix — every state truthful and recoverable", () => {
     assert.equal(result.results[0].status, "manual_reconciliation_required");
   });
 
+  it("11. replacement partial failure: the NEW resource exists, is unrecorded, and the old one is untouched", async () => {
+    // The worst moment in a replace. The provider built the new resource and
+    // the registry write failed, so now TWO resources exist at the provider and
+    // the registry knows about the older one only. Retiring the old one on that
+    // evidence would leave a business served by a resource nothing recorded;
+    // re-creating would make a third.
+    const now = H.fixedClock();
+    const registry = createInMemoryResourceRegistry();
+    const w = createResourceRegistryWriter({ registry, now });
+    const BASE = {
+      clientId: CID, provider: "retell", providerTag: "fake-env",
+      purpose: "receptionist_agent", resourceType: "response_engine",
+      provenance: { clientId: CID, configVersion: 1, behaviourHash: "b".repeat(64) },
+    };
+    await w.recordProvisioned({ ...BASE, providerResourceId: "prov_old", payloadHash: "a".repeat(64), actionKind: "create" });
+
+    registry._failNextWrite("connection lost mid-replace");
+    const r = await w.recordProvisioned({ ...BASE, providerResourceId: "prov_new", payloadHash: "c".repeat(64), actionKind: "replace" });
+
+    assert.equal(r.ok, false);
+    assert.equal(r.code, REGISTRY_CODES.PERSIST_FAILED);
+    assert.equal(r.providerResourceId, "prov_new", "the id of the thing that EXISTS must come back");
+    assert.equal(r.doNotRetryProvider, true);
+
+    // The incumbent is still active and still correct. A failed replacement
+    // must never retire what it failed to replace.
+    const active = registry._rows().filter((row) => row.active !== false);
+    assert.equal(active.length, 1);
+    assert.equal(active[0].provider_resource_id, "prov_old");
+  });
+
+  it("12. retirement partial failure: the registry still shows it active, which is the truthful answer", async () => {
+    // Retirement recorded nothing, so as far as durable truth goes the resource
+    // is still active. That is uncomfortable and correct: the alternative is a
+    // registry that says "retired" about something still answering calls.
+    const now = H.fixedClock();
+    const registry = createInMemoryResourceRegistry();
+    const w = createResourceRegistryWriter({ registry, now });
+    const BASE = {
+      clientId: CID, provider: "retell", providerTag: "fake-env",
+      purpose: "receptionist_agent", resourceType: "response_engine",
+      provenance: { clientId: CID, configVersion: 1, behaviourHash: "b".repeat(64) },
+    };
+    await w.recordProvisioned({ ...BASE, providerResourceId: "prov_1", payloadHash: "a".repeat(64), actionKind: "create" });
+
+    registry._failNextWrite("connection lost mid-retire");
+    const r = await w.recordRetired({ ...BASE, providerResourceId: "prov_1", retirementMode: "provider_disabled" });
+
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.code, REGISTRY_CODES.PERSIST_FAILED);
+    assert.equal(r.providerResourceId, "prov_1");
+
+    const active = registry._rows().filter((row) => row.active !== false);
+    assert.equal(active.length, 1, "the row stays active — nothing recorded the retirement");
+    assert.equal(active[0].provider_resource_id, "prov_1");
+  });
+
+  it("covers all sixteen named scenarios, and says where the other three live", () => {
+    // Written after a count found 11 and 12 quietly missing: the matrix ran
+    // 1-10 then jumped to 13, and nothing noticed. A matrix with a hole in it
+    // reads exactly like a complete one.
+    const source = fs.readFileSync(__filename, "utf8");
+    const numbered = new Set(
+      [...source.matchAll(/it\("(\d+)\. /g)].map((m) => Number(m[1])),
+    );
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) {
+      assert.ok(numbered.has(n), `failure-matrix scenario ${n} is missing`);
+    }
+    assert.equal(numbered.size, 13, `the matrix is numbered 1-13; found ${[...numbered].sort((a,b)=>a-b).join()}`);
+
+    // 14, 15 and 16 are reconciliation and recovery rather than execution, so
+    // they live with their subjects. Named here so the matrix is not silently
+    // short by three.
+    const elsewhere = fs.readFileSync(path.join(ROOT, "test", "platform-reconciliation.test.js"), "utf8");
+    assert.match(elsewhere, /MISSING_PROVIDER_RESOURCE when the registry has one and the provider does not/); // 14
+    assert.match(elsewhere, /refuses adoption when the observed id contradicts/); // 15
+    assert.match(source, /refuses adoption when the payload does not match/); // 15
+    assert.match(source, /re-runs after an UNKNOWN is REFUSED/); // 16
+  });
+
   it("13. an unavailable provider observation is UNKNOWN, not absent", () => {
     const { reconcileClient } = require("../src/platform/reconciliation-engine");
     const registry = [{ client_id: CID, purpose: "receptionist_agent", resource_type: "voice_agent", provider_resource_id: "prov_1", payload_hash: "a".repeat(64), active: true }];
