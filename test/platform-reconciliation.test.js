@@ -12,6 +12,7 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 const H = require("./helpers/provisioning-harness");
 const { reconcileClient, buildRepairPlan, REPAIR_ACTIONS, SUBREASONS } = require("../src/platform/reconciliation-engine");
@@ -417,6 +418,59 @@ describe("P28 CLI — fake providers, and no flag that changes that", () => {
     assert.ok(!COMMANDS.includes("deploy"));
     assert.ok(!COMMANDS.includes("provision-live"));
     assert.match(USAGE, /There is no --live, no --retell, no --force and\s*\n?\s*no --retry-unknown/);
+  });
+
+  it("every invocation printed in the documentation is one the CLI accepts", () => {
+    // Written after a documented line turned out to be unrunnable. A command
+    // an operator copies out of a runbook and pastes into a terminal at the
+    // moment they need it is the worst possible place to discover a typo.
+    const SHELL_ONLY = ["--demo"]; // consumed by scripts/provision.js, stripped before the CLI sees argv
+    const docsDir = path.join(ROOT, "docs");
+    const shown = [];
+    for (const name of fs.readdirSync(docsDir)) {
+      if (!name.endsWith(".md")) continue;
+      const text = fs.readFileSync(path.join(docsDir, name), "utf8");
+      for (const m of text.matchAll(/node scripts\/provision\.js ([^\n`|]*)/g)) {
+        shown.push({ doc: name, line: m[1].trim() });
+      }
+    }
+    assert.ok(shown.length >= 4, "the docs show no provisioning invocations at all");
+
+    for (const { doc, line } of shown) {
+      const tokens = line.split(/\s+/).filter(Boolean);
+      const command = tokens[0];
+      assert.ok(COMMANDS.includes(command), `${doc} shows "${command}", which is not a command`);
+      for (const token of tokens.slice(1)) {
+        if (!token.startsWith("--")) continue;
+        assert.ok(
+          KNOWN_FLAGS.includes(token) || SHELL_ONLY.includes(token),
+          `${doc} shows "${token}" on "${command}", which nothing accepts`,
+        );
+        assert.ok(!(token in FORBIDDEN_FLAGS), `${doc} shows the refused flag "${token}"`);
+      }
+      // Execute and reconcile mutate or read a provider. The docs must never
+      // show them without the flag that makes the provider fake.
+      if (command === "execute" || command === "reconcile") {
+        assert.ok(tokens.includes("--fake-provider"), `${doc} shows "${command}" without --fake-provider`);
+      }
+    }
+  });
+
+  it("the documented demonstration actually runs, end to end, against a fake", async () => {
+    // The docs promise a person can watch a whole client get provisioned. This
+    // spawns the real script exactly as written and checks it did.
+    const out = execFileSync(
+      process.execPath,
+      [path.join(ROOT, "scripts", "provision.js"), "execute", "riverside_plumbing", "--demo", "--fake-provider"],
+      { encoding: "utf8" },
+    );
+    assert.match(out, /status=completed/);
+    assert.match(out, /\(fake=true\)/);
+    assert.match(out, /No real provider was contacted/);
+    // And it says the approval was a fixture, so nobody reads it as a review.
+    assert.match(out, /No human reviewed them/);
+    // The references it used are visibly fake, not plausible-looking inventions.
+    assert.ok(!/llm_[0-9a-f]{16}/.test(out), "a real-looking llm id appeared in the demonstration");
   });
 });
 

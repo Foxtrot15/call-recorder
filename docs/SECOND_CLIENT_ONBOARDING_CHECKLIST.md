@@ -164,6 +164,12 @@ a real provider.
 node scripts/provision.js execute <clientId> --demo --fake-provider
 ```
 
+- [ ] `--demo` seeds **in-memory demonstration clients** with visibly fake
+      provider references and approves their plans **as a fixture** — it says so
+      on every run. It is how you watch the machinery work; it is not how a real
+      client gets approved. Real deployment facts are never invented, and the
+      CLI has **no `approve` command**.
+
 - [ ] `--fake-provider` is **mandatory**, not a safety default that could be
       turned off. `--live`, `--retell`, `--force` and `--retry-unknown` do not
       exist and are refused **by name, with a reason**.

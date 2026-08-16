@@ -1051,7 +1051,28 @@ toggle with a dangerous default; it is the only value it can take.
 
 **These flags do not exist**, and each is refused by name with a reason:
 `--live`, `--retell`, `--force`, `--retry-unknown`, `--no-preflight`,
-`--skip-gates`.
+`--skip-gates`. An unrecognised flag is refused too, rather than ignored.
+
+`--demo` is handled by the shell script and stripped before the CLI sees argv.
+It seeds four in-memory demonstration clients with **visibly fake** provider
+references — `llm_fake…`, `custom_voice_fake…`, and a host under the
+reserved-invalid `.invalid` TLD that cannot resolve — and approves their plans
+**as a fixture**, which the script says out loud on every run:
+
+```
+--demo seeded 4 demonstration client(s) with FAKE provider references,
+and approved their plans as a fixture. No human reviewed them.
+```
+
+That line exists because an operator watching an execution succeed should never
+have to wonder whether a person approved the plan or a script did. **The CLI
+has no `approve` command**, and nothing in it grants approval authority; the
+seed constructs a named principal exactly as the authority requires. Without
+`--demo` there are no clients, no provider references and no approved plans, and
+every command reports what is missing by name.
+
+A real client's deployment facts are **never** invented this way — they are
+absent, reported by name, and supplied by a person.
 
 ### The future live-provider wiring milestone
 
