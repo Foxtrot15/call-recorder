@@ -37,12 +37,31 @@ record.
 
 ## Stage 1 — configuration
 
-Follow [NEW_CLIENT_IMPLEMENTATION_CHECKLIST.md](NEW_CLIENT_IMPLEMENTATION_CHECKLIST.md)
-in full, or the screens in
-[NEW_CLIENT_CONFIGURATION_FLOW.md](NEW_CLIENT_CONFIGURATION_FLOW.md).
+Do this **through the UI** (P29–P35), which is now the intended path:
 
-- [ ] draft → validate → read the diff → **a named person approves** →
-      **an operator activates**
+```
+PLATFORM_CONFIG_API_ENABLED=true npm start
+/platform/clients/<slug>/wizard          the fifteen-step setup
+/platform/clients/<slug>/edit/<section>  or go straight to a section
+```
+
+The wizard creates a real draft on step 1 and every later step edits that same
+draft through the same editor a returning user sees — so you can leave and come
+back, and there is no wizard state to lose.
+
+The CLI and the JSON API remain available and do exactly the same things:
+[NEW_CLIENT_IMPLEMENTATION_CHECKLIST.md](NEW_CLIENT_IMPLEMENTATION_CHECKLIST.md)
+and [NEW_CLIENT_CONFIGURATION_FLOW.md](NEW_CLIENT_CONFIGURATION_FLOW.md).
+
+- [ ] draft → validate → **read the diff on the review screen** → **a named
+      person approves** → **an operator activates**
+- [ ] The review screen states the changes in words —
+      *"Saturday hours 08:00-12:00 → 09:00-16:00"* — not as a JSON diff. Read
+      them. An approval nobody read is worse than no approval, because it has a
+      name attached to it.
+- [ ] If you see **"This draft changed after you opened it"**, somebody else
+      saved while you were editing. Reload and re-read. There is no way to
+      overwrite their edit, and that is deliberate.
 - [ ] Read the **first spoken sentence** aloud. Inbound keeps the business's own
       greeting; outbound always discloses AI.
 - [ ] Record the **behaviour hash**. It is how you will later answer "has

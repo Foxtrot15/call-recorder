@@ -1,8 +1,15 @@
 # New client configuration flow
 
-What an eventual UI does, screen by screen, and which call sits behind each
-button. Written so the UI can be built without reading the domain code, and so
-the domain can refuse anything the UI gets wrong.
+What the UI does, screen by screen, and which call sits behind each button.
+Written so the UI could be built without reading the domain code, and so the
+domain refuses anything the UI gets wrong.
+
+> **This is now BUILT.** P29–P35 implemented these screens against exactly the
+> operations below — see
+> [AIDA_CLIENT_PLATFORM.md §Client configuration UI](AIDA_CLIENT_PLATFORM.md#client-configuration-ui)
+> for the screen table, the accessibility contract and the ratchets. This
+> document remains the API-level contract: it is what the screens call, and what
+> a second client of the same API would have to obey.
 
 **Nothing here provisions anything.** The last screen shows a person what a
 provider *would* be told. Sending it is a separate, explicitly authorised act
@@ -322,7 +329,31 @@ provisioning, provider, phone, routing, integrations, compliance.
 
 ## Status
 
-The HTTP API is **gated off** and wired to the in-memory store, because
-`acp1_create_client_configuration.sql` **has not been applied anywhere**. Every
-call above works today against that store; pointing it at Postgres is one line
-once the migration is applied and reviewed.
+The HTTP API **and the UI that calls it** are gated off behind the same
+`PLATFORM_CONFIG_API_ENABLED="true"`, and both are wired to the in-memory store
+because `acp1_create_client_configuration.sql` **has not been applied
+anywhere**. Every call above works today against that store; pointing it at
+Postgres is one line once the migration is applied and reviewed.
+
+The UI is served from `/platform/clients/:clientId/…` — see the screen table in
+[AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md#client-configuration-ui),
+which states for each screen what it may mutate and what it may not.
+
+## The voice agent uses this same contract
+
+There is no separate voice API and there will not be one. A voice-created draft
+is a draft: `POST …/config/proposals` produces one, `voice_agent` holds
+`config:propose` and nothing else, and `metadata.source` records where it came
+from. A test renders every editor screen for a `source:"voice"` draft and a
+`source:"ui"` draft and asserts the output is byte-identical.
+
+So the voice flow needs no new screens and no new endpoints — only the speech
+pipeline, which does not exist:
+
+```
+talk to the configuration agent
+  → POST …/config/proposals        (the same operation this document describes)
+  → the draft appears on the same review screen
+  → the same named-human approval
+  → the same operator activation
+```

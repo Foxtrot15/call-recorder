@@ -251,4 +251,38 @@ describe("documentation — it has not drifted from the code", () => {
     assert.ok(PLATFORM_DOC.includes("acp1_create_client_configuration.sql"));
     assert.ok(PLATFORM_DOC.includes("PLATFORM_CONFIG_API_ENABLED"));
   });
+
+  it("documents every UI screen that exists, and claims none that does not", () => {
+    assert.ok(PLATFORM_DOC.includes("Client configuration UI"), "the UI is undocumented");
+
+    // Every route the UI actually serves must appear in the screen table.
+    const routes = fs.readFileSync(path.join(ROOT, "src", "routes", "platform-ui.js"), "utf8");
+    const paths = [...routes.matchAll(/router\.get\(`\$\{BASE\}([^`]*)`/g)].map((m) => m[1]);
+    for (const p of paths) {
+      // The table writes them as `…/history`, `…/edit/:section` and so on.
+      const tail = p === "" ? "/platform/clients/:id" : `…${p}`;
+      assert.ok(PLATFORM_DOC.includes(tail), `the screen table does not document ${tail}`);
+    }
+    assert.ok(paths.length >= 8, `only ${paths.length} GET routes found — check the extraction, not the doc`);
+
+    // And the four sentences the UI exists to keep.
+    for (const sentence of [
+      "APPROVED — NOT EXECUTED",
+      "Outbound calls must identify AIDA as an AI assistant.",
+      "Provider outcome is uncertain. Reconciliation is required before another",
+      "Hidden button ≠ security",
+    ]) {
+      assert.ok(PLATFORM_DOC.includes(sentence), `the UI section does not say: ${sentence}`);
+    }
+  });
+
+  it("keeps the screen table's promises in step with what the code forbids", () => {
+    const V = require("../src/platform/ui/ui-vocabulary");
+    assert.ok(PLATFORM_DOC.includes(V.OUTBOUND_DISCLOSURE_SENTENCE));
+    assert.ok(PLATFORM_DOC.includes(V.UNCERTAIN_OUTCOME_SENTENCE.slice(0, 60)));
+    // The doc promises no execute route. Prove the routes agree.
+    const routes = fs.readFileSync(path.join(ROOT, "src", "routes", "platform-ui.js"), "utf8");
+    const code = routes.replace(/\/\/[^\n]*/g, "").replace(/"[^"]*"/g, '""');
+    assert.ok(!/execute/i.test(code), "the doc says there is no execute route, and there is");
+  });
 });

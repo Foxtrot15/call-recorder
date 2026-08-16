@@ -61,7 +61,7 @@ unlisted.
 | 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js`, `execution-preflight.js`, `execution-claim.js`, `provider-mutation-port.js`, `resource-registry-writer.js`, `provisioning-executor.js`, `reconciliation-engine.js` | No |
 | 2 behaviour | `behaviour-spec.js` | No |
 | 3 provider | `provider-compiler-retell.js`, `provisioning-desired-state.js` | Yes — they build provider payloads |
-| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js` | Yes — they compose the compiler to show a person its output |
+| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js`, `ui/ui-vocabulary.js`, `ui/ui-diff.js`, `ui/ui-fields.js`, `ui/ui-view-models.js` | Yes — they compose the compiler to show a person its output |
 
 ---
 
@@ -1110,6 +1110,230 @@ table that never existed. A test asserts the SQL list and
 
 ---
 
+## Client configuration UI
+
+The screens a client or operator actually uses. Built on the repo's existing
+view convention — pure functions in `src/views/*.js` returning HTML strings, a
+stylesheet and an enhancement script under `public/platform/`, and no template
+engine, framework or build step.
+
+**Gated behind the same `PLATFORM_CONFIG_API_ENABLED="true"` as the JSON API**,
+deliberately: a UI that could be switched on while the API it calls was off
+would show somebody an empty screen and no reason.
+
+### It adds no authority
+
+Every screen calls the **same** `config-service` and `provisioning-service` the
+JSON surface calls, with the same principal, resolved the same way. There is no
+UI-only operation, no UI-only store, and nothing a person can do through a page
+that they could not do through the API.
+
+That is the point of the shape, not a coincidence of it. The future voice
+configuration agent will call the same service, and its drafts will appear on
+these screens with nothing special about them at all.
+
+```
+   CONVENTIONAL UI                      VOICE CONFIG AGENT (future)
+          |                                       |
+          +------------------+--------------------+
+                             |
+                    config-service.js
+                             |
+                    versioned draft
+                             |
+                        validate
+                             |
+                      review diff
+                             |
+                   human approval  (named person)
+                             |
+                        activate   (operator)
+```
+
+### Screens
+
+| Screen | Backend authority | May mutate | May NOT mutate |
+|---|---|---|---|
+| **Overview** `/platform/clients/:id` | `configService.getActive`, `listVersions`, `provisioningService.readiness` | nothing — it is a read | anything |
+| **Version history** `…/history` | `configService.listVersions`, `history` | nothing | any historical version. Restore creates a **new draft** |
+| **Editor** `…/edit/:section` | `configService.updateDraft` | the open **draft**, one section at a time | the active version, approved versions, `identity.clientId`, `identity.vertical`, `metadata`, the six mandatory prohibitions, outbound AI disclosure, DNCR/suppression/dial |
+| **Review changes** `…/review` | `configService.diff`, `validate` | nothing | anything — it is the read before the decision |
+| **Approval** `…/approve` | `configService.approve` | the draft's status → `approved` | anything else. It does **not** activate |
+| **Activation** `…/activate` | `configService.activate` | which version is active | **any provider resource.** It contacts nothing |
+| **Agent behaviour preview** `…/preview` | `configService.preview` | nothing | anything. No call is placed |
+| **Provider preview** `…/preview/provider` | `configService.preview` | nothing | anything. Operator-only, sanitised, no network |
+| **Provisioning plan** `…/provisioning` | `provisioningService.createPlan`, `validatePlan`, `approvePlan` | a **plan** — a description of changes | **any provider resource.** There is no execute route |
+| **New client wizard** `…/wizard` | `configService.createDraft`, then the editor | creates one real draft | anything the editor cannot |
+
+### What the UI must never build, and does not
+
+- **No "Deploy now".** No execute route exists, and no button calls one. The
+  handlers import no provider module, no transport and no executor.
+- **No live provisioning button.** An approved plan ends at
+  **APPROVED — NOT EXECUTED**, with the sentence *"Provider changes require a
+  separately authorised provisioning operation."*
+- **No AI-disclosure toggle.** Outbound renders the sentence
+  *"Outbound calls must identify AIDA as an AI assistant."* as a locked platform
+  statement with no control beside it.
+- **No Retry beside an UNKNOWN outcome.** An uncertain provider result is drawn
+  as `OUTCOME UNCERTAIN`, never as `FAILED`, and carries
+  *"Provider outcome is uncertain. Reconciliation is required before another
+  mutation can be attempted."*
+- **No "save anyway".** A 409 is shown and stops there.
+- **No client id in a request body.** The tenant comes from the session.
+- **No "Go live" driven by readiness.** Readiness is a view.
+
+### Where the decisions live
+
+Every decision a screen makes — whether Approve is offered, whether a state is
+dangerous, what a field is called — is made in `src/platform/ui/`, in Node, and
+covered by ordinary tests. The browser receives a model that has already
+decided and draws it.
+
+| Module | What it decides |
+|---|---|
+| `ui-vocabulary.js` | the label, tone and **marker** for every lifecycle state; which states may never offer a retry; which paths are platform-locked |
+| `ui-diff.js` | how a domain change is said in words a business owner can approve |
+| `ui-fields.js` | the editor's sections and fields, built **from** the domain's own vocabularies |
+| `ui-view-models.js` | what each screen shows, and which controls are offered to whom |
+
+A decision made in a `<script>` tag is a decision nothing can test without a
+browser, and this repo has no browser in its test stack. It also has no need
+of one.
+
+### Hidden button ≠ security
+
+Controls follow capability, so a client editor is not shown an Approve button.
+That is courtesy, not enforcement. `config-access.js` refuses the request
+regardless, and the tests prove it by calling the handlers directly with
+principals whose buttons would have been hidden — approving, activating and
+approving a plan all still return 403.
+
+Tenant authority is checked **twice**: once explicitly before a page is built,
+and again by every service call underneath. The first check exists because a
+page composes several reads, and a page-builder that treats "could not load" as
+"nothing to show" turns a cross-tenant refusal into an empty 200. That defect
+was written and caught here; the second check is why it was never a data leak.
+
+Both refusals are byte-identical whether the other client exists or not.
+
+### The review screen
+
+The most important screen in the interface, because an approval nobody read is
+worse than no approval — it has a name attached to it.
+
+`blueprint-diff.js` produces the deterministic domain change list.
+`ui-diff.js` decides how to **say** it:
+
+```
+Hours
+  Saturday hours
+      08:00-12:00
+    → 09:00-16:00
+
+Services                                    ⚠ contains a removal
+  Service added
+    + Garage door cable replacement
+  Service removed
+    − Garage door won't close
+
+Knowledge
+  Pricing policy
+      quote if asked, confirmed at booking
+    → do not discuss pricing
+```
+
+Two leaf changes to Saturday become one line, because that is one change a
+person made. A list gaining a suburb shows the suburb, not both lists. Enum
+values are spoken in English, and a test asserts every value in every platform
+vocabulary has a word — otherwise a new urgency action renders as a slug on the
+one screen where somebody approves it.
+
+**Nothing is ever dropped.** A test proves every domain change survives into a
+section, and the domain change count is reported separately from the row count.
+The raw domain diff stays available to operators as a `<details>` block.
+
+### Accessibility
+
+The same contract `src/views/locksmith-page.js` already keeps, and the same
+tests: one `<header>`/`<main>`/`<footer>` and a skip link; `<label for>` on
+every control with an id that exists; `<fieldset>`/`<legend>` for multi-choice;
+`aria-describedby` naming each control's hint **and** its error slot;
+required/optional stated in text; `role="status" aria-live="polite"` and a
+focus-taking `role="alert"` error summary; `data-label` on every cell so a
+stacked mobile table hides no column; `aria-current="page"`; 48px touch targets;
+`:focus-visible` with a 3px outline.
+
+**Nothing is communicated by colour alone.** Every status chip carries a marker
+glyph and a word — `✓ ACTIVE`, `! PLAN VALIDATED`, `!! OUTCOME UNCERTAIN` — so
+the state survives greyscale, colour blindness and a screen reader. Picking
+accessible colours does not satisfy this requirement.
+
+### Concurrency, and why there is no autosave
+
+The editor round-trips the `expectedUpdatedAt` token on `data-expected-updated-at`
+and sends it with every save. The token advances **only** after a successful
+save. A 409 renders a conflict panel that takes focus, keeps the person's
+unsaved changes on the page, and offers exactly two actions: reload the latest,
+or show what you changed.
+
+There is no force parameter, no merge, and no "save anyway" — overwriting
+somebody else's edit without reading it is precisely what the token exists to
+prevent.
+
+**Explicit Save was chosen over autosave**, and the reason is the token.
+Autosave plus compare-and-swap is a race whose loser is discarded silently: a
+background write fires, loses to somebody else's save, and the person watching
+the screen is told nothing. Autosave without the token is last-write-wins, which
+is worse. A person pressing Save knows they saved, and knows when they did not.
+
+### Responsive
+
+Desktop is the primary editing experience and the wide layout is where the
+diff and plan tables are meant to be read. The base rules are still the narrow
+ones, with `min-width` breakpoints adding the wide layout, so a tablet or phone
+degrades to a single column and stacked tables rather than breaking. There are
+no `max-width` breakpoints, and wide content scrolls inside its own container.
+
+### Voice configuration UX — the future
+
+**No voice or audio is built, and no placeholder is rendered.** A greyed-out
+"Configure by voice" button would advertise a feature that does not exist, so
+there is not one.
+
+What IS built is the part that matters architecturally: a voice-created draft is
+**a draft**. `config-service.proposePatch` already turns a proposal from
+anywhere into one, `voice_agent` holds `config:propose` and nothing else, and
+`metadata.source` records where it came from.
+
+A test renders every editor section and the review screen for a `source:"voice"`
+draft and a `source:"ui"` draft and asserts the output is **byte-identical**.
+The only place the difference appears is the "Created by" column in version
+history, which reads *"Voice configuration agent"*.
+
+So the eventual flow needs no new screens:
+
+```
+talk to the configuration agent
+        → proposed changes appear as a DRAFT here
+        → review the same diff
+        → the same named-human approval
+        → the same operator activation
+```
+
+### Running it
+
+```bash
+PLATFORM_CONFIG_API_ENABLED=true npm start
+# then, signed in as a client:
+#   /platform/clients/<clientId>
+```
+
+Unset the flag and every path 404s exactly as if the routes did not exist,
+which is the production state today.
+
+---
+
 ## What is NOT built
 
 Stated plainly so the next batch can be scoped against it.
@@ -1126,7 +1350,10 @@ Stated plainly so the next batch can be scoped against it.
   provider adapter is a **FAKE**. There is no real adapter, no HTTP execute
   endpoint, and no environment variable that turns a fake into a real one.
   Wiring one is a separate, explicit code milestone, described above.
-- **No UI.** The CLI and the (gated-off) HTTP API are the only interfaces.
+- **No UI for anything but configuration and provisioning PLANS.** The
+  configuration UI exists (P29-P35) and is gated off. There is no screen for
+  call history, billing, or anything operational — and no screen anywhere that
+  provisions, deploys or dials.
 - **No real adapters.** Every integration adapter is an in-memory fake.
 - **Nothing at runtime reads a blueprint yet.** The configuration router is
   mounted in `src/server.js` but gated off; no receptionist or acquisition path
