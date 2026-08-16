@@ -213,6 +213,23 @@ const LAYER = Object.freeze({
   "ui-diff.js": 4,
   "ui-fields.js": 4,
   "ui-view-models.js": 4,
+
+  // ── the voice configuration agent (P37-P45) ──
+  // It sits ABOVE the configuration authority and below nothing. The session
+  // engine is layer 1 because it is an authority over a CONVERSATION — it
+  // decides what was proposed, what was confirmed and what is refused — and it
+  // reaches the configuration service by INJECTION, never by import, which is
+  // what keeps it at 1 rather than 4.
+  "voice-session-model.js": 0,
+  "voice-intents.js": 0,
+  "voice-audit.js": 1,
+  "voice-policy.js": 1,
+  "voice-planner.js": 1,
+  "voice-interpreter-port.js": 1,
+  "voice-patch-compiler.js": 1,
+  "voice-session.js": 1,
+  "voice-evaluation.js": 4,
+  "voice-cli.js": 4,
 });
 
 const DOMAIN_MAX_LAYER = 2;
@@ -494,15 +511,27 @@ describe("platform ratchets — nothing in src/platform can reach the world", ()
     // appearing anywhere else still fails — the same treatment
     // PROVIDER_VOICE_ID_PREFIXES gets.
     const DETECTION_DECLARATION = /const CREDENTIAL_SHAPED = \/[^\n]*\/i;/;
+    // A SECOND legitimate detector arrived with the voice audit sink (P37-P45),
+    // which redacts secret-shaped values a caller reads out loud. Exempted the
+    // same way — by its EXACT declaration text, not by a pattern that would let
+    // any regex through.
+    const VOICE_DETECTION_DECLARATION = /const SECRET_SHAPED = \/[^\n]*\/;/;
+    const strip = (src) => src.replace(DETECTION_DECLARATION, "").replace(VOICE_DETECTION_DECLARATION, "");
+
     for (const file of FILES) {
-      assert.ok(!SECRET.test(read(file).replace(DETECTION_DECLARATION, "")),
-        `${rel(file)} contains something credential-shaped`);
+      assert.ok(!SECRET.test(strip(read(file))), `${rel(file)} contains something credential-shaped`);
     }
-    // The exemption must be real, exactly one line, and must not blind the check.
+
+    // Both exemptions must be real, exactly one line each, and must not blind
+    // the check.
     const model = read(FILES.find((f) => f.endsWith("provisioning-model.js")));
     assert.match(model, DETECTION_DECLARATION, "the exempted declaration must exist as written");
     assert.equal(model.split("\n").filter((l) => DETECTION_DECLARATION.test(l)).length, 1);
-    assert.ok(SECRET.test('const k = "sk_live_abc";'.replace(DETECTION_DECLARATION, "")),
-      "a genuine secret elsewhere must still fail");
+
+    const voiceAudit = read(FILES.find((f) => f.endsWith("voice-audit.js")));
+    assert.match(voiceAudit, VOICE_DETECTION_DECLARATION, "the voice detector must exist as written");
+    assert.equal(voiceAudit.split("\n").filter((l) => VOICE_DETECTION_DECLARATION.test(l)).length, 1);
+
+    assert.ok(SECRET.test(strip('const k = "sk_live_abc";')), "a genuine secret elsewhere must still fail");
   });
 });
