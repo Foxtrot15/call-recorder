@@ -308,11 +308,15 @@ provisioning, provider, phone, routing, integrations, compliance.
 - A merge on conflict. A 409 means reload, never retry-with-force.
 - An "approve and activate" combined button. They are two decisions, made by two
   roles, on purpose.
-- **Any button that provisions, deploys or "pushes to Retell".** There is no
-  execute endpoint and no executor; `provisioning:execute` is held by nobody.
+- **Any button that provisions, deploys or "pushes to Retell".** An executor
+  exists (P24–P28), but **no HTTP endpoint reaches it**, and the one role that
+  holds `provisioning:execute` cannot be produced from any request. Adding a
+  button would mean adding both — which is a reviewed milestone, not a screen.
 - A "Go live" button driven by readiness. Readiness is a view, never a
   permission.
 - Anything that treats an approved provisioning plan as a completed one.
+- A "retry" button on an ambiguous provisioning result. UNKNOWN is resolved by
+  a person looking at the provider, never by sending the request again.
 
 ---
 

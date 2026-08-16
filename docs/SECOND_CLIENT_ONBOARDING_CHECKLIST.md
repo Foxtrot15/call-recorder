@@ -126,8 +126,10 @@ can never execute. Build a new one; it supersedes the old.
 GET /api/clients/:clientId/config/provisioning/readiness
 ```
 
-- [ ] `ready` will be **false**. It is hardcoded false and always will be until
-      an executor exists. **Readiness is a view, never a permission.**
+- [ ] `ready` will be **false**. It is hardcoded false and stays false until a
+      real provider transport exists. **Readiness is a view, never a
+      permission** — even a client that satisfies every blocker cannot be
+      executed by reading this endpoint.
 - [ ] Work the blockers in order. A healthy pre-execution client reads:
 
 ```
@@ -142,24 +144,53 @@ compliance      satisfied
 ```
 
 That state is **"provision-ready but not provisioned"**, and it is where this
-checklist ends today.
+checklist ends for a real client today.
 
 ---
 
-## Stage 6 — execution — DOES NOT EXIST
+## Stage 6 — execution — EXISTS, AGAINST FAKE PROVIDERS ONLY
 
-- [ ] There is no execute endpoint, no executor, and no role holds
-      `provisioning:execute`.
+The executor is real (P24–P28). What does not exist is anything that can reach
+a real provider.
+
+- [ ] There is **no execute endpoint**. The HTTP surface exposes planning,
+      preview, readiness and the contract — and no way to run a plan.
+- [ ] `provisioning:execute` is held by exactly one role, `operator_executor`,
+      and **`principalFromRequest` can never produce it**. No session, cookie,
+      token or request body yields that role.
+- [ ] The only way to execute is a person at a terminal:
+
+```
+node scripts/provision.js execute <clientId> --demo --fake-provider
+```
+
+- [ ] `--fake-provider` is **mandatory**, not a safety default that could be
+      turned off. `--live`, `--retell`, `--force` and `--retry-unknown` do not
+      exist and are refused **by name, with a reason**.
 - [ ] `GET .../provisioning/execution-contract` returns the **twelve
-      preconditions** a future executor must satisfy. Reading a contract is not
+      preconditions**, and now reports `executorExists: true` with
+      `liveProviderTransportExists: false`. Reading a contract is still not
       signing one.
 
-Before anybody builds it, all of the following must be true, in order:
-authority → approved → plan hash exact → configuration still exact →
-tenant/resource ownership exact → provider tag re-read immediately before the
-write → the one-active database index accepts it → a final stop gate →
-**exactly one** mutation → durable result recorded → ambiguity recorded as
-`unknown` → **no automatic retry**.
+What an operator must know before running it even against a fake:
+
+- **UNKNOWN is not FAILURE.** An ambiguous provider result stops everything for
+  that client and waits for a person. It is never retried automatically.
+- **PROVIDER SUCCESS + FAILED DATABASE WRITE is not SAFE TO RETRY.** The
+  provider resource id is printed as loudly as a return value can manage, and
+  every later execution for that client is blocked until it is recorded.
+- **Reconciliation only ever recommends.** It cannot adopt, create or delete,
+  and adoption requires four independent proofs — never "looks like ours".
+
+### Before a real provider is wired — a separate, explicit milestone
+
+- [ ] A real adapter implementing the three-verb port, classifying every
+      transport failure as UNKNOWN by default.
+- [ ] A **new** CLI flag with its own review — never a change to what
+      `--fake-provider` defaults to.
+- [ ] ACP1, ACP2 and ACP3 applied and verified.
+- [ ] A real provider observation source for reconciliation.
+- [ ] A founder-authorised first run against **one** client, watched.
 
 ---
 
@@ -169,11 +200,16 @@ write → the one-active database index accepts it → a final stop gate →
       apply, verify `20`.
 - [ ] Apply **ACP2** (`acp2_create_platform_provisioning_plans.sql`) — preflight
       `21`, apply, verify `22`.
+- [ ] Apply **ACP3** (`acp3_create_provisioning_executions.sql`) — preflight
+      `23`, apply, verify `24`. Without it there is no durable claim, and the
+      executor's one-unresolved-per-client guard is an in-memory promise rather
+      than a database index.
 - [ ] Switch the store binding to `postgres` mode. It **refuses** unless a
       schema probe confirms ACP1 is present, and it never falls back to memory.
 - [ ] Set `PLATFORM_CONFIG_API_ENABLED="true"` — the exact string.
 
-**All four SQL files are currently applied nowhere.**
+**All three migrations are currently applied nowhere**, and the six
+verification scripts (`19`–`24`) are read-only and have never been run.
 
 ---
 

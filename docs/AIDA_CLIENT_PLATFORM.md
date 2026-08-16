@@ -1,8 +1,10 @@
 # AIDA Client Platform
 
 **Status:** built and tested locally on `feature/aida-client-platform`. Nothing
-is deployed. **SQL CREATED (ACP1 + ACP2) — NOT APPLIED ANYWHERE.** No provider resource was
+is deployed. **SQL CREATED (ACP1 + ACP2 + ACP3) — NOT APPLIED ANYWHERE.** No provider resource was
 touched and the real acquisition Retell agent is parked and was not contacted.
+Provisioning **executes end to end against fake adapters only** — no real
+provider adapter exists, and no switch turns a fake one into a real one.
 
 ---
 
@@ -55,11 +57,11 @@ unlisted.
 
 | Layer | Files | May know about a provider? |
 |---|---|---|
-| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `provisioning-model.js`, `provisioning-execution-contract.js`, `fixtures/clients.js` | No |
-| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js` | No |
+| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `provisioning-model.js`, `provisioning-execution-contract.js`, `execution-model.js`, `fixtures/clients.js` | No |
+| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js`, `execution-preflight.js`, `execution-claim.js`, `provider-mutation-port.js`, `resource-registry-writer.js`, `provisioning-executor.js`, `reconciliation-engine.js` | No |
 | 2 behaviour | `behaviour-spec.js` | No |
 | 3 provider | `provider-compiler-retell.js`, `provisioning-desired-state.js` | Yes — they build provider payloads |
-| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js` | Yes — they compose the compiler to show a person its output |
+| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js` | Yes — they compose the compiler to show a person its output |
 
 ---
 
@@ -768,12 +770,10 @@ is the change most likely to break the system already depending on it.
 
 ### Migration status
 
-| File | Status |
-|---|---|
-| `supabase/sql/acp1_create_client_configuration.sql` | **NOT APPLIED ANYWHERE** |
-| `supabase/sql/acp2_create_platform_provisioning_plans.sql` | **NOT APPLIED ANYWHERE** |
-| `verification/19_acp1_preflight_readonly.sql` · `20_acp1_verify_readonly.sql` | read-only, never run |
-| `verification/21_acp2_preflight_readonly.sql` · `22_acp2_verify_readonly.sql` | read-only, never run |
+ACP1 and ACP2 are **NOT APPLIED ANYWHERE**, and their `verification/19`–`22`
+scripts are read-only and have never been run. The single authoritative table
+covering all three migrations is under
+[Provisioning execution model → Migration status](#migration-status-2) below.
 
 ### Store binding
 
@@ -785,10 +785,15 @@ with **no store at all**, never a memory one. A configuration subsystem that
 quietly serves from memory when the database is unavailable answers a business
 telephone with an empty configuration and reports success.
 
-### The future execution contract (P23E)
+### The execution contract (P23E) — now honoured, against fakes
 
 Twelve ordered preconditions in `provisioning-execution-contract.js` — a module
-that imports nothing. Authority → approved → plan hash exact → configuration
+that imports nothing. Written in P23E when nothing could execute; **P24–P28
+built the executor that honours every one of them**, and a test maps each of the
+twelve to the gate in `execution-preflight.js` that enforces it. The contract is
+no longer aspirational — but it is still only exercised against fake providers.
+
+Authority → approved → plan hash exact → configuration
 still exact → tenant/resource ownership → provider tag re-read late → the
 one-active database index → final stop gate → exactly one mutation → durable
 result → ambiguity is unknown → **no automatic retry**.
@@ -805,6 +810,285 @@ other.
 
 ---
 
+
+## Provisioning execution model
+
+Four sentences the whole subsystem exists to keep true:
+
+> **APPROVED PLAN** is not **EXECUTED PLAN**.
+>
+> **UNKNOWN** is not **FAILURE**.
+>
+> **PROVIDER SUCCESS + DB FAILURE** is not **SAFE TO RETRY**.
+>
+> **AN AMBIGUOUS PROVIDER RESULT IS NEVER AUTOMATICALLY RETRIED.**
+
+```
+  APPROVED PLAN
+       |
+  EXECUTION AUTHORISATION    operator_executor — no HTTP request can obtain it
+       |
+  18 PRE-WRITE GATES         execution-preflight.js, fail closed
+       |
+  DURABLE CLAIM              written BEFORE the provider is contacted
+       |
+  EXACTLY ONE MUTATION       one action, one send, no loop anywhere
+       |
+  DURABLE RESULT RECORD      the dangerous half
+       |
+  REGISTRY UPDATE            provider_resources, unchanged
+       |
+  RECONCILIATION             read-only, and it only ever recommends
+```
+
+### What AIDA guarantees, and what it does not
+
+Not "exactly once". The internet cannot provide that: a request may reach a
+provider and its response may be lost, and no client-side code can tell the
+difference. Claiming exactly-once would be a lie that makes people relax.
+
+What is guaranteed instead:
+
+1. **One durable local claim** per (client, action), written before the provider
+   is contacted.
+2. **One intentional provider mutation attempt** per authorised action. The
+   executor sends once. It does not loop.
+3. **No automatic retry after an ambiguous outcome.** The next step is a person
+   looking, never another request.
+4. **A deterministic provider request identity**, so a provider offering
+   idempotency keys can de-duplicate on its side.
+5. **Reconciliation before any second mutation.** An unresolved action blocks
+   further execution for that client until durable truth is restored.
+
+### Execution authority
+
+`provisioning:execute` is held by exactly one role — `operator_executor` — and
+**`principalFromRequest` can never produce it**. No session, cookie, token or
+request body yields that role, so the capability exists in code and is
+unreachable from the network. It must be constructed deliberately, and today
+that happens in one place: a CLI run by a person who typed `--fake-provider`.
+
+Approving a plan does **not** imply executing it. An ordinary `operator` holds
+`provisioning:approve` and not `provisioning:execute`.
+
+### The eighteen pre-write gates
+
+Evaluated in order, all of them, every time — an operator who is blocked wants
+the whole list. `ok` is true only if every gate passes.
+
+| | Gate |
+|---|---|
+| 1 | authenticated actor |
+| 2 | actor holds `provisioning:execute` **for this client** |
+| 3 | exact client ownership |
+| 4 | plan exists |
+| 5 | plan approved |
+| 6 | plan hash unchanged since approval |
+| 7 | plan actions still hash to the plan hash |
+| 8 | active configuration **version** still exact |
+| 9 | active configuration **hash** still exact |
+| 10 | recompiled desired hashes still exact |
+| 11 | provider tag matches the environment, **read late** |
+| 12 | no action references another tenant's resource |
+| 13 | no unresolved prior execution |
+| 14 | **no UNKNOWN action** anywhere for this client |
+| 15 | **no provider-success-with-failed-persistence** anywhere |
+| 16 | a durable claim was acquired |
+| 17 | dependency order valid |
+| 18 | a provider adapter was **handed in explicitly** |
+
+Five gates — 12, 13, 14, 15, 17 — check for the *presence* of a blocking
+condition and legitimately pass on empty input. The other thirteen demand
+positive evidence and all fail on an empty call. A test asserts exactly that
+split, so a fail-open would be visible.
+
+### The durable claim
+
+Two database indexes, not an in-process mutex — a mutex protects one Node
+process from itself, which is not the failure that creates a second agent:
+
+```
+pae_one_unresolved_per_action
+  UNIQUE (client_id, action_key)
+  WHERE status IN (claimed, provider_succeeded, unknown,
+                   persist_failed_after_provider_success)
+
+pex_one_unresolved_per_client
+  UNIQUE (client_id)
+  WHERE status IN (claimed, unknown, manual_reconciliation_required)
+```
+
+The claim is written **before** the provider call. If it were the other way
+round, a crash in between would leave a resource that exists and no record that
+anything was attempted. Claiming first inverts the danger: a crash leaves a
+claim with no provider call, which reads as UNKNOWN and stops everything until
+a person looks.
+
+### The provider mutation contract
+
+Three verbs — `createResource`, `updateResource`, `retireResource` — and three
+outcomes. The executor never learns an HTTP method, a URL, a header or a status
+code.
+
+| Outcome | Meaning |
+|---|---|
+| `definite_success` | confirmed, with an id |
+| `definite_failure` | explicitly refused; nothing was created |
+| `unknown` | it may or may not have happened |
+
+**There is no `retryable`.** The acquisition work found that a shared port
+marking timeouts retryable is exactly how a cold call gets placed twice.
+
+Anything unclassifiable becomes UNKNOWN, not failure: a throw from the
+transport, a success with no resource id, a malformed response. Erring towards
+"it might exist" costs a person five minutes; erring the other way creates a
+second resource that can speak to a stranger.
+
+### Ambiguity
+
+| Outcome | Action status | Stops? | May re-create? | Human? |
+|---|---|---|---|---|
+| definite success | `provider_succeeded` → `completed` | no | no | no |
+| definite failure | `provider_failed_definite` | **yes** | no | no |
+| unknown | `unknown` | **yes** | **no** | **yes** |
+| registry write failed | `persist_failed_after_provider_success` | **yes** | **no** | **yes** |
+
+`mayRetryAutomatically` is `false` for **every** outcome. The executor contains
+no retry for anything.
+
+### Action ordering and partial failure
+
+Dependencies execute first: response engine, then the agent that references it.
+
+If the engine succeeds and the agent then fails definitely, **the engine is not
+deleted**. Provider APIs have no cross-resource transaction, so a compensating
+delete is just another unreviewed mutation. The partial state is recorded
+truthfully — engine present, agent absent — and a person decides. A test
+asserts no `retireResource` call is ever made automatically.
+
+### Registry write semantics
+
+After a definite provider success, `provider_resources` is written with the
+client, purpose, resource type, provider, tag, resource id, payload hash and the
+full provenance chain in the existing bounded `provider_metadata`. No second
+registry, and `pr_one_active_per_purpose` is respected.
+
+**UPDATE** keeps the same provider id authoritative; the incumbent row is
+superseded and a new row records the new payload hash.
+
+**REPLACE** creates a new resource with a NEW id, records it, and leaves the old
+one to be retired by a **separate action** — never delete-then-create, which
+would be downtime by design.
+
+**RETIRE** states its mode, because "retired" means three different things:
+
+| Mode | Meaning |
+|---|---|
+| `provider_disabled` | still EXISTS remotely, switched off |
+| `provider_deleted` | GONE remotely, irreversible |
+| `registry_inactive` | AIDA stopped treating it as active — **the provider was not asked and may still be serving it** |
+
+Retirement is never inferred from a desired state that no longer contains a
+resource.
+
+**If the registry write fails after a definite provider success**, the status
+becomes `persist_failed_after_provider_success`, the provider resource id is
+surfaced as loudly as a return value can, `doNotRetryProvider: true` is set, and
+every future execution for that client is blocked. An unrecorded resource that
+exists is far more dangerous than a recorded one that does not.
+
+### Reconciliation
+
+Three sources can disagree: the registry, the execution log, and the provider.
+A row is not proof. An execution that ended UNKNOWN is not proof of absence.
+Only an observation is evidence, and an observation that could not be taken is
+UNKNOWN — never "nothing there".
+
+Results: `match`, `drift`, `missing_provider_resource`,
+`unrecorded_provider_resource`, `unknown`, `manual_review_required`, each with a
+sub-reason. Three genuinely different answers to three genuinely different
+situations after an ambiguous execution: confirmed present, confirmed absent, or
+not observed.
+
+### The repair plan — recommendations only
+
+`buildRepairPlan` is pure. Nothing adopts, creates, updates or deletes.
+
+**Adoption requires strict proof** — every one of: an observed id, agreement
+with any id the execution claimed, a matching desired resource, and an exact
+payload-hash match. There is no "looks like ours"; a resource that looks like
+ours and is not is somebody else's telephone service.
+
+A create is recommended only after absence is **confirmed by an observation**,
+and even then it is routed back through planning and approval.
+
+### The no-second-agent proof
+
+The strongest test in the suite:
+
+1. A create is sent. The transport is ambiguous.
+2. The registry contains **nothing** — which is exactly what tempts somebody to
+   re-run.
+3. The operator re-runs. **REFUSED**, and not one byte is sent.
+4. A person observes the provider: the resource **does** exist.
+5. Reconciliation reports `unrecorded_provider_resource` /
+   `ambiguous_execution_confirmed_present`; the repair plan **recommends**
+   adoption with all four proofs satisfied.
+6. Execution **still refuses**, because reading a recommendation is not acting
+   on one.
+
+### The operator CLI
+
+```bash
+node scripts/provision.js inspect   <clientId> --demo
+node scripts/provision.js plan      <clientId> --demo
+node scripts/provision.js execute   <clientId> --demo --fake-provider
+node scripts/provision.js reconcile <clientId> --demo --fake-provider
+```
+
+`--fake-provider` is **required** for execute and reconcile. It is not a safety
+toggle with a dangerous default; it is the only value it can take.
+
+**These flags do not exist**, and each is refused by name with a reason:
+`--live`, `--retell`, `--force`, `--retry-unknown`, `--no-preflight`,
+`--skip-gates`.
+
+### The future live-provider wiring milestone
+
+There is **no environment variable** that turns a fake into a real provider. No
+`PROVISIONING_LIVE`, no credential-driven activation, no dormant switch — a
+ratchet sweeps `src/` and `scripts/` for those names and for `process.env` in
+every execution module.
+
+Wiring a real provider is a separate, explicit code milestone requiring, at
+minimum:
+
+1. A real adapter implementing the three-verb port, classifying every transport
+   failure as UNKNOWN by default.
+2. A new CLI flag with its own review — never a change to `--fake-provider`'s
+   default.
+3. ACP1, ACP2 and ACP3 applied and verified.
+4. A real provider observation source for reconciliation.
+5. A founder-authorised first run against **one** client, watched.
+
+### Migration status
+
+| File | Status |
+|---|---|
+| `acp1_create_client_configuration.sql` | **NOT APPLIED ANYWHERE** |
+| `acp2_create_platform_provisioning_plans.sql` | **NOT APPLIED ANYWHERE** |
+| `acp3_create_provisioning_executions.sql` | **NOT APPLIED ANYWHERE** |
+| `verification/19–24` | read-only, never run |
+
+ACP1's `event_type` CHECK was widened in P24–P28, **before it was ever
+applied**, when the provisioning and execution audit vocabularies arrived.
+Shipping an `ALTER` would be right for a table that exists somewhere; this one
+has been applied nowhere, so completing the list leaves no migration altering a
+table that never existed. A test asserts the SQL list and
+`src/platform/config-audit.js` agree exactly — 29 event types on both sides.
+
+---
+
 ## What is NOT built
 
 Stated plainly so the next batch can be scoped against it.
@@ -815,10 +1099,12 @@ Stated plainly so the next batch can be scoped against it.
   production**, so the HTTP router is still wired to the in-memory store.
 - **No voice configuration agent.** The domain contract exists; the speech
   pipeline does not.
-- **No provisioning EXECUTION.** Planning, diffing, approving and previewing
-  all exist (P19–P23). What does not exist is an executor: no code path leads
-  from an approved plan to a provider, there is no execute endpoint, and
-   is held by no role.
+- **No LIVE provider transport.** The full execution architecture exists and
+  runs end to end (P24–P28) — authority, eighteen pre-write gates, a durable
+  claim, a one-shot mutation, the registry write and reconciliation — but every
+  provider adapter is a **FAKE**. There is no real adapter, no HTTP execute
+  endpoint, and no environment variable that turns a fake into a real one.
+  Wiring one is a separate, explicit code milestone, described above.
 - **No UI.** The CLI and the (gated-off) HTTP API are the only interfaces.
 - **No real adapters.** Every integration adapter is an in-memory fake.
 - **Nothing at runtime reads a blueprint yet.** The configuration router is

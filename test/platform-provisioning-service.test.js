@@ -406,9 +406,26 @@ describe("P23D — every cross-tenant provisioning attempt fails closed", () => 
     assert.deepEqual([...ROLES.voice_agent], ["config:propose"]);
   });
 
-  it("nobody at all holds provisioning:execute", () => {
-    for (const [role, caps] of Object.entries(ROLES)) {
-      assert.ok(!caps.includes("provisioning:execute"), `${role} must not hold provisioning:execute`);
+  it("exactly ONE role holds provisioning:execute, and no request can obtain it", () => {
+    // P23 had no holder at all. P24 introduced one, deliberately: a role that
+    // principalFromRequest can never produce, so the capability exists in code
+    // and is unreachable from the network.
+    const { principalFromRequest, authorise } = require("../src/platform/config-access");
+    const holders = Object.entries(ROLES)
+      .filter(([, caps]) => caps.includes("provisioning:execute")).map(([r]) => r);
+    assert.deepEqual(holders, ["operator_executor"]);
+
+    for (const role of ["client_viewer", "client_editor", "client_owner", "operator", "voice_agent", "import", "system"]) {
+      assert.ok(!ROLES[role].includes("provisioning:execute"), `${role} must not hold it`);
+    }
+    // The one that matters: no shape of request produces the holder.
+    for (const req of [
+      { clientId: A, operatorSession: true, session: { operatorId: "P" } },
+      { clientId: A, clientAuth: { user: { email: "x@y.invalid" } }, client: { platform_role: "operator_executor" } },
+    ]) {
+      const p = principalFromRequest(req);
+      assert.notEqual(p && p.role, "operator_executor");
+      assert.equal(authorise({ principal: p, operation: "provisioning:execute", clientId: A }).ok, false);
     }
   });
 });
@@ -603,8 +620,12 @@ describe("provisioning HTTP — plans and previews, never performs", () => {
     const res = fakeRes();
     await handlers.executionContract(clientReq("riverside_plumbing", { clientId: "riverside_plumbing" }), res);
     assert.equal(res.statusCode, 200);
-    assert.equal(res.body.implemented, false);
-    assert.equal(res.body.executorExists, false);
+    // An executor now exists (P24-P28), so this body says so. What it must
+    // keep saying is that no HTTP endpoint reaches it and no live transport
+    // exists — those are the two claims a reader would actually act on.
+    assert.equal(res.body.implemented, true);
+    assert.equal(res.body.executorExists, true);
+    assert.equal(res.body.liveProviderTransportExists, false);
     assert.equal(res.body.endpointExists, false);
     assert.equal(res.body.preconditionCount, 12);
   });

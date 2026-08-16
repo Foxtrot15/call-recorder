@@ -780,11 +780,15 @@ describe("P23A readiness — a view, never authority", () => {
   });
 });
 
-describe("P23E execution contract — specified, and absent", () => {
+describe("P23E execution contract — specified, and now honoured against fakes", () => {
   it("declares twelve ordered preconditions", () => {
     const contract = describeExecutionContract();
-    assert.equal(contract.implemented, false);
-    assert.equal(contract.executorExists, false);
+    // P23E's own assertion was "no executor exists". P24-P28 built one, so the
+    // truthful claim moved: the executor is real, and the thing that could
+    // telephone somebody — a live transport — is what still does not exist.
+    assert.equal(contract.implemented, true);
+    assert.equal(contract.executorExists, true);
+    assert.equal(contract.liveProviderTransportExists, false);
     assert.equal(contract.preconditionCount, 12);
     assert.deepEqual(EXECUTION_PRECONDITIONS.map((p) => p.step), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for (const p of EXECUTION_PRECONDITIONS) {
@@ -813,6 +817,68 @@ describe("P23E execution contract — specified, and absent", () => {
       assert.ok(contract.deliberatelyNotBorrowed.includes(notBorrowed), `${notBorrowed} must be explicitly excluded`);
     }
     assert.match(contract.whyNotBorrowed, /not a cold call/);
+  });
+
+  it("maps every one of the twelve preconditions onto a real preflight gate", () => {
+    // The contract is only worth having if the executor actually honours it.
+    // This is the join: each specified precondition names the gate (or gates)
+    // in execution-preflight.js that enforce it. If a gate is renamed or
+    // deleted, this fails rather than the contract quietly becoming fiction.
+    const { assertExecutionPreflight } = require("../src/platform/execution-preflight");
+    const gateNames = assertExecutionPreflight({}).gates.map((g) => g.name);
+    assert.equal(gateNames.length, 18, "the preflight is documented as eighteen gates");
+
+    const ENFORCED_BY = {
+      authenticated_execution_authority: ["authenticated_actor", "actor_holds_provisioning_execute", "exact_client_ownership"],
+      plan_approved: ["plan_exists", "plan_approved"],
+      plan_hash_exact: ["plan_hash_unchanged", "plan_actions_immutable"],
+      active_configuration_still_exact: ["active_config_version_exact", "active_config_hash_exact", "desired_resource_hashes_exact"],
+      tenant_and_resource_ownership_exact: ["resource_ownership_exact"],
+      provider_tag_and_environment_exact: ["provider_tag_exact"],
+      // The one-active-per-purpose guard is a DATABASE index, so the gate that
+      // can be evaluated before the write is the claim the index backs.
+      durable_one_resource_authority: ["durable_claim_acquired"],
+      final_stop_gate: ["no_unresolved_prior_execution", "no_unknown_action", "no_unrecorded_provider_resource"],
+      exactly_one_provider_mutation: ["durable_claim_acquired", "dependency_order_valid"],
+      durable_result_recorded: ["no_unrecorded_provider_resource"],
+      ambiguity_is_unknown: ["no_unknown_action"],
+      no_automatic_retry: ["no_unknown_action", "no_unresolved_prior_execution"],
+    };
+
+    for (const p of EXECUTION_PRECONDITIONS) {
+      const enforcers = ENFORCED_BY[p.gate];
+      assert.ok(enforcers && enforcers.length, `precondition ${p.step} (${p.gate}) names no enforcing gate`);
+      for (const name of enforcers) {
+        assert.ok(gateNames.includes(name), `precondition ${p.gate} claims gate "${name}", which the preflight does not have`);
+      }
+    }
+
+    // And no gate exists that no precondition accounts for — except the one
+    // P23E could not have specified, because it guards against the transport
+    // P23E assumed away.
+    const claimed = new Set(Object.values(ENFORCED_BY).flat());
+    const unaccounted = gateNames.filter((n) => !claimed.has(n));
+    assert.deepEqual(unaccounted, ["provider_adapter_supplied_explicitly"]);
+  });
+
+  it("no longer claims that no executor exists, because one does", () => {
+    // The lie this catches is a specific one: a module that was true when it
+    // was written and became false when the thing it denied got built. It is
+    // served over HTTP, so somebody could read it and conclude nothing here
+    // can mutate anything.
+    const contract = describeExecutionContract();
+    assert.ok(!/no executor exists/i.test(contract.note));
+    assert.match(contract.note, /FAKE/);
+
+    const executor = path.join(ROOT, "src", "platform", "provisioning-executor.js");
+    assert.ok(fs.existsSync(executor), "the contract claims an executor exists — it must");
+
+    // And the other half of the claim: no real transport. The executor takes
+    // its adapter by injection and every adapter in the tree marks itself fake.
+    const source = fs.readFileSync(executor, "utf8");
+    for (const forbidden of ["https://", "http://", "fetch(", "axios", "node-fetch"]) {
+      assert.ok(!source.includes(forbidden), `the executor contains "${forbidden}" — it must have no transport`);
+    }
   });
 
   it("imports nothing at all — it is a specification, not a door", () => {

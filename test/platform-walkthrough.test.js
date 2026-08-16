@@ -215,7 +215,7 @@ describe("documentation — it has not drifted from the code", () => {
 
   it("is honest about what is not built", () => {
     assert.match(PLATFORM_DOC, /What is NOT built/);
-    for (const gap of ["No provisioning", "No voice configuration agent", "No real adapters", "No UI"]) {
+    for (const gap of ["No LIVE provider transport", "No voice configuration agent", "No real adapters", "No UI"]) {
       assert.ok(PLATFORM_DOC.includes(gap), `the doc does not admit: ${gap}`);
     }
   });
@@ -224,7 +224,7 @@ describe("documentation — it has not drifted from the code", () => {
     // The gap moved rather than closing: P14/P15 built the store, and the SQL
     // has still been applied nowhere. Saying "no durable store" would now be
     // wrong; saying nothing would be worse.
-    assert.match(PLATFORM_DOC, /SQL CREATED \(ACP1 \+ ACP2\) — NOT APPLIED ANYWHERE/);
+    assert.match(PLATFORM_DOC, /SQL CREATED \(ACP1 \+ ACP2 \+ ACP3\) — NOT APPLIED ANYWHERE/);
     assert.match(PLATFORM_DOC, /NOT APPLIED TO DEV/);
     assert.match(PLATFORM_DOC, /NOT APPLIED TO PRODUCTION/);
     assert.match(PLATFORM_DOC, /durable store is BUILT but UNAPPLIED/i);

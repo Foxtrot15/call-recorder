@@ -1,18 +1,23 @@
-// AIDA PLATFORM — the contract a future executor must satisfy (P23E).
+// AIDA PLATFORM — the contract the executor must satisfy (P23E).
 //
 //   EXECUTION_PRECONDITIONS      the ordered gates
 //   describeExecutionContract()
 //
-// ── THERE IS NO EXECUTOR, AND THIS IS NOT ONE ───────────────────────
+// ── THIS IS STILL NOT AN EXECUTOR ───────────────────────────────────
 // This file contains no transport, no provider client, no request, and no
 // operation that could perform one. It imports nothing at all. It is a
-// SPECIFICATION, written now so the eventual executor is reviewed against
-// something rather than invented at a keyboard on the day somebody wants a
-// client live.
+// SPECIFICATION, written in P23E so the eventual executor would be reviewed
+// against something rather than invented at a keyboard on the day somebody
+// wanted a client live.
+//
+// P24-P28 then built that executor. Each precondition below is enforced by a
+// named gate in execution-preflight.js, and a test maps the two lists to each
+// other so neither can drift alone. The executor is real; every provider
+// adapter it can be handed is a FAKE.
 //
 // It is code rather than prose so the preconditions can be enumerated,
-// rendered and tested — and so a future executor can be checked against the
-// list mechanically instead of from memory.
+// rendered and tested — and so the executor is checked against the list
+// mechanically instead of from memory.
 //
 // ── WHAT IS BORROWED FROM ACQUISITION, AND WHAT IS NOT ──────────────
 // BORROWED, because it is generic to "one authorised remote write":
@@ -115,9 +120,15 @@ const EXECUTION_PRECONDITIONS = Object.freeze([
 /** A renderable description, for a runbook or a founder review screen. */
 function describeExecutionContract() {
   return Object.freeze({
-    implemented: false,
-    executorExists: false,
-    note: "A specification. No executor exists, nothing here can reach a provider, and this module imports nothing.",
+    // P23E wrote this when nothing could execute. P24-P28 built the executor,
+    // so "no executor exists" became false — and this object is served over
+    // HTTP, which makes it a false statement somebody could act on. The honest
+    // split is between an executor existing and a real transport existing.
+    // Only the second one can telephone anybody, and it does not exist.
+    implemented: true,
+    executorExists: true,
+    liveProviderTransportExists: false,
+    note: "The executor exists and honours every precondition below, but every provider adapter it can be handed is a FAKE. No real transport exists, no flag or environment variable creates one, and this module still imports nothing.",
     preconditionCount: EXECUTION_PRECONDITIONS.length,
     preconditions: EXECUTION_PRECONDITIONS,
     borrowedFromAcquisition: Object.freeze([
