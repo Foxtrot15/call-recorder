@@ -57,11 +57,11 @@ unlisted.
 
 | Layer | Files | May know about a provider? |
 |---|---|---|
-| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `provisioning-model.js`, `provisioning-execution-contract.js`, `execution-model.js`, `fixtures/clients.js` | No |
-| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js`, `execution-preflight.js`, `execution-claim.js`, `provider-mutation-port.js`, `resource-registry-writer.js`, `provisioning-executor.js`, `reconciliation-engine.js` | No |
+| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `provisioning-model.js`, `provisioning-execution-contract.js`, `execution-model.js`, `fixtures/clients.js`, `voice/voice-session-model.js`, `voice/voice-intents.js` | No |
+| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js`, `execution-preflight.js`, `execution-claim.js`, `provider-mutation-port.js`, `resource-registry-writer.js`, `provisioning-executor.js`, `reconciliation-engine.js`, `voice/voice-interpreter-port.js`, `voice/voice-policy.js`, `voice/voice-planner.js`, `voice/voice-patch-compiler.js`, `voice/voice-audit.js`, `voice/voice-session.js` | No |
 | 2 behaviour | `behaviour-spec.js` | No |
 | 3 provider | `provider-compiler-retell.js`, `provisioning-desired-state.js` | Yes — they build provider payloads |
-| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js`, `ui/ui-vocabulary.js`, `ui/ui-diff.js`, `ui/ui-fields.js`, `ui/ui-view-models.js` | Yes — they compose the compiler to show a person its output |
+| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js`, `ui/ui-vocabulary.js`, `ui/ui-diff.js`, `ui/ui-fields.js`, `ui/ui-view-models.js`, `voice/voice-evaluation.js`, `voice/voice-cli.js` | Yes — they compose the compiler to show a person its output |
 
 ---
 

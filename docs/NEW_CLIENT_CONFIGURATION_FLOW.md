@@ -347,8 +347,17 @@ is a draft: `POST …/config/proposals` produces one, `voice_agent` holds
 from. A test renders every editor screen for a `source:"voice"` draft and a
 `source:"ui"` draft and asserts the output is byte-identical.
 
-So the voice flow needs no new screens and no new endpoints — only the speech
-pipeline, which does not exist:
+The voice **agent** is now built (P37–P45): a session engine, an interview
+planner, a closed intent vocabulary with typed payloads, hard policy guards, and
+a 33-transcript evaluation harness. It calls exactly the operation this document
+describes and produces real drafts that appear on the same screens.
+
+What is still missing is the **speech** — no telephone, no recognition, no
+language model, and every interpreter is deterministic and injected. See
+[AIDA_VOICE_CONFIGURATION.md](AIDA_VOICE_CONFIGURATION.md), which also documents
+what the agent can never do.
+
+So the voice flow needs no new screens and no new endpoints:
 
 ```
 talk to the configuration agent

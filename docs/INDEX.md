@@ -22,6 +22,7 @@ which facts. Start here.
 | **Apply RLS** | [../supabase/sql/RLS_APPLY_CHECKLIST.md](../supabase/sql/RLS_APPLY_CHECKLIST.md) |
 | **Onboard a pilot client** | [../CLIENT_ONBOARDING_RUNBOOK.md](../CLIENT_ONBOARDING_RUNBOOK.md) |
 | **Put a NEW business on AIDA (any trade)** | [NEW_CLIENT_IMPLEMENTATION_CHECKLIST.md](NEW_CLIENT_IMPLEMENTATION_CHECKLIST.md) → [AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md) → run `node scripts/dev/platform-new-client-walkthrough.js` |
+| **Understand the voice configuration agent** | [AIDA_VOICE_CONFIGURATION.md](AIDA_VOICE_CONFIGURATION.md) → run `node scripts/voice-config.js replay --scenario locksmith-saturday-hours` |
 | **Configure a client through the UI** | [AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md) §Client configuration UI → `PLATFORM_CONFIG_API_ENABLED=true npm start` → `/platform/clients/<slug>/wizard` |
 | **Extend the configuration UI** | [NEW_CLIENT_CONFIGURATION_FLOW.md](NEW_CLIENT_CONFIGURATION_FLOW.md) (the API contract) → [AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md) §Client configuration UI |
 | **Provision a client onto a provider** | [SECOND_CLIENT_ONBOARDING_CHECKLIST.md](SECOND_CLIENT_ONBOARDING_CHECKLIST.md) → [AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md) §Provisioning execution model → run `node scripts/provision.js execute <clientId> --demo --fake-provider` (**fake providers only**) |
