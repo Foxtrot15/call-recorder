@@ -107,11 +107,60 @@ No module under `src/platform` imports any of them, and none may import from
 1. **AI disclosure.** Every compiled spec carries
    `assistant.disclosesAiWhenAsked: true`, and the literal first sentence of
    every call names the business and says "an AI assistant". A blueprint has no
-   field that could change this.
+   field that could change this. **This is a policy decision, not a settled
+   requirement — see the section below before merging.**
 2. **The mandatory prohibited claims** — guaranteed arrival time, guaranteed
    price, guaranteed outcome, legal or regulatory advice, insurance coverage
    assurance, and claiming to be human. A client may *add* prohibitions. They
    cannot remove one; validation refuses.
+
+---
+
+## ⚠ AI disclosure — FOUNDER / PLATFORM POLICY, REVIEW BEFORE LIVE MERGE
+
+**Status: unresolved product-policy decision. Do not merge to a live path
+without a founder ruling.**
+
+The platform currently puts AI disclosure in the **literal first spoken
+sentence of every call, for every client, inbound and outbound**, and gives a
+blueprint no field that could change it.
+
+That is **stricter than what AIDA ships today**, and the existing product
+policy does *not* unambiguously require it for both directions. The evidence:
+
+| | Existing policy | Existing implementation | Platform |
+|---|---|---|---|
+| **Outbound** (acquisition / BDM) | **Requires it.** Unprompted, in the opening — `LOCKSMITH_ACQUISITION_SPEC.md` §"It discloses", `OUTBOUND_BDM_ARCHITECTURE.md` ("identity + on-behalf-of + AI disclosure + recording notice + reason, all within the first breath"). Recorded as **founder product policy, not a legal requirement** | matches | matches |
+| **Inbound** (locksmith receptionist) | **Silent.** No document requires first-sentence disclosure for an inbound receptionist | `locksmith-receptionist-compiler.js` sets `begin_message` to the client's own greeting **verbatim**. The approved demonstration greeting is *"Northside Lock and Key, this is Mel, how can I help?"* — **no AI disclosure**, and none anywhere in the inbound prompt | **diverges — the platform adds it** |
+
+So a locksmith migrated onto the platform would start disclosing in its opening
+line where today it does not. That is a change to what a real caller hears, and
+it belongs to the founder, not to this batch.
+
+**What was deliberately NOT done:** the ambiguity was not resolved by making
+disclosure client-disableable. A configurable AI disclosure is a switch
+somebody eventually turns off, and the outbound side has an explicit policy
+requiring it. It stays platform-owned and on.
+
+**The decision to make before merge — pick one:**
+
+1. **Adopt it as written.** First-sentence disclosure for every client, both
+   directions. Nothing to change; record the policy and note that inbound
+   greetings will change for existing clients.
+2. **Split it by direction.** Mandatory first-sentence for outbound (as today's
+   policy already requires); for inbound, disclose *plainly when asked* but let
+   the client keep their own opening line. This needs a platform-owned rule
+   keyed on direction — **not** a client-facing switch.
+3. **Keep it on, soften placement.** Disclosure guaranteed within the first
+   exchange rather than the first sentence.
+
+Whichever is chosen, `assistant.disclosesAiWhenAsked` should stay `true` and
+stay unconfigurable. The open question is *placement in the opening line*, not
+*whether the assistant admits what it is*.
+
+Tracked in `test/platform-p13-audit.test.js` — the sabotage tests assert the
+disclosure survives every attempt to configure it away, so option 2 or 3 is a
+deliberate code change with a failing test, not a quiet drift.
 
 ---
 

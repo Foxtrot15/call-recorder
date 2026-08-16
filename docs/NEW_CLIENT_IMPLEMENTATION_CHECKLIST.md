@@ -120,6 +120,12 @@ node scripts/client.js preview harbour_electrical --store harbour.json \
 - [ ] Read the **first spoken sentence** aloud. It names the business and says
       "an AI assistant". If that reads badly, fix the trading name or the
       assistant name.
+      - ⚠ **For an INBOUND client, check this against the founder ruling on AI
+        disclosure placement.** The platform puts the disclosure in the first
+        sentence for everybody; the existing inbound receptionist does not.
+        See "AI disclosure — FOUNDER / PLATFORM POLICY" in
+        [AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md). Do not resolve it
+        by making the disclosure optional.
 - [ ] Read the whole prompt. Everything in it came from the configuration; if
       something is wrong, the configuration is wrong.
 - [ ] Check **"What you also ask, depending on the job"**. A question that
