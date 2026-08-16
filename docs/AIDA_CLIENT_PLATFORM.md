@@ -55,11 +55,11 @@ unlisted.
 
 | Layer | Files | May know about a provider? |
 |---|---|---|
-| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `fixtures/clients.js` | No |
-| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js` | No |
+| 0 model | `client-blueprint.js`, `blueprint-diff.js`, `stable-json.js`, `config-access.js`, `fixtures/clients.js` | No |
+| 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js` | No |
 | 2 behaviour | `behaviour-spec.js` | No |
 | 3 provider | `provider-compiler-retell.js` | Yes — the only one |
-| 4 tooling | `client-cli.js` | Yes, it displays the compiler's output |
+| 4 tooling | `client-cli.js`, `config-service.js` | Yes — they compose the compiler to show a person its output |
 
 ---
 

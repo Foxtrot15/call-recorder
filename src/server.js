@@ -78,6 +78,11 @@ app.use(require("./routes/locksmith-onboarding"));
 // call history are different surfaces with different risk, and switching one on
 // must never switch the other on (see docs/LOCKSMITH_CLIENT_PORTAL_SPEC.md).
 app.use(require("./routes/locksmith-portal"));
+
+// AIDA client platform — configuration API (P17). Gated OFF by default:
+// without PLATFORM_CONFIG_API_ENABLED="true" every path 404s exactly as if
+// this file did not exist. It provisions nothing and cannot place a call.
+app.use(require("./routes/platform-config"));
 // The two Retell webhooks are mounted at the TOP of this function, above every
 // body parser, because signature verification needs the transmitted bytes. See
 // the comment there. Both remain dormant behind their flags — the acquisition
