@@ -83,6 +83,14 @@ app.use(require("./routes/locksmith-portal"));
 // without PLATFORM_CONFIG_API_ENABLED="true" every path 404s exactly as if
 // this file did not exist. It provisions nothing and cannot place a call.
 app.use(require("./routes/platform-config"));
+
+// AIDA client platform — the configuration UI (P29-P35). Behind the SAME flag
+// as the JSON API above, deliberately: a UI that could be switched on while the
+// API it calls is off would show a person an empty screen and no reason. It
+// renders pages and calls the same services. There is no execute route, and no
+// button anywhere in it that would call one.
+app.use(require("./routes/platform-ui"));
+
 // The two Retell webhooks are mounted at the TOP of this function, above every
 // body parser, because signature verification needs the transmitted bytes. See
 // the comment there. Both remain dormant behind their flags — the acquisition
