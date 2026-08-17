@@ -1,7 +1,7 @@
 # AIDA Client Platform
 
 **Status:** built and tested locally on `feature/aida-client-platform`. Nothing
-is deployed. **SQL CREATED (ACP1 + ACP2 + ACP3) — NOT APPLIED ANYWHERE.** No provider resource was
+is deployed. **ACP1 IS APPLIED AND VERIFIED ON DEV (2026-08-17). ACP2 and ACP3 remain applied nowhere, and PRODUCTION has none of them.** No provider resource was
 touched and the real acquisition Retell agent is parked and was not contacted.
 Provisioning **executes end to end against fake adapters only** — no real
 provider adapter exists, and no switch turns a fake one into a real one.
@@ -1334,14 +1334,190 @@ which is the production state today.
 
 ---
 
+## ACP1 on DEV
+
+**Applied 2026-08-17**, project `wvwemitmmsdytyutaqbm`, at commit `f7d3889`,
+pasted manually into the Supabase SQL editor by the founder — and then verified
+against the live catalogue rather than inferred from *"Success. No rows
+returned."*
+
+| Checked | Result |
+|---|---|
+| both tables | present, 0 rows |
+| RLS | on, both |
+| policies | zero |
+| `status` | the five |
+| `source` | the five |
+| `event_type` | the current twenty-nine |
+| `actor_role` | the current eight, **including `operator_executor`** |
+| `pcv_one_active_per_client` | present, partial on `status = 'active'` |
+| lineage foreign keys | all three |
+| functions / triggers | all three / all three |
+
+**ACP2 NOT APPLIED. ACP3 NOT APPLIED. Production: nothing applied.**
+
+### The tooling bug that nearly wrote the wrong history
+
+The first attempt to answer *"is ACP1 applied?"* reported all five ACP tables as
+PRESENT on DEV, with column-by-column confidence. The founder then ran
+`'public.platform_config_events'::regclass` in the SQL editor and got **42P01**.
+
+The probe was wrong, and the mechanism is worth keeping:
+
+```js
+// WRONG. A missing table answers 404 with an EMPTY BODY, supabase-js parses
+// its error out of the body, so `error` is null and absent reads as present.
+await db.from(table).select("*", { head: true, count: "exact" });
+
+// RIGHT. A request that asks for a body gets PGRST205.
+await db.from(table).select("*").limit(1);
+```
+
+The column check had the same shape — it returned `true` for any error that was
+not `42703`, and `PGRST205` is not `42703` — so a missing table reported all
+twenty-five of its columns as present.
+
+It was diagnosed by asking the probe about a table nobody has ever created. It
+said that one existed too. **The regression test still asks about nonsense table
+names**, because a probe verified only against tables that exist is a probe that
+has never been tested.
+
+A second lesson from the same milestone lives in the verifiers: never write
+`conrelid IN (coalesce(to_regclass(...), 0::oid))` — a DOMAIN constraint has
+`conrelid = 0`, so that shape matches every domain CHECK in the database. Use
+`conrelid = to_regclass(...)`, where NULL matches nothing. Both are ratcheted.
+
+### Store binding
+
+`PLATFORM_CONFIG_STORE` — exact strings, `memory` (default) or `postgres`.
+`NODE_ENV` is deliberately **not** consulted: *"production means postgres"* is
+an inference, and the thing being inferred is which database a business's
+configuration lives in.
+
+**The rule that matters: there is no silent fallback.** If `postgres` is
+requested and ACP1 readiness cannot be proven, the binding returns **no store at
+all** and every platform path answers **503** with the reason. It does not
+degrade to memory — a configuration API serving from an empty in-memory store
+because the database was unreachable is one that tells a business its assistant
+has no services.
+
+The refusal is memoised too. A subsystem that silently reconnects on the next
+request hides the outage from whoever needs to fix it.
+
+The readiness probe asks for a row from **both** tables and names the **21
+columns** the adapter depends on, so a half-applied or drifted schema is a
+refusal at startup rather than an error on somebody's first save.
+
+### The live contract
+
+`test/platform-dev-live.test.js` runs the same contract against the real
+database — **42 tests**, not a watered-down smoke. It **skips by default**:
+three independent conditions must hold (opted in with the exact string `true`,
+a key resolves, and the project ref is DEV), so `npm test` never touches a
+database, needs a credential, or writes a row.
+
+```bash
+PLATFORM_DEV_LIVE=true PLATFORM_DEV_ENV_FILE=.env.platform-dev \
+  node --test test/platform-dev-live.test.js
+```
+
+What it proves on real Postgres: create/read/update, the **NULL CAS collision**
+(a second editor still holding "never edited" is refused), stale-token refusal,
+validate, approve with `approved_hash = content_hash`, immutability of approved
+content, activation, **the one-active index refusing a forged second active
+row**, restore with correct `restored_from` lineage and an unchanged original,
+ordered history, `source = voice` storage, append-only audit, **cross-client
+`supersedes` / `restored_from` / `superseded_by` all refused with 23503**,
+delete refusal, and a concurrent double-activation that still leaves at most one
+active version.
+
+It also proves the P36 schema fix live: an audit row with
+`actor_role = operator_executor` is **accepted**. Before the widening the
+database would have refused it and `config-service`'s try/catch would have
+swallowed the refusal — losing exactly the audit rows describing the one role
+that holds `provisioning:execute`.
+
+Two of these proofs were wrong on the first run and worth recording, because
+both were passing for the wrong reason:
+
+- The forged "second active version" row was refused by `pcv_instants_ordered`,
+  not by the one-active index — its `approved_at` was a moment before the
+  defaulted `created_at`. A forged row must be valid in every *other* respect or
+  the constraint under test is never reached.
+- The cross-client lineage row pointed at version `1`, which the fixture also
+  had, so the composite foreign key resolved legitimately. It now points at a
+  version number that exists **only** in the peer tenant.
+
+### Restart persistence
+
+Instance A creates a draft, every reference is discarded, instance B — a fresh
+client, binding, store and service — reads it, edits it, is discarded, and
+instance C reads the full history. A raw query then finds the row with no
+application object involved at all. The data is in Postgres, not in a cache.
+
+### DEV fixtures
+
+| Tenant | Purpose | Row policy |
+|---|---|---|
+| `aida_platform_dev_client` | **the founder's browser pass** | seeded once: v1 active, v2 open draft |
+| `aida_platform_dev_contract` | the live contract suite | **accumulates** — every run adds versions |
+| `aida_platform_dev_peer` | one row, the cross-tenant proof | one version, permanent |
+| `aida_platform_dev_fixture` | P36 debris from a first attempt | permanent, cannot be removed |
+| `dev-client` | pre-existing, not ours | never written to |
+
+**There is no reset, and that is the schema working.** `pcv_refuse_delete_trg`
+refuses to delete a configuration version, deliberately — history that can be
+deleted is not history. So to start clean you pick an unused **lower_snake**
+slug and seed again; the old tenant stays where it is.
+
+Two things fell out of this that are worth knowing:
+
+- **A platform tenant slug must be `lower_snake`.** `client-blueprint.js`
+  validates `identity.clientId` against `/^[a-z][a-z0-9_]{1,60}$/`, and ACP1
+  constrains the stored body to agree with the row — so `clients.slug`,
+  `client_id` and `identity.clientId` are one string. The first fixture slug
+  used hyphens and every blueprint written against it failed validation.
+- **`dev-client` is hyphenated**, so as it stands it could not be a platform
+  configuration tenant.
+
+### The founder browser pass
+
+```bash
+cp .env.platform-dev.example .env.platform-dev   # then fill in the DEV key
+
+PLATFORM_DEV_ENV_FILE=.env.platform-dev \
+  node scripts/dev/seed-platform-browser-fixture.js            # once
+PLATFORM_DEV_ENV_FILE=.env.platform-dev \
+  node scripts/dev/seed-platform-browser-fixture.js --status   # anytime, changes nothing
+
+PLATFORM_CONFIG_API_ENABLED=true PLATFORM_CONFIG_STORE=postgres \
+SUPABASE_URL=https://wvwemitmmsdytyutaqbm.supabase.co \
+SUPABASE_SERVICE_KEY=<dev service key> npm start
+```
+
+```
+/platform/clients/aida_platform_dev_client
+/platform/clients/aida_platform_dev_client/wizard
+```
+
+The checklist worth walking, because it covers the repeatable-list DOM
+behaviour no test in this repo can reach without a browser: open the wizard,
+edit identity, add a service, reorder it, remove one, add an urgency rule,
+change Saturday hours, Save, **refresh and confirm the values persisted**,
+Validate, read Review Changes, Approve, Activate, check the Dashboard and
+History, Restore an older version, confirm Restore made a **new draft**, then
+**restart the server and confirm it is all still there**.
+
 ## What is NOT built
 
 Stated plainly so the next batch can be scoped against it.
 
-- **The durable store is BUILT but UNAPPLIED.** The Postgres adapter exists and
-  passes the same contract suite as the in-memory one, but
-  `acp1_create_client_configuration.sql` **has not been applied to dev or to
-  production**, so the HTTP router is still wired to the in-memory store.
+- **The durable store is LIVE ON DEV, and memory is still the default.** ACP1
+  was applied and verified on 2026-08-17; the Postgres adapter passes the same
+  contract suite as the in-memory one AND the same suite against the real
+  database. The router now chooses between them with `PLATFORM_CONFIG_STORE`.
+  Nothing is applied to production, and an unconfigured deployment still gets
+  memory — explicitly, never by inference.
 - **No voice configuration agent.** The domain contract exists; the speech
   pipeline does not.
 - **No LIVE provider transport.** The full execution architecture exists and

@@ -330,10 +330,20 @@ provisioning, provider, phone, routing, integrations, compliance.
 ## Status
 
 The HTTP API **and the UI that calls it** are gated off behind the same
-`PLATFORM_CONFIG_API_ENABLED="true"`, and both are wired to the in-memory store
-because `acp1_create_client_configuration.sql` **has not been applied
-anywhere**. Every call above works today against that store; pointing it at
-Postgres is one line once the migration is applied and reviewed.
+`PLATFORM_CONFIG_API_ENABLED="true"`.
+
+**ACP1 was applied and verified on DEV on 2026-08-17**, so the store is now a
+choice rather than a placeholder: `PLATFORM_CONFIG_STORE` selects `memory`
+(the default) or `postgres`, and every call above has been run against the real
+database — see
+[AIDA_CLIENT_PLATFORM.md §ACP1 on DEV](AIDA_CLIENT_PLATFORM.md#acp1-on-dev).
+
+**If `postgres` is requested and ACP1 readiness cannot be proven, every path
+answers 503.** There is no fallback to memory, because an API serving from an
+empty in-memory store because the database was unreachable is one that tells a
+business it has no services.
+
+Production has none of the migrations applied.
 
 The UI is served from `/platform/clients/:clientId/…` — see the screen table in
 [AIDA_CLIENT_PLATFORM.md](AIDA_CLIENT_PLATFORM.md#client-configuration-ui),

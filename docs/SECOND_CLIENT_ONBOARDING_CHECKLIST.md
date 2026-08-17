@@ -221,8 +221,12 @@ What an operator must know before running it even against a fake:
 
 ## Before any of this can run against a real database
 
-- [ ] Apply **ACP1** (`acp1_create_client_configuration.sql`) — preflight `19`,
-      apply, verify `20`.
+- [x] **ACP1 APPLIED AND VERIFIED ON DEV — 2026-08-17**, at commit `f7d3889`,
+      pasted manually and checked against the live catalogue. Production still
+      has it applied nowhere. Preflight `19` and verifier `20` remain the way to
+      do it again for another environment.
+- [ ] Set `PLATFORM_CONFIG_STORE=postgres`. If ACP1 readiness cannot be proven
+      the application answers **503** — it never falls back to memory.
 - [ ] Apply **ACP2** (`acp2_create_platform_provisioning_plans.sql`) — preflight
       `21`, apply, verify `22`.
 - [ ] Apply **ACP3** (`acp3_create_provisioning_executions.sql`) — preflight
@@ -230,11 +234,13 @@ What an operator must know before running it even against a fake:
       executor's one-unresolved-per-client guard is an in-memory promise rather
       than a database index.
 - [ ] Switch the store binding to `postgres` mode. It **refuses** unless a
-      schema probe confirms ACP1 is present, and it never falls back to memory.
+      schema probe confirms ACP1 is present — both tables, and the 21 columns
+      the adapter depends on — and it never falls back to memory.
 - [ ] Set `PLATFORM_CONFIG_API_ENABLED="true"` — the exact string.
 
-**All three migrations are currently applied nowhere**, and the six
-verification scripts (`19`–`24`) are read-only and have never been run.
+**ACP1 is applied to DEV only.** ACP2 and ACP3 are applied nowhere, and
+production has none of them. Verifiers `19` and `20` have been run against DEV;
+`21`–`24` are read-only and have never been run.
 
 ---
 

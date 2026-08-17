@@ -82,11 +82,31 @@
 -- references it.
 --
 -- ── STATUS ─────────────────────────────────────────────────────────────────
--- NOT APPLIED TO DEV.
+-- APPLIED TO DEV — 2026-08-17, project wvwemitmmsdytyutaqbm, at revision
+--   f7d3889, manually in the Supabase SQL editor by the founder.
+--   Verified against the LIVE catalogue afterwards, not inferred from a
+--   "Success. No rows returned.": both tables present with 0 rows, RLS on and
+--   zero policies, the five-value status vocabulary, the five-value source
+--   vocabulary, the twenty-nine event types, the eight actor roles INCLUDING
+--   operator_executor, pcv_one_active_per_client partial on status='active',
+--   all three lineage foreign keys, all three functions and all three triggers.
+--
 -- NOT APPLIED TO PRODUCTION.
--- NOT APPLIED ANYWHERE.
--- Nothing in this repository applies SQL, and a test asserts that. This file
--- has never been executed and no database was connected while writing it.
+--
+-- Nothing in this repository applies SQL, and a test asserts that. It was
+-- pasted by a person, which is the only way it is meant to travel.
+--
+-- ── HOW THE STATUS ABOVE WAS ESTABLISHED, AND HOW IT WAS ALMOST WRONG ──────
+-- The first attempt to answer "is this applied?" used PostgREST with
+-- .select("*", { head: true }). A HEAD request against a table that does NOT
+-- exist returns 404 with an EMPTY BODY, supabase-js parses its error from the
+-- body, so `error` came back null and five absent tables were reported as
+-- APPLIED — with enough confidence to survive a column-by-column shape check
+-- broken the same way.
+--
+-- The catalogue disagreed, and the catalogue was right. Existence is now
+-- established by asking for a row, and the regression test asks about a table
+-- name nobody has ever created.
 --
 -- APPLICATION ORDER: independent. It references no other table and no other
 -- migration references it, so it may be applied before or after any of the

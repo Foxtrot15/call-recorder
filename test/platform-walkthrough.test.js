@@ -220,15 +220,31 @@ describe("documentation — it has not drifted from the code", () => {
     }
   });
 
-  it("is honest that the durable store exists but its migration is UNAPPLIED", () => {
-    // The gap moved rather than closing: P14/P15 built the store, and the SQL
-    // has still been applied nowhere. Saying "no durable store" would now be
-    // wrong; saying nothing would be worse.
-    assert.match(PLATFORM_DOC, /SQL CREATED \(ACP1 \+ ACP2 \+ ACP3\) — NOT APPLIED ANYWHERE/);
-    assert.match(PLATFORM_DOC, /NOT APPLIED TO DEV/);
-    assert.match(PLATFORM_DOC, /NOT APPLIED TO PRODUCTION/);
-    assert.match(PLATFORM_DOC, /durable store is BUILT but UNAPPLIED/i);
-    assert.match(PLATFORM_DOC, /router is still wired to the in-memory store/i);
+  it("is honest about exactly where each migration has been applied", () => {
+    // The gap moved again. P14/P15 built the store; P36 applied ACP1 to DEV on
+    // 2026-08-17 and verified it against the live catalogue. "Applied nowhere"
+    // became false the moment the founder pasted it, and a status line that
+    // lags reality by one milestone is worse than none.
+    assert.match(PLATFORM_DOC, /ACP1 IS APPLIED AND VERIFIED ON DEV \(2026-08-17\)/);
+    assert.match(PLATFORM_DOC, /ACP2 and ACP3 remain applied nowhere/);
+    assert.match(PLATFORM_DOC, /PRODUCTION has none of them/);
+    assert.ok(!/SQL CREATED \(ACP1 \+ ACP2 \+ ACP3\) — NOT APPLIED ANYWHERE/.test(PLATFORM_DOC),
+      "the status line still claims ACP1 is applied nowhere");
+
+    // And the doc must still say plainly what postgres mode does when the
+    // schema is not there, because that is the property a reader relies on.
+    assert.match(PLATFORM_DOC, /no silent fallback/i);
+    assert.match(PLATFORM_DOC, /503/);
+    assert.match(PLATFORM_DOC, /memory is still the default/i);
+  });
+
+  it("records the probe lesson, so the next person does not repeat it", () => {
+    // A bug that reported five absent tables as applied is worth exactly one
+    // paragraph in the place somebody will read it.
+    assert.match(PLATFORM_DOC, /head: true/);
+    assert.match(PLATFORM_DOC, /PGRST205/);
+    assert.match(PLATFORM_DOC, /nonsense table\s*\n?names|nonsense table names/i);
+    assert.match(PLATFORM_DOC, /conrelid = 0/);
   });
 
   it("records the AI-disclosure ruling as decided, not as an open question", () => {

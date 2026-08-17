@@ -22,10 +22,20 @@ const MIGRATION = "supabase/sql/acp1_create_client_configuration.sql";
 describe("ratchet — the ACP1 migration remains unapplied", () => {
   const sql = read(MIGRATION);
 
-  it("says so, unambiguously, in the file itself", () => {
-    assert.match(sql, /NOT APPLIED TO DEV/);
+  it("states where it HAS been applied, and where it has not", () => {
+    // Rewritten in P36. ACP1 was applied to DEV on 2026-08-17 and verified
+    // against the live catalogue, so "NOT APPLIED ANYWHERE" became a lie the
+    // moment the founder pasted it — and a migration header that lies is worse
+    // than one that says nothing.
+    //
+    // The claim that must survive is the one about PRODUCTION.
+    assert.match(sql, /APPLIED TO DEV — 2026-08-17/);
+    assert.match(sql, /wvwemitmmsdytyutaqbm/);
     assert.match(sql, /NOT APPLIED TO PRODUCTION/);
-    assert.match(sql, /NOT APPLIED ANYWHERE/);
+    assert.ok(!/NOT APPLIED ANYWHERE/.test(sql), "the header still claims it is applied nowhere");
+    // And it records how the status was established, because the first answer
+    // was wrong and the reason it was wrong is reusable.
+    assert.match(sql, /head: true/);
   });
 
   it("no source file reads, imports or executes the migration", () => {
