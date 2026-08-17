@@ -44,10 +44,7 @@ const router = express.Router();
 const { requireClientAuth, requireLogin } = require("../middleware/auth");
 const { createPlatformConfigHandlers } = require("./platform-config-handlers");
 const { createPlatformProvisioningHandlers } = require("./platform-provisioning-handlers");
-const { createConfigService } = require("../platform/config-service");
-const { createProvisioningService } = require("../platform/provisioning-service");
-const { createInMemoryBlueprintStore } = require("../platform/blueprint-authority");
-const { createInMemoryPlanStore } = require("../platform/provisioning-plan-authority");
+const { platformStoreGate } = require("./platform-store");
 
 /** Exact-string parse. Anything else — "TRUE", "1", "yes", unset — is off. */
 function platformConfigApiEnabled(env = process.env) {
@@ -63,25 +60,18 @@ function platformConfigGate(env = process.env) {
 
 router.use(platformConfigGate());
 
-// The durable store is deliberately NOT wired here yet. acp1 has not been
-// applied to any database, so binding this to Postgres would be binding it to
-// tables that do not exist. The in-memory store keeps the surface honest and
-// testable; swapping it is one line once the migration is applied and reviewed.
-const service = createConfigService({
-  store: createInMemoryBlueprintStore(),
-  now: () => new Date(),
-});
-const handlers = createPlatformConfigHandlers({ service });
+// ── THE STORE (P36) ─────────────────────────────────────────────────
+// Chosen by PLATFORM_CONFIG_STORE, resolved on the first request, and memoised.
+// ACP1 was applied to DEV on 2026-08-17, so postgres is now a real option — but
+// it is never the default and never inferred. If postgres is requested and ACP1
+// readiness cannot be proven, every path answers 503 and NOTHING falls back to
+// memory: a configuration API serving from an empty in-memory store because the
+// database was unreachable is one that tells a business it has no services.
+router.use(platformStoreGate());
 
-// PROVISIONING (P23). Same gate, same sessions, same tenant rule. It plans and
-// previews; it cannot provision, and there is no execute route to disable.
-const provisioningService = createProvisioningService({
-  configService: service,
-  planStore: createInMemoryPlanStore(),
-  now: () => new Date(),
-  providerRefs: {},   // deployment facts are injected, never invented. Absent ones are reported by name.
-});
-const provisioning = createPlatformProvisioningHandlers({ service: provisioningService });
+// Handlers take their service per request, from req.platform.
+const handlers = createPlatformConfigHandlers({ serviceFor: (req) => req.platform.configService });
+const provisioning = createPlatformProvisioningHandlers({ serviceFor: (req) => req.platform.provisioningService });
 
 const BASE = "/api/clients/:clientId/config";
 

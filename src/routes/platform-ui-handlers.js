@@ -61,9 +61,18 @@ function errorPage(title, message, status) {
   });
 }
 
-function createPlatformUiHandlers({ configService, provisioningService, logger = console } = {}) {
-  if (!configService) throw new Error("createPlatformUiHandlers requires a config service");
-  if (!provisioningService) throw new Error("createPlatformUiHandlers requires a provisioning service");
+/** Fixed services, or per-request resolvers the router supplies from the binding (P36). */
+function createPlatformUiHandlers({
+  configService, provisioningService, configServiceFor = null, provisioningServiceFor = null, logger = console,
+} = {}) {
+  if (!configService && typeof configServiceFor !== "function") {
+    throw new Error("createPlatformUiHandlers requires a config service, or a configServiceFor(req) resolver");
+  }
+  if (!provisioningService && typeof provisioningServiceFor !== "function") {
+    throw new Error("createPlatformUiHandlers requires a provisioning service, or a provisioningServiceFor(req) resolver");
+  }
+  const cfg = (req) => (configServiceFor ? configServiceFor(req) : configService);
+  const prov = (req) => (provisioningServiceFor ? provisioningServiceFor(req) : provisioningService);
 
   function html(res, body, status = 200) {
     res.set(PAGE_SECURITY_HEADERS);
@@ -131,28 +140,28 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
 
   // ── shared loads ──────────────────────────────────────────────────
 
-  async function loadActive(ctx) {
-    const r = await configService.getActive(ctx);
+  async function loadActive(ctx, service) {
+    const r = await service.getActive(ctx);
     return r.ok ? r.version : null;
   }
 
   /** The newest version that is still open for editing, if any. */
-  async function loadDraft(ctx) {
-    const listed = await configService.listVersions(ctx);
+  async function loadDraft(ctx, service) {
+    const listed = await service.listVersions(ctx);
     if (!listed.ok) return null;
     const open = (listed.versions || []).filter((v) => ["draft", "validated", "approved"].includes(v.status));
     if (!open.length) return null;
     const newest = open.reduce((a, b) => ((b.configVersion ?? 0) > (a.configVersion ?? 0) ? b : a));
-    const full = await configService.getVersion({ ...ctx, configVersion: newest.configVersion });
+    const full = await service.getVersion({ ...ctx, configVersion: newest.configVersion });
     return full.ok ? full.version : null;
   }
 
-  async function loadPlan(ctx) {
-    const listed = await provisioningService.listPlans(ctx);
+  async function loadPlan(ctx, service) {
+    const listed = await service.listPlans(ctx);
     if (!listed.ok) return null;
     const open = (listed.plans || []).filter((p) => ["draft", "validated", "approved"].includes(p.status));
     if (!open.length) return null;
-    const full = await provisioningService.getPlan({ ...ctx, planId: open[open.length - 1].planId });
+    const full = await service.getPlan({ ...ctx, planId: open[open.length - 1].planId });
     return full.ok ? { plan: full.plan, staleness: full.staleness } : null;
   }
 
@@ -163,9 +172,9 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       if (!ctx) return;
 
       const [active, draft, planned, readiness] = await Promise.all([
-        loadActive(ctx), loadDraft(ctx), loadPlan(ctx), provisioningService.readiness(ctx),
+        loadActive(ctx, cfg(req)), loadDraft(ctx, cfg(req)), loadPlan(ctx, prov(req)), prov(req).readiness(ctx),
       ]);
-      const desired = await provisioningService.getDesiredPayloads(ctx).catch(() => null);
+      const desired = await prov(req).getDesiredPayloads(ctx).catch(() => null);
 
       const model = VM.dashboardModel({
         clientId: ctx.clientId,
@@ -182,9 +191,9 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
     history: guard("history", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      const listed = await configService.listVersions(ctx);
+      const listed = await cfg(req).listVersions(ctx);
       if (!listed.ok) return refuse(res, listed);
-      const events = await configService.history(ctx);
+      const events = await cfg(req).history(ctx);
 
       const model = VM.historyModel({
         clientId: ctx.clientId,
@@ -204,8 +213,8 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const section = F.sectionFor(key);
       if (!section) return refuse(res, { outcome: "not_found" });
 
-      const draft = await loadDraft(ctx);
-      const source = draft || (await loadActive(ctx));
+      const draft = await loadDraft(ctx, cfg(req));
+      const source = draft || (await loadActive(ctx, cfg(req)));
       if (!source) {
         return html(res, errorPage("Nothing to edit", "This client has no configuration yet. Start the setup wizard to create one.", 404), 404);
       }
@@ -262,7 +271,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
         args.expectedUpdatedAt = body.expectedUpdatedAt;
       }
 
-      const result = await configService.updateDraft(args);
+      const result = await cfg(req).updateDraft(args);
       if (!result.ok) {
         const status = { forbidden: 403, not_found: 404, invalid: 422, conflict: 409, unavailable: 503 }[result.outcome] || 400;
         // A conflict returns the conflict, never a merged result.
@@ -284,15 +293,15 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res);
       if (!ctx) return;
 
-      const draft = await loadDraft(ctx);
+      const draft = await loadDraft(ctx, cfg(req));
       if (!draft) {
         return html(res, errorPage("Nothing to review", "There is no open draft. Edit the configuration to create one.", 404), 404);
       }
       const toVersion = draft.metadata.configVersion;
 
       const [diff, validation] = await Promise.all([
-        configService.diff({ ...ctx, fromVersion: null, toVersion }),
-        configService.validate({ ...ctx, configVersion: toVersion }),
+        cfg(req).diff({ ...ctx, fromVersion: null, toVersion }),
+        cfg(req).validate({ ...ctx, configVersion: toVersion }),
       ]);
 
       const model = VM.diffModel({
@@ -318,7 +327,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res, "config:validate");
       if (!ctx) return;
       const configVersion = Number(req.params.versionId);
-      const result = await configService.validate({ ...ctx, configVersion });
+      const result = await cfg(req).validate({ ...ctx, configVersion });
       return res.status(result.ok ? 200 : 422).json({
         ok: result.ok,
         errors: result.errors || [],
@@ -331,7 +340,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       if (!ctx) return;
       const configVersion = Number(req.params.versionId);
       const reason = req.body && typeof req.body.reason === "string" ? req.body.reason.slice(0, 2000) : null;
-      const result = await configService.approve({ ...ctx, configVersion, reason });
+      const result = await cfg(req).approve({ ...ctx, configVersion, reason });
       if (!result.ok) return refuse(res, result);
       return res.redirect(303, `${ctx.basePath}/activate?version=${encodeURIComponent(String(configVersion))}`);
     }),
@@ -341,8 +350,8 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res, "config:view");
       if (!ctx) return;
       const requested = Number((req.query && req.query.version) || 0);
-      const draft = await loadDraft(ctx);
-      const active = await loadActive(ctx);
+      const draft = await loadDraft(ctx, cfg(req));
+      const active = await loadActive(ctx, cfg(req));
       const version = Number.isInteger(requested) && requested > 0
         ? requested
         : draft ? draft.metadata.configVersion : null;
@@ -350,7 +359,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       if (!version) {
         return html(res, errorPage("Nothing to activate", "There is no approved version waiting.", 404), 404);
       }
-      const target = await configService.getVersion({ ...ctx, configVersion: version });
+      const target = await cfg(req).getVersion({ ...ctx, configVersion: version });
       if (!target.ok) return refuse(res, target);
 
       const approved = target.version.metadata.status === "approved";
@@ -374,7 +383,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res, "config:activate");
       if (!ctx) return;
       const configVersion = Number((req.body && req.body.version) || (req.query && req.query.version) || 0);
-      const result = await configService.activate({ ...ctx, configVersion });
+      const result = await cfg(req).activate({ ...ctx, configVersion });
       if (!result.ok) return refuse(res, result);
       return res.redirect(303, ctx.basePath);
     }),
@@ -383,7 +392,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res, "config:draft");
       if (!ctx) return;
       const configVersion = Number(req.params.versionId);
-      const result = await configService.restore({ ...ctx, configVersion });
+      const result = await cfg(req).restore({ ...ctx, configVersion });
       if (!result.ok) return refuse(res, result);
       return res.redirect(303, `${ctx.basePath}/edit`);
     }),
@@ -394,7 +403,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       if (!ctx) return;
       const direction = req.query && req.query.direction === "outbound" ? "outbound" : "inbound";
 
-      const preview = await configService.preview({ ...ctx, configVersion: null, direction });
+      const preview = await cfg(req).preview({ ...ctx, configVersion: null, direction });
       if (!preview.ok) {
         return html(res, provPages.renderBehaviourPreview(
           { clientId: ctx.clientId, available: false, direction, reason: preview.message || "There is no valid active configuration to preview." },
@@ -402,7 +411,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
         ));
       }
 
-      const active = await loadActive(ctx);
+      const active = await loadActive(ctx, cfg(req));
       const { compileBehaviourSpec } = require("../platform/behaviour-spec");
       const { spec } = compileBehaviourSpec(active);
 
@@ -417,7 +426,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res);
       if (!ctx) return;
       const direction = req.query && req.query.direction === "outbound" ? "outbound" : "inbound";
-      const preview = await configService.preview({ ...ctx, configVersion: null, direction });
+      const preview = await cfg(req).preview({ ...ctx, configVersion: null, direction });
 
       const model = VM.providerPreviewModel({
         clientId: ctx.clientId,
@@ -432,14 +441,14 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
     provisioning: guard("provisioning", async (req, res) => {
       const ctx = begin(req, res, "provisioning:view");
       if (!ctx) return;
-      const planned = await loadPlan(ctx);
+      const planned = await loadPlan(ctx, prov(req));
       if (!planned) {
         return html(res, provPages.renderPlan(
           { clientId: ctx.clientId, available: false, reason: "No provisioning plan has been created for the active configuration." },
           ctx.basePath,
         ));
       }
-      const current = await provisioningService.getDiff(ctx).catch(() => null);
+      const current = await prov(req).getDiff(ctx).catch(() => null);
 
       const model = VM.planModel({
         clientId: ctx.clientId,
@@ -454,7 +463,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
     createPlan: guard("createPlan", async (req, res) => {
       const ctx = begin(req, res, "provisioning:create");
       if (!ctx) return;
-      const result = await provisioningService.createPlan({ ...ctx, direction: "inbound", notes: null });
+      const result = await prov(req).createPlan({ ...ctx, direction: "inbound", notes: null });
       if (!result.ok) return refuse(res, result);
       return res.redirect(303, `${ctx.basePath}/provisioning`);
     }),
@@ -463,7 +472,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       const ctx = begin(req, res, "provisioning:approve");
       if (!ctx) return;
       const body = req.body || {};
-      const result = await provisioningService.approvePlan({
+      const result = await prov(req).approvePlan({
         ...ctx,
         planId: req.params.planId,
         reason: typeof body.reason === "string" ? body.reason.slice(0, 2000) : null,
@@ -477,8 +486,8 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
     wizard: guard("wizard", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      const draft = await loadDraft(ctx);
-      const active = await loadActive(ctx);
+      const draft = await loadDraft(ctx, cfg(req));
+      const active = await loadActive(ctx, cfg(req));
       const source = draft || active;
 
       // Step state is DERIVED from the draft, so leaving and returning needs no
@@ -515,7 +524,7 @@ function createPlatformUiHandlers({ configService, provisioningService, logger =
       if (!ctx) return;
       const { emptyBlueprint } = require("../platform/client-blueprint");
       const blueprint = emptyBlueprint({ clientId: ctx.clientId, vertical: (req.body && req.body.vertical) || null });
-      const result = await configService.createDraft({ ...ctx, blueprint, source: "ui" });
+      const result = await cfg(req).createDraft({ ...ctx, blueprint, source: "ui" });
       if (!result.ok) return refuse(res, result);
       return res.redirect(303, `${ctx.basePath}/edit/identity`);
     }),

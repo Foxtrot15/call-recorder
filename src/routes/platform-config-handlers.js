@@ -49,8 +49,17 @@ const asVersion = (raw) => {
   return Number.isInteger(n) && n > 0 && String(n) === String(raw).trim() ? n : null;
 };
 
-function createPlatformConfigHandlers({ service, logger = console } = {}) {
-  if (!service) throw new Error("createPlatformConfigHandlers requires a config service");
+/**
+ * Takes EITHER a fixed `service` — what every test does — or a `serviceFor(req)`
+ * resolver, which is how the router hands each request the store the binding
+ * settled on (P36). One of the two is required; a handler that silently has no
+ * service is a handler that 500s on a business's configuration.
+ */
+function createPlatformConfigHandlers({ service, serviceFor = null, logger = console } = {}) {
+  if (!service && typeof serviceFor !== "function") {
+    throw new Error("createPlatformConfigHandlers requires a config service, or a serviceFor(req) resolver");
+  }
+  const resolve = (req) => (serviceFor ? serviceFor(req) : service);
 
   /** Everything a handler shares: principal, tenant, and a uniform reply. */
   function begin(req, res) {
@@ -99,13 +108,13 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
     getActive: guard("getActive", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      reply(res, await service.getActive(ctx));
+      reply(res, await resolve(req).getActive(ctx));
     }),
 
     listVersions: guard("listVersions", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      reply(res, await service.listVersions(ctx));
+      reply(res, await resolve(req).listVersions(ctx));
     }),
 
     getVersion: guard("getVersion", async (req, res) => {
@@ -113,7 +122,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (!ctx) return;
       const configVersion = asVersion(req.params.versionId);
       if (configVersion === null) return res.status(404).json({ error: SAFE_REFUSALS.not_found });
-      reply(res, await service.getVersion({ ...ctx, configVersion }));
+      reply(res, await resolve(req).getVersion({ ...ctx, configVersion }));
     }),
 
     diff: guard("diff", async (req, res) => {
@@ -126,13 +135,13 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (fromRaw !== undefined && fromRaw !== "" && fromVersion === null) {
         return res.status(422).json({ error: "from must be a positive whole number", code: "bad_request" });
       }
-      reply(res, await service.diff({ ...ctx, fromVersion, toVersion }));
+      reply(res, await resolve(req).diff({ ...ctx, fromVersion, toVersion }));
     }),
 
     history: guard("history", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      reply(res, await service.history(ctx));
+      reply(res, await resolve(req).history(ctx));
     }),
 
     // ── writes ──
@@ -145,7 +154,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       }
       // `source` is RECORDED, never trusted. A caller claiming source:"operator"
       // gains nothing — authority comes from the principal.
-      reply(res, await service.createDraft({ ...ctx, blueprint: body.blueprint, source: "ui" }), 201);
+      reply(res, await resolve(req).createDraft({ ...ctx, blueprint: body.blueprint, source: "ui" }), 201);
     }),
 
     updateDraft: guard("updateDraft", async (req, res) => {
@@ -178,7 +187,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (Object.prototype.hasOwnProperty.call(body, "expectedUpdatedAt")) {
         args.expectedUpdatedAt = body.expectedUpdatedAt;
       }
-      reply(res, await service.updateDraft(args));
+      reply(res, await resolve(req).updateDraft(args));
     }),
 
     validate: guard("validate", async (req, res) => {
@@ -186,7 +195,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (!ctx) return;
       const configVersion = asVersion(req.params.versionId);
       if (configVersion === null) return res.status(404).json({ error: SAFE_REFUSALS.not_found });
-      reply(res, await service.validate({ ...ctx, configVersion }));
+      reply(res, await resolve(req).validate({ ...ctx, configVersion }));
     }),
 
     approve: guard("approve", async (req, res) => {
@@ -195,7 +204,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       const configVersion = asVersion(req.params.versionId);
       if (configVersion === null) return res.status(404).json({ error: SAFE_REFUSALS.not_found });
       const reason = req.body && typeof req.body.reason === "string" ? req.body.reason.slice(0, 2000) : null;
-      reply(res, await service.approve({ ...ctx, configVersion, reason }));
+      reply(res, await resolve(req).approve({ ...ctx, configVersion, reason }));
     }),
 
     // ACTIVATION IS NOT DEPLOYMENT.
@@ -204,7 +213,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (!ctx) return;
       const configVersion = asVersion(req.params.versionId);
       if (configVersion === null) return res.status(404).json({ error: SAFE_REFUSALS.not_found });
-      reply(res, await service.activate({ ...ctx, configVersion }));
+      reply(res, await resolve(req).activate({ ...ctx, configVersion }));
     }),
 
     restore: guard("restore", async (req, res) => {
@@ -212,7 +221,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (!ctx) return;
       const configVersion = asVersion(req.params.versionId);
       if (configVersion === null) return res.status(404).json({ error: SAFE_REFUSALS.not_found });
-      reply(res, await service.restore({ ...ctx, configVersion }), 201);
+      reply(res, await resolve(req).restore({ ...ctx, configVersion }), 201);
     }),
 
     proposePatch: guard("proposePatch", async (req, res) => {
@@ -222,7 +231,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
       if (!body.patch || typeof body.patch !== "object") {
         return res.status(422).json({ error: "a patch is required", code: "bad_request" });
       }
-      reply(res, await service.proposePatch({ ...ctx, patch: body.patch, source: "api" }), 201);
+      reply(res, await resolve(req).proposePatch({ ...ctx, patch: body.patch, source: "api" }), 201);
     }),
 
     // ── preview: pure, no provider contact ──
@@ -235,7 +244,7 @@ function createPlatformConfigHandlers({ service, logger = console } = {}) {
         return res.status(404).json({ error: SAFE_REFUSALS.not_found });
       }
       const direction = req.query && req.query.direction === "outbound" ? "outbound" : "inbound";
-      reply(res, await service.preview({ ...ctx, configVersion, direction }));
+      reply(res, await resolve(req).preview({ ...ctx, configVersion, direction }));
     }),
   };
 }

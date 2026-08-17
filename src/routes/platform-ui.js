@@ -44,10 +44,7 @@ const router = express.Router();
 
 const { requireClientAuth, requireLogin } = require("../middleware/auth");
 const { createPlatformUiHandlers } = require("./platform-ui-handlers");
-const { createConfigService } = require("../platform/config-service");
-const { createProvisioningService } = require("../platform/provisioning-service");
-const { createInMemoryBlueprintStore } = require("../platform/blueprint-authority");
-const { createInMemoryPlanStore } = require("../platform/provisioning-plan-authority");
+const { platformStoreGate } = require("./platform-store");
 
 /** Exact-string parse, the D7 house rule. "TRUE", "1", "yes" and unset are all off. */
 function platformUiEnabled(env = process.env) {
@@ -63,21 +60,14 @@ function platformUiGate(env = process.env) {
 
 router.use(platformUiGate());
 
-// The same in-memory stores as the JSON surface, and for the same reason: ACP1
-// has been applied to no database, so binding this to Postgres would be binding
-// it to tables that do not exist.
-const configService = createConfigService({
-  store: createInMemoryBlueprintStore(),
-  now: () => new Date(),
-});
-const provisioningService = createProvisioningService({
-  configService,
-  planStore: createInMemoryPlanStore(),
-  now: () => new Date(),
-  providerRefs: {},   // deployment facts are injected, never invented
-});
+// The same store as the JSON surface, resolved the same way (P36). One
+// binding, one refusal, one truth about where a client's configuration lives.
+router.use(platformStoreGate());
 
-const h = createPlatformUiHandlers({ configService, provisioningService });
+const h = createPlatformUiHandlers({
+  configServiceFor: (req) => req.platform.configService,
+  provisioningServiceFor: (req) => req.platform.provisioningService,
+});
 
 const BASE = "/platform/clients/:clientId";
 

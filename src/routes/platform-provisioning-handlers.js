@@ -36,8 +36,12 @@ const SAFE_REFUSALS = Object.freeze({
 
 const PLAN_ID = /^plan_[A-Za-z0-9_-]{1,58}$/;
 
-function createPlatformProvisioningHandlers({ service, logger = console } = {}) {
-  if (!service) throw new Error("createPlatformProvisioningHandlers requires a provisioning service");
+/** Same shape as the configuration handlers — a fixed service, or a per-request resolver (P36). */
+function createPlatformProvisioningHandlers({ service, serviceFor = null, logger = console } = {}) {
+  if (!service && typeof serviceFor !== "function") {
+    throw new Error("createPlatformProvisioningHandlers requires a provisioning service, or a serviceFor(req) resolver");
+  }
+  const resolve = (req) => (serviceFor ? serviceFor(req) : service);
 
   function begin(req, res) {
     const principal = principalFromRequest(req);
@@ -90,26 +94,26 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
     getDiff: guard("getDiff", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      reply(res, await service.getDiff({ ...ctx, direction: direction(req) }));
+      reply(res, await resolve(req).getDiff({ ...ctx, direction: direction(req) }));
     }),
 
     getDesiredPayloads: guard("getDesiredPayloads", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      reply(res, await service.getDesiredPayloads({ ...ctx, direction: direction(req) }));
+      reply(res, await resolve(req).getDesiredPayloads({ ...ctx, direction: direction(req) }));
     }),
 
     listPlans: guard("listPlans", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      reply(res, await service.listPlans(ctx));
+      reply(res, await resolve(req).listPlans(ctx));
     }),
 
     createPlan: guard("createPlan", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
       const notes = req.body && typeof req.body.notes === "string" ? req.body.notes.slice(0, 2000) : null;
-      reply(res, await service.createPlan({ ...ctx, direction: direction(req), notes }), 201);
+      reply(res, await resolve(req).createPlan({ ...ctx, direction: direction(req), notes }), 201);
     }),
 
     getPlan: guard("getPlan", async (req, res) => {
@@ -117,7 +121,7 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
       if (!ctx) return;
       const id = planId(req, res);
       if (!id) return;
-      reply(res, await service.getPlan({ ...ctx, planId: id }));
+      reply(res, await resolve(req).getPlan({ ...ctx, planId: id }));
     }),
 
     getPlanActions: guard("getPlanActions", async (req, res) => {
@@ -125,7 +129,7 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
       if (!ctx) return;
       const id = planId(req, res);
       if (!id) return;
-      const result = await service.getPlan({ ...ctx, planId: id });
+      const result = await resolve(req).getPlan({ ...ctx, planId: id });
       if (!result.ok) return reply(res, result);
       res.status(200).json({
         planId: result.plan.planId,
@@ -142,7 +146,7 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
       if (!ctx) return;
       const id = planId(req, res);
       if (!id) return;
-      reply(res, await service.validatePlan({ ...ctx, planId: id }));
+      reply(res, await resolve(req).validatePlan({ ...ctx, planId: id }));
     }),
 
     approvePlan: guard("approvePlan", async (req, res) => {
@@ -151,7 +155,7 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
       const id = planId(req, res);
       if (!id) return;
       const body = req.body || {};
-      reply(res, await service.approvePlan({
+      reply(res, await resolve(req).approvePlan({
         ...ctx,
         planId: id,
         reason: typeof body.reason === "string" ? body.reason.slice(0, 2000) : null,
@@ -166,13 +170,13 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
       const id = planId(req, res);
       if (!id) return;
       const reason = req.body && typeof req.body.reason === "string" ? req.body.reason.slice(0, 2000) : null;
-      reply(res, await service.cancelPlan({ ...ctx, planId: id, reason }));
+      reply(res, await resolve(req).cancelPlan({ ...ctx, planId: id, reason }));
     }),
 
     readiness: guard("readiness", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      const result = await service.readiness(ctx);
+      const result = await resolve(req).readiness(ctx);
       if (!result.ok) return reply(res, result);
       // Restated at the boundary so a UI cannot present readiness as a
       // go-ahead without deliberately deleting the field.
@@ -183,7 +187,7 @@ function createPlatformProvisioningHandlers({ service, logger = console } = {}) 
     executionContract: guard("executionContract", async (req, res) => {
       const ctx = begin(req, res);
       if (!ctx) return;
-      const result = service.executionContract(ctx);
+      const result = resolve(req).executionContract(ctx);
       if (!result.ok) return reply(res, result);
       res.status(200).json({ ...result.contract, endpointExists: false });
     }),
