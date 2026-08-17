@@ -397,8 +397,18 @@ create table if not exists public.platform_config_events (
   -- WHO. Text rather than a foreign key: an actor may be an operator, a client
   -- user, an importer or a future voice agent, and they do not share a table.
   actor             text        check (actor is null or length(actor) <= 200),
+  -- WIDENED IN P36, BEFORE THIS FILE WAS EVER APPLIED.
+  -- P24-P28 added `operator_executor` to config-access.js — the only role that
+  -- holds provisioning:execute. The audit sink writes `actor_role` straight
+  -- from `principal.role`, and config-service wraps the append in a try/catch,
+  -- so this list being short would not have failed loudly: it would have
+  -- SILENTLY DROPPED exactly the audit rows describing the most dangerous
+  -- actor in the system. Same reasoning and same precedent as the event_type
+  -- widening above — the file has been applied nowhere, so completing the list
+  -- beats shipping an ALTER for a table that never existed.
+  -- A test asserts this list equals Object.keys(ROLES) exactly.
   actor_role        text        check (actor_role is null or actor_role in
-                                       ('operator','client_owner','client_editor','client_viewer','voice_agent','system','import')),
+                                       ('operator','operator_executor','client_owner','client_editor','client_viewer','voice_agent','system','import')),
   source            text        check (source is null or source in ('ui','voice','api','import','operator')),
 
   occurred_at       timestamptz not null default now(),

@@ -91,6 +91,151 @@ describe("ratchet — the ACP1 migration remains unapplied", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════
+// THE VERIFIERS CANNOT EXPLODE ON AN ABSENT TABLE (P36)
+// ════════════════════════════════════════════════════════════════════
+//
+// Both of these were learned the expensive way, on the same milestone.
+//
+// 'public.x'::regclass RAISES 42P01 when x does not exist. A verifier that
+// dies rather than reporting ABSENT tells you nothing about the state you ran
+// it to discover — which is exactly what happened the first time verifier 20
+// was pasted into the SQL editor.
+//
+// And the obvious repair is worse than the problem: conrelid IN
+// (coalesce(to_regclass(...), 0::oid)) matches every DOMAIN constraint in the
+// database, because a domain constraint has conrelid = 0. A census written that
+// way returned information_schema's cardinal_number_domain_check as though it
+// belonged to platform_config_versions.
+//
+// `conrelid = to_regclass(...)` is the correct form: NULL equals nothing.
+
+describe("ratchet — committed verifiers degrade rather than erroring", () => {
+  const VERIFIERS = [
+    "supabase/sql/verification/19_acp1_preflight_readonly.sql",
+    "supabase/sql/verification/20_acp1_verify_readonly.sql",
+  ];
+  // Comments explain WHY these forms are wrong, so they must be stripped or the
+  // sweep catches the explanation rather than any executable SQL.
+  const sqlCode = (src) => src.replace(/^\s*--[^\n]*$/gm, "");
+  const CAST_FORM = /::regclass/;
+  // NOT [^)]* — to_regclass('public.x') carries its own parentheses, so a
+  // character class excluding ")" stops inside the call it is trying to span
+  // and the sweep matches nothing. Bounded any-character is the shape that
+  // actually catches the trap.
+  const COALESCE_TRAP = /coalesce\([\s\S]{0,80}to_regclass[\s\S]{0,80}0::oid/i;
+
+  it("uses to_regclass(), never a ::regclass cast", () => {
+    for (const f of VERIFIERS) {
+      assert.ok(!CAST_FORM.test(sqlCode(read(f))),
+        `${f} casts to regclass — that raises 42P01 when the relation is absent`);
+    }
+    // Non-vacuity: they DO look relations up, so the rule is about something.
+    assert.match(read(VERIFIERS[1]), /to_regclass\('public\.platform_config_events'\)/);
+  });
+
+  it("never matches domain constraints by coalescing a missing oid to zero", () => {
+    for (const f of VERIFIERS) {
+      const code = sqlCode(read(f));
+      if (COALESCE_TRAP.test(code)) {
+        assert.match(code, /conrelid <> 0/,
+          `${f} coalesces a missing oid to 0 without excluding conrelid = 0 — that matches every DOMAIN constraint`);
+      }
+      assert.ok(!COALESCE_TRAP.test(code),
+        `${f} uses the coalesce-to-zero shape; prefer conrelid = to_regclass(...)`);
+    }
+  });
+
+  it("would CATCH either mistake", () => {
+    const castForm = "where conrelid = 'public.platform_config_events'::regclass";
+    const coalesceForm = "where conrelid in (coalesce(to_regclass('public.x')::oid, 0::oid))";
+    assert.ok(CAST_FORM.test(castForm), "the cast sweep catches nothing");
+    assert.ok(COALESCE_TRAP.test(coalesceForm), "the coalesce sweep catches nothing");
+    assert.ok(!/conrelid <> 0/.test(coalesceForm), "the fixture is already guarded and proves nothing");
+  });
+
+  it("stays read-only", () => {
+    for (const f of VERIFIERS) {
+      assert.ok(!/^\s*(insert|update|delete|drop|alter|create|truncate|grant|begin|commit)\b/im.test(read(f)),
+        `${f} is not read-only`);
+    }
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// THE MIGRATION'S VOCABULARIES AGREE WITH THE APPLICATION'S (P36)
+// ════════════════════════════════════════════════════════════════════
+//
+// Written after a pre-apply audit found two of them stale. `operator_executor`
+// arrived in P24-P28 and reached neither the migration's actor_role CHECK nor
+// the fake's copy of it; the fake's event_type list was still the P17 thirteen
+// rather than the P24-P28 twenty-nine.
+//
+// Neither showed up, and the reason is worth stating: the fake AGREED with the
+// migration, so the contract suite was green while both disagreed with the
+// code. And config-service wraps its audit append in a try/catch, so on a real
+// database the effect would not have been a loud failure — it would have been
+// silently dropped audit rows, describing the most dangerous actor in the
+// system.
+//
+// So the fake now parses its rules out of the .sql, and this compares that one
+// source against the application. Agreeing with the migration is only half of
+// being right.
+
+describe("ratchet — ACP1's vocabularies match the code that writes them", () => {
+  const fake = require("./helpers/fake-postgres");
+  const { BLUEPRINT_STATUSES } = require("../src/platform/client-blueprint");
+  const { EVENT_TYPES } = require("../src/platform/config-audit");
+  const { ROLES } = require("../src/platform/config-access");
+  const sql = read(MIGRATION);
+
+  const same = (label, fromSql, fromCode) =>
+    assert.deepEqual([...fromSql].sort(), [...fromCode].sort(),
+      `${label}: the migration and the application disagree`);
+
+  it("status matches BLUEPRINT_STATUSES", () => {
+    same("status", fake.STATUSES, BLUEPRINT_STATUSES);
+  });
+
+  it("event_type matches config-audit's EVENT_TYPES", () => {
+    same("event_type", fake.EVENT_TYPES, EVENT_TYPES);
+    assert.equal(fake.EVENT_TYPES.length, 29, "the vocabulary changed size — read the diff before changing this number");
+  });
+
+  it("actor_role matches every role config-access declares", () => {
+    // The audit sink writes principal.role verbatim, so a role the CHECK does
+    // not list is a row Postgres refuses.
+    same("actor_role", fake.ACTOR_ROLES, Object.keys(ROLES));
+    assert.ok(fake.ACTOR_ROLES.includes("operator_executor"),
+      "operator_executor holds provisioning:execute — its audit rows are the ones that matter most");
+  });
+
+  it("source matches what the services actually record", () => {
+    same("source", fake.SOURCES, ["ui", "voice", "api", "import", "operator"]);
+  });
+
+  it("would CATCH a role the migration does not know about", () => {
+    // The bad fixture: the exact failure this ratchet was written for.
+    const stale = ["operator", "client_owner", "client_editor", "client_viewer", "voice_agent", "system", "import"];
+    assert.throws(
+      () => assert.deepEqual([...stale].sort(), [...Object.keys(ROLES)].sort()),
+      /operator_executor|Expected values/,
+      "the comparison would not have caught the drift it exists for",
+    );
+  });
+
+  it("the fake derives its rules from the migration rather than copying them", () => {
+    const helper = read("test/helpers/fake-postgres.js");
+    assert.match(helper, /vocabularyFor\("status"\)/);
+    assert.match(helper, /vocabularyFor\("actor_role"\)/);
+    // A hardcoded list beside the parser would be a fifth copy.
+    assert.ok(!/const ACTOR_ROLES = \[/.test(helper), "the fake holds its own copy of actor_role again");
+    assert.ok(!/const EVENT_TYPES = \[/.test(helper), "the fake holds its own copy of event_type again");
+    // And it fails loudly rather than silently returning [] if the SQL moves.
+    assert.match(helper, /throw new Error\(`fake-postgres: no CHECK vocabulary found/);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
 // A CLIENT CANNOT CHANGE THE PLATFORM'S COMPLIANCE VOCABULARY
 // ════════════════════════════════════════════════════════════════════
 
@@ -226,10 +371,37 @@ describe("ratchet — outbound AI disclosure cannot be disabled by any blueprint
 // ════════════════════════════════════════════════════════════════════
 
 describe("ratchet — the test database is in-process and unreachable", () => {
-  it("the fake imports nothing at all", () => {
+  it("the fake imports nothing that could reach a database", () => {
+    // This used to demand zero imports. P36 gave the fake two — node:fs and
+    // node:path — so it could parse its constraint vocabularies OUT of the
+    // migration instead of keeping a copy that went stale.
+    //
+    // The rule this ratchet actually protects is "the fake cannot open a
+    // connection", so it is now scoped to that rather than relaxed to nothing:
+    // an exact allowlist of two builtins that read files, and a refusal of
+    // everything else — no client, no transport, no relative import that could
+    // pull one in transitively.
+    const ALLOWED = ["node:fs", "node:path"];
     const source = read("test/helpers/fake-postgres.js");
     const imports = [...source.matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
-    assert.deepEqual(imports, [], `the fake must import nothing, found: ${imports.join(", ")}`);
+
+    for (const imported of imports) {
+      assert.ok(ALLOWED.includes(imported),
+        `the fake imports ${imported}. Only ${ALLOWED.join(" and ")} are permitted, and only to read the migration.`);
+    }
+    // Relative imports are how a builtin-only rule gets bypassed one file over.
+    assert.ok(!imports.some((i) => i.startsWith(".")), "the fake imports a local module, which may import anything");
+
+    // Non-vacuity: it DOES import, so the loop above is examining something.
+    assert.ok(imports.length > 0, "if the fake imports nothing this check proves nothing — restore the stricter rule");
+    assert.deepEqual([...new Set(imports)].sort(), ALLOWED);
+  });
+
+  it("would CATCH a database client added to the fake", () => {
+    const ALLOWED = ["node:fs", "node:path"];
+    for (const bad of ["@supabase/supabase-js", "pg", "postgres", "node:net", "node:https", "./real-db"]) {
+      assert.ok(!ALLOWED.includes(bad), `${bad} would slip past the allowlist`);
+    }
   });
 
   it("no test or platform module imports a real database client", () => {

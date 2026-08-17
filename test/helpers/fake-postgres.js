@@ -51,15 +51,40 @@ const ENFORCED_CONSTRAINTS = Object.freeze([
   "pce_append_only",
 ]);
 
-const STATUSES = ["draft", "validated", "approved", "active", "superseded"];
-const SOURCES = ["ui", "voice", "api", "import", "operator"];
-const EVENT_TYPES = [
-  "draft_created", "draft_updated", "validated", "validation_failed",
-  "approved", "approval_refused", "activated", "activation_refused",
-  "superseded", "restored", "voice_patch_proposed", "voice_patch_refused",
-  "previewed",
-];
-const ACTOR_ROLES = ["operator", "client_owner", "client_editor", "client_viewer", "voice_agent", "system", "import"];
+// ── THE VOCABULARIES COME FROM THE MIGRATION, NOT FROM A COPY ───────
+// They used to be four hardcoded lists here. Two of them went stale — the fake
+// still rejected the sixteen provisioning and execution event types P24-P28
+// added, and neither it nor the migration knew about the `operator_executor`
+// role — and because the fake and the migration agreed with each other, the
+// contract suite passed while both disagreed with the application.
+//
+// A stand-in whose rules are a COPY of the rules it stands in for is a
+// stand-in for something else. So they are parsed out of the .sql at load: one
+// source, and a drift test still compares that source against config-access.js
+// and config-audit.js, because agreeing with the migration is only half of
+// being right.
+const fs = require("node:fs");
+const path = require("node:path");
+
+const MIGRATION_SQL = fs.readFileSync(
+  path.join(__dirname, "..", "..", "supabase", "sql", "acp1_create_client_configuration.sql"),
+  "utf8",
+);
+
+/** The quoted values of the `check (... in (...))` attached to one column. */
+function vocabularyFor(column) {
+  const declaration = new RegExp(`^\\s{2}${column}\\s{2,}\\w+[\\s\\S]*?check\\s*\\(([\\s\\S]*?)\\)\\s*\\)`, "m");
+  const m = MIGRATION_SQL.match(declaration);
+  if (!m) throw new Error(`fake-postgres: no CHECK vocabulary found for ${column} in the ACP1 migration`);
+  const values = [...m[1].replace(/--[^\n]*/g, "").matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  if (values.length === 0) throw new Error(`fake-postgres: empty vocabulary for ${column}`);
+  return values;
+}
+
+const STATUSES = vocabularyFor("status");
+const SOURCES = vocabularyFor("source");
+const EVENT_TYPES = vocabularyFor("event_type");
+const ACTOR_ROLES = vocabularyFor("actor_role");
 const FROZEN = ["approved", "active", "superseded"];
 
 class PgError extends Error {

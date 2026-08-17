@@ -5,6 +5,23 @@
 --
 -- Nothing here writes.
 --
+-- ── WHY to_regclass() AND NOT ::regclass ────────────────────────────────────
+-- P36. Every catalogue lookup below uses to_regclass('public.x'), which returns
+-- NULL for a relation that does not exist. The cast form — 'public.x'::regclass
+-- — RAISES 42P01 instead, and a verifier that explodes when the thing it is
+-- verifying is absent tells you nothing about why. That is exactly how this
+-- file was first run: before the tables existed, against a database where the
+-- honest answer was "none of it is here".
+--
+-- `conrelid = to_regclass(...)` matches nothing when the table is absent,
+-- because NULL equals nothing. Do NOT "improve" this to
+-- `conrelid IN (coalesce(to_regclass(...), 0::oid))`: a DOMAIN constraint has
+-- conrelid = 0, so that shape silently matches every domain CHECK in the
+-- database. It was written that way once and returned
+-- information_schema's cardinal_number_domain_check as though it belonged to
+-- platform_config_versions. If you ever need the IN form, it also needs
+-- `and conrelid <> 0`.
+--
 -- LPM4 TRANSPORT LESSON, again: raw material over computed verdicts. Each query
 -- is small enough to paste alone and produces output a person can check by
 -- eye. The expectation is written beside each one.
@@ -56,14 +73,14 @@ select indexdef
 --    what makes cross-client lineage unrepresentable.
 select conname, pg_get_constraintdef(oid) as definition, convalidated
   from pg_constraint
- where conrelid = 'public.platform_config_versions'::regclass
+ where conrelid = to_regclass('public.platform_config_versions')
    and contype = 'f'
  order by conname;
 
 -- 6. Check constraints.
 select conname, pg_get_constraintdef(oid) as definition
   from pg_constraint
- where conrelid = 'public.platform_config_versions'::regclass
+ where conrelid = to_regclass('public.platform_config_versions')
    and contype = 'c'
  order by conname;
 
@@ -122,5 +139,56 @@ select client_id, config_version
 --     FKs depend on. Expect one row.
 select conname, pg_get_constraintdef(oid) as definition
   from pg_constraint
- where conrelid = 'public.platform_config_versions'::regclass
+ where conrelid = to_regclass('public.platform_config_versions')
    and contype = 'u';
+
+-- ── ADDED IN P36 ────────────────────────────────────────────────────────────
+-- Query 6 covers platform_config_VERSIONS only, so the two vocabularies most
+-- likely to drift were verified nowhere: event_type and actor_role both live on
+-- platform_config_EVENTS. Both have been widened since ACP1 was first written —
+-- event_type from 13 to 29 in P24-P28, actor_role from 7 to 8 in P36 — and a
+-- database carrying the older list does not reject loudly. config-service wraps
+-- its audit append in a try/catch, so a stale CHECK produces SILENTLY MISSING
+-- audit rows, which is the failure nobody notices.
+
+-- 15. The event vocabulary. Read the list.
+--     EXPECT 29 values, including 'execution_requested' and 'manual_review_required'.
+--     13 values means this database predates P24-P28 and is STALE.
+select conname, pg_get_constraintdef(oid) as definition
+  from pg_constraint
+ where conrelid = to_regclass('public.platform_config_events')
+   and contype = 'c'
+ order by conname;
+
+-- 16. The same question, answered as a number rather than by counting quotes.
+--     EXPECT event_type = 29 and actor_role = 8.
+select
+  (select cardinality(regexp_split_to_array(pg_get_constraintdef(oid), ''','''))
+     from pg_constraint
+    where conrelid = to_regclass('public.platform_config_events')
+      and contype = 'c' and pg_get_constraintdef(oid) like '%event_type%') as event_type_values,
+  (select cardinality(regexp_split_to_array(pg_get_constraintdef(oid), ''','''))
+     from pg_constraint
+    where conrelid = to_regclass('public.platform_config_events')
+      and contype = 'c' and pg_get_constraintdef(oid) like '%actor_role%') as actor_role_values;
+
+-- 17. Does this database know the roles and events the application will write?
+--     EXPECT t on both. `f` on either means the application's audit writes will
+--     be refused by the database and swallowed by the service.
+select
+  pg_get_constraintdef(oid) like '%operator_executor%' as knows_operator_executor
+  from pg_constraint
+ where conrelid = to_regclass('public.platform_config_events')
+   and contype = 'c' and pg_get_constraintdef(oid) like '%actor_role%';
+
+select
+  pg_get_constraintdef(oid) like '%manual_review_required%' as knows_execution_events
+  from pg_constraint
+ where conrelid = to_regclass('public.platform_config_events')
+   and contype = 'c' and pg_get_constraintdef(oid) like '%event_type%';
+
+-- 18. RLS on the EVENTS table specifically, and its policy count.
+--     EXPECT rowsecurity = t, and zero policies.
+select relname, relrowsecurity
+  from pg_class
+ where oid = to_regclass('public.platform_config_events');
