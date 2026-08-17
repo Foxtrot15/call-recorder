@@ -117,23 +117,60 @@ function blankItem(repeatable) {
 }
 
 /**
- * Turn the flat map a form submits back into an ordered array.
+ * The hidden field that says WHICH existing item a submitted row is.
  *
- * The browser posts `{ "services[0].serviceId": "…", "services[0].name": "…" }`
- * because that is what the name attributes say. Nothing was reading it: the
- * previous applySection() walked only the section's non-repeatable fields, so
- * every add, edit, removal and reorder of a service was accepted by the UI,
- * posted to the server, and silently dropped. A save appeared to succeed and
- * changed nothing.
- *
- * Indexes are treated as ORDER, not identity — they are compacted, so a
- * payload skipping index 2 yields a contiguous list rather than a hole. The
- * visual order is the submitted order, which is the whole contract for a list
- * the assistant reads out in sequence.
+ * Position cannot say it — the whole point of the list is that rows move — and
+ * the visible id field cannot say it either, because that is the thing being
+ * protected. So each rendered row carries its original identity, and the
+ * server decides what that identity means. See parseItems.
  */
-function parseItems(values, repeatable) {
+const KEY_FIELD = "__key";
+
+/**
+ * Turn the flat map a form submits back into an ordered array, merged against
+ * what is already stored.
+ *
+ * ── WHY THIS TAKES `existing` ───────────────────────────────────────
+ * Two real failures on DEV, from one browser session, neither of them the
+ * person's fault:
+ *
+ *   1. Two services came back with serviceId "Climb fence" and "Pick lock" —
+ *      strings that appear nowhere in this repo and nowhere else in the
+ *      database. The browser put them in the id inputs. A serviceId is
+ *      identity: `callHandling.collectByService` and
+ *      `escalation.eligibleServices` refer to services by it, and both
+ *      references broke the moment it changed. Identity must not be something
+ *      a text input can quietly replace.
+ *
+ *   2. Three services came back with `enabled` missing. An unchecked radio
+ *      group is not submitted at all — that is correct HTML, not a bug — so
+ *      the key was absent, and absent was being written as "no value".
+ *
+ * Hence the rule, which is just HTML's own semantics taken seriously:
+ *
+ *   ABSENT  means the browser said nothing. Keep what is stored.
+ *   PRESENT means a person answered — including `null`, which is an empty box
+ *           and a real instruction to clear.
+ *
+ * And identity:
+ *
+ *   a row whose __key matches a stored item IS that item. Its idField comes
+ *   from the STORE and the submitted one is ignored, so the id cannot be
+ *   edited, autofilled, or forged into another service's.
+ *
+ *   a row with no __key, or one naming an item that does not exist or has
+ *   already been claimed, is a NEW item. Its id must be given explicitly.
+ *   Nothing can be stolen this way: a key only ever matches a stored row or
+ *   is ignored.
+ *
+ * Indexes remain ORDER, never identity — they are compacted, so a payload
+ * skipping index 2 yields a contiguous list. The visual order is the submitted
+ * order, which is the contract for a list the assistant reads out in sequence.
+ */
+function parseItems(values, repeatable, existing) {
   if (!values || !repeatable) return [];
   const path = repeatable.path;
+  const idField = repeatable.idField;
   const known = new Set((repeatable.fields || []).map((f) => f.name));
   const prefix = `${path}[`;
   const byIndex = new Map();
@@ -145,17 +182,65 @@ function parseItems(values, repeatable) {
     const [, rawIndex, field] = m;
     // A field the schema does not declare is dropped, for the same reason
     // applySection drops locked fields: a browser posting it is not a decision
-    // a person made.
-    if (!known.has(field)) continue;
+    // a person made. KEY_FIELD is the one exception — it is ours, not the
+    // schema's, and it is consumed here rather than stored.
+    if (field !== KEY_FIELD && !known.has(field)) continue;
     const index = Number(rawIndex);
     if (!byIndex.has(index)) byIndex.set(index, {});
     byIndex.get(index)[field] = values[key];
   }
 
+  const stored = Array.isArray(existing) ? existing : [];
+  const byId = new Map();
+  if (idField) {
+    for (const item of stored) {
+      if (item && typeof item[idField] === "string" && item[idField]) byId.set(item[idField], item);
+    }
+  }
+  const claimed = new Set();
+
   return [...byIndex.keys()]
     .sort((a, b) => a - b)
     .map((i) => byIndex.get(i))
-    .filter((item) => Object.keys(item).length > 0);
+    .filter((row) => Object.keys(row).some((k) => k !== KEY_FIELD))
+    .map((row) => {
+      const key = typeof row[KEY_FIELD] === "string" ? row[KEY_FIELD] : "";
+      const match = key && !claimed.has(key) ? byId.get(key) : undefined;
+      if (match) claimed.add(key);
+
+      const out = match ? { ...match } : {};
+      for (const field of known) {
+        if (match && field === idField) continue; // identity is not editable
+        if (!Object.prototype.hasOwnProperty.call(row, field)) continue; // absent: keep stored
+
+        // An empty box that was never filled in is not an edit. Without this,
+        // saving a service without touching it adds `description: null` and
+        // three empty arrays, and the review screen shows a person seven
+        // changes they did not make — which teaches them to stop reading it.
+        //
+        // Clearing still works: the stored item HAS the key, so this does not
+        // apply and the emptied value lands.
+        const emptied = row[field] === null || (Array.isArray(row[field]) && row[field].length === 0);
+        if (emptied && !Object.prototype.hasOwnProperty.call(out, field)) continue;
+
+        out[field] = row[field];
+      }
+
+      if (match) {
+        out[idField] = match[idField];
+      } else if (idField && byId.has(out[idField])) {
+        // An unmatched row asking for an id that already belongs to a stored
+        // service. The row it claims to be has an owner — this one is not it.
+        //
+        // Blanked rather than deduplicated silently, because two services with
+        // one id is a corrupt configuration and quietly picking a winner hides
+        // that somebody was refused. Validation then says "required" and names
+        // the row, which is a person's problem to resolve rather than a
+        // parser's to guess at.
+        out[idField] = null;
+      }
+      return out;
+    });
 }
 
 // ── operations, as an ordering ──────────────────────────────────────
@@ -201,7 +286,7 @@ function planMove(count, index, delta) {
 }
 
 module.exports = {
-  INDEXED_ATTRIBUTES, ID_PREFIX,
+  INDEXED_ATTRIBUTES, ID_PREFIX, KEY_FIELD,
   idForName, itemNameFor, escapeForId, reindexToken,
   blankItem, parseItems,
   planAdd, planRemove, planMove,

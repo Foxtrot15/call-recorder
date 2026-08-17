@@ -335,9 +335,46 @@
     }
   }
 
+  /**
+   * Run a mutation that renames controls, without any radio losing its answer.
+   *
+   * Renaming a checked radio unchecks every other radio in the group it joins.
+   * That is HTML working as specified, not a browser quirk — and it bites here
+   * twice, because names carry the row index:
+   *
+   *   - reordering restamps rows in order, so two rows briefly share a name
+   *     and the one waiting its turn is silently unchecked;
+   *   - a new row arrives from the template still named index 0, so appending
+   *     it unchecks row 0 before it is stamped.
+   *
+   * The victim is never the row being stamped, so this cannot be done per row.
+   * It is also never re-checked afterwards, and an unchecked radio group is
+   * not submitted AT ALL — so the value reaches the server as absent, and
+   * three services on DEV came back with `enabled` missing after a reorder
+   * nobody thought was risky.
+   *
+   * Checkedness is therefore captured across the WHOLE list before the
+   * mutation and restored after it. What a person answered is not something a
+   * reindex is allowed to have an opinion about.
+   */
+  function preservingAnswers(list, mutate) {
+    var boxes = list.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+    var was = [];
+    var i;
+    for (i = 0; i < boxes.length; i += 1) was.push([boxes[i], boxes[i].checked]);
+
+    mutate();
+
+    for (i = 0; i < was.length; i += 1) {
+      if (was[i][0].checked !== was[i][1]) was[i][0].checked = was[i][1];
+    }
+  }
+
   function reindex(list, path) {
-    var rows = rowsOf(list);
-    for (var i = 0; i < rows.length; i += 1) stampIndex(rows[i], path, i);
+    preservingAnswers(list, function () {
+      var rows = rowsOf(list);
+      for (var i = 0; i < rows.length; i += 1) stampIndex(rows[i], path, i);
+    });
   }
 
   /** Reorder the DOM to match a plan's `order`, then restamp every position. */
@@ -404,8 +441,13 @@
     var empty = list.querySelector(".items__empty");
     if (empty) empty.parentNode.removeChild(empty);
 
-    list.appendChild(row);
-    stampIndex(row, path, rowsOf(list).length - 1);
+    // The template's controls are still named index 0. Appending them would
+    // unseat row 0's radios, so the insert and the restamp happen together
+    // under one preservation.
+    preservingAnswers(list, function () {
+      list.appendChild(row);
+      stampIndex(row, path, rowsOf(list).length - 1);
+    });
 
     var first = row.querySelector("input, select, textarea");
     if (first) first.focus();

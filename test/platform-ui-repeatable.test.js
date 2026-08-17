@@ -23,10 +23,19 @@ const S = require("../src/views/platform-shell");
 
 const SERVICES = F.sectionFor("services").repeatable;
 
-/** The flat map the browser posts, for a list of items in visual order. */
+/**
+ * The flat map the browser posts, for a list of items in visual order.
+ *
+ * Includes the hidden identity field every rendered row carries. Omitting it
+ * was how these tests missed P36 bug #2 — a payload built by hand is a payload
+ * that agrees with whatever the parser happens to do. The tests that render
+ * real markup and submit it under real HTML rules live in
+ * platform-ui-repeatable-save.test.js.
+ */
 const asPayload = (path, items) => {
   const out = {};
   items.forEach((item, i) => {
+    out[`${path}[${i}].${R.KEY_FIELD}`] = item.serviceId || item.ruleId || "";
     for (const [k, v] of Object.entries(item)) out[`${path}[${i}].${k}`] = v;
   });
   return out;

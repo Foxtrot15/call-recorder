@@ -174,8 +174,33 @@ ${model.events.length ? S.card("Audit history", S.table({
 
 /** One repeatable item — a service, an urgency rule, an approved fact. */
 function renderItem(repeatable, item, index, { blank = false } = {}) {
-  const inner = repeatable.fields.map((f) =>
-    S.renderField({ ...f, name: R.itemNameFor(repeatable.path, index, f.name) }, item ? item[f.name] : undefined)).join("");
+  // The row's identity, as the server knows it. Empty for a new row.
+  //
+  // A hidden input, deliberately: it is submitted (unlike a disabled control),
+  // it is not autofillable, and it is not something a person can edit by
+  // accident. The server treats it as a claim to be checked against what is
+  // stored, never as an instruction — see parseItems.
+  const storedId = !blank && item && typeof item[repeatable.idField] === "string"
+    ? item[repeatable.idField] : "";
+  const keyName = R.itemNameFor(repeatable.path, index, R.KEY_FIELD);
+  const keyInput = `<input type="hidden" name="${escapeAttr(keyName)}" value="${escapeAttr(storedId)}">`;
+
+  const inner = repeatable.fields.map((f) => {
+    // An existing item's id is identity, not a value. It is shown, because a
+    // person needs to see it, and it cannot be typed over — two services on
+    // DEV had their ids replaced by browser-suggested text the founder never
+    // entered, which broke every callHandling reference to them.
+    const immutable = Boolean(storedId) && f.name === repeatable.idField;
+    return S.renderField({
+      ...f,
+      name: R.itemNameFor(repeatable.path, index, f.name),
+      readonly: immutable,
+      autocomplete: "off",
+      hint: immutable
+        ? "Identity. Other parts of the configuration refer to this service by it, so it cannot be changed here."
+        : f.hint,
+    }, item ? item[f.name] : undefined);
+  }).join("");
 
   // A blank row says what it is rather than claiming a position, because the
   // template is stamped in at whatever index the list has reached and a title
@@ -185,6 +210,7 @@ function renderItem(repeatable, item, index, { blank = false } = {}) {
     : (item && (item.name || item.label || item.statement || item.when || item[repeatable.idField])) || `${repeatable.itemNoun} ${index + 1}`;
 
   return `<li class="item" data-index="${escapeAttr(String(index))}">
+  ${keyInput}
   <div class="item__head">
     <h4 class="item__title">${escapeHtml(String(label))}</h4>
     <div class="item__controls">

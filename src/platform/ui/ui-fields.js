@@ -351,7 +351,7 @@ function applySection(blueprint, key, values = {}) {
     if (!r) continue;
     const mentioned = Object.keys(values).some((k) => k.startsWith(`${r.path}[`));
     if (!mentioned) continue;
-    out = setPath(out, r.path, R.parseItems(values, r));
+    out = setPath(out, r.path, R.parseItems(values, r, getPath(blueprint, r.path)));
   }
 
   if (key === "hours") {

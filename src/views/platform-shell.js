@@ -161,9 +161,14 @@ function renderField(field, value) {
   }
 
   const type = field.type === "number" ? "number" : field.type === "tel" ? "tel" : field.type === "url" ? "url" : "text";
+  // readonly, never disabled. A disabled control is NOT submitted, so using it
+  // to protect a value is how the value gets erased on the next save; readonly
+  // is submitted, is not editable, and is not autofilled.
+  const ro = field.readonly ? ' readonly aria-readonly="true"' : "";
+  const auto = field.autocomplete ? ` autocomplete="${escapeAttr(field.autocomplete)}"` : "";
   return wrap(`<label for="${escapeAttr(d.id)}">${escapeHtml(field.label)}${d.req}</label>
   ${d.hint}
-  <input type="${escapeAttr(type)}" id="${escapeAttr(d.id)}" name="${escapeAttr(field.name)}" value="${escapeAttr(value ?? "")}"${field.required ? " required" : ""}${d.describedBy}>`);
+  <input type="${escapeAttr(type)}" id="${escapeAttr(d.id)}" name="${escapeAttr(field.name)}" value="${escapeAttr(value ?? "")}"${ro}${auto}${field.required ? " required" : ""}${d.describedBy}>`);
 }
 
 // ── STRUCTURE ───────────────────────────────────────────────────────
