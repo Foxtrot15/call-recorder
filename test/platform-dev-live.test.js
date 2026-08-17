@@ -28,6 +28,9 @@
 
 const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const H = require("./helpers/dev-live-harness");
 const { createPrincipal, executionPrincipal, voicePrincipal } = require("../src/platform/config-access");
@@ -61,6 +64,7 @@ let db = null;
 
 before(async () => {
   if (SKIP) return;
+  H.announceLiveRun(CID);
   LIVE = await H.buildLivePlatform();
   assert.equal(LIVE.ok, true, `the live binding refused: ${JSON.stringify(LIVE.binding)}`);
   db = LIVE.db;
@@ -838,11 +842,134 @@ describe("P36 live suite — it is opt-in, and says so", () => {
     // This test always runs, so a skipped suite is never silent.
     if (SKIP) {
       assert.match(SKIP, /skipped/);
-      console.log(`\n  ${SKIP}\n  Set PLATFORM_DEV_LIVE=true and PLATFORM_DEV_ENV_FILE=.env.platform-dev to run it.\n`);
+      // Both gates must be nameable from the skip message, so somebody who
+      // wants to run it is told exactly what to set and what it costs.
+      console.log(
+        `\n  ${SKIP}\n` +
+        `  To run it: PLATFORM_DEV_LIVE=true PLATFORM_DEV_ACK_PERMANENT_HISTORY=true` +
+        ` PLATFORM_DEV_ENV_FILE=.env.platform-dev\n` +
+        `  The second flag is the one that costs something: what it writes cannot be deleted.\n`);
     } else {
       assert.equal(AVAILABLE.available, true);
       assert.equal(AVAILABLE.fixtureSlug, CID);
     }
+  });
+
+  it("refuses to run on opt-in alone — permanence must be acknowledged separately", () => {
+    // The gate under test, exercised directly rather than through process.env,
+    // because the whole point is that it holds for an operator who HAS opted in.
+    const saved = { ...process.env };
+    try {
+      process.env.SUPABASE_URL = `https://${DEV_PROJECT_REF}.supabase.co`;
+      process.env.SUPABASE_SERVICE_KEY = "not-a-real-key-and-never-sent-anywhere";
+      process.env.PLATFORM_DEV_LIVE = "true";
+
+      delete process.env.PLATFORM_DEV_ACK_PERMANENT_HISTORY;
+      const unacknowledged = H.liveAvailable();
+      assert.equal(unacknowledged.available, false, "opting in must not be enough on its own");
+      assert.match(unacknowledged.why, /PLATFORM_DEV_ACK_PERMANENT_HISTORY/);
+      assert.match(unacknowledged.why, /cannot be deleted/i, "the refusal must say WHY, not just name a flag");
+
+      // Near-misses are refusals too. "1", "yes" and "TRUE" are how somebody
+      // half-remembers a flag, and this one is not a thing to half-remember.
+      for (const nearly of ["1", "yes", "TRUE", "True", " true", "true "]) {
+        process.env.PLATFORM_DEV_ACK_PERMANENT_HISTORY = nearly;
+        assert.equal(H.liveAvailable().available, false, `"${nearly}" must not be an acknowledgement`);
+      }
+
+      process.env.PLATFORM_DEV_ACK_PERMANENT_HISTORY = "true";
+      assert.equal(H.liveAvailable().available, true, "the exact string must open the gate");
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  });
+
+  it("cannot be acknowledged by a file — only by the command that runs it", () => {
+    // The regression this pins actually happened, and it is why the second
+    // gate exists at all.
+    //
+    // ENV_FILE defaults to ".env.platform-dev" even when PLATFORM_DEV_ENV_FILE
+    // is unset. A developer wrote PLATFORM_DEV_LIVE=true into that gitignored
+    // file during Phase 4B, and from then on a plain `npm test` ran the full
+    // live contract against DEV and left ~25 undeletable versions behind each
+    // time. Nobody typed anything. The suite still described itself as opt-in.
+    //
+    // So the acknowledgement must be unreachable from the env file. If someone
+    // later "helpfully" adds `|| fromFile.PLATFORM_DEV_ACK_PERMANENT_HISTORY`
+    // for symmetry with the line above it, this fails.
+    const harnessSource = fs.readFileSync(
+      path.join(__dirname, "helpers", "dev-live-harness.js"),
+      "utf8",
+    );
+    const line = harnessSource
+      .split("\n")
+      .find((l) => l.includes("acknowledged:"));
+    assert.ok(line, "liveEnv must still resolve an `acknowledged` field");
+    assert.ok(
+      !/fromFile/.test(line),
+      "the permanence acknowledgement must never be readable from the env file",
+    );
+    assert.match(line, /process\.env\.PLATFORM_DEV_ACK_PERMANENT_HISTORY/);
+
+    // And prove it behaves that way, not just that it reads that way: an env
+    // file saying "true" must still leave the suite refusing to run.
+    const saved = { ...process.env };
+    try {
+      process.env.SUPABASE_URL = `https://${DEV_PROJECT_REF}.supabase.co`;
+      process.env.SUPABASE_SERVICE_KEY = "not-a-real-key-and-never-sent-anywhere";
+      process.env.PLATFORM_DEV_LIVE = "true";
+      delete process.env.PLATFORM_DEV_ACK_PERMANENT_HISTORY;
+
+      const tmp = path.join(
+        os.tmpdir(),
+        `aida-ack-from-file-${process.pid}.env`,
+      );
+      fs.writeFileSync(
+        tmp,
+        [
+          `SUPABASE_URL=https://${DEV_PROJECT_REF}.supabase.co`,
+          "SUPABASE_SERVICE_KEY=not-a-real-key-and-never-sent-anywhere",
+          "PLATFORM_DEV_LIVE=true",
+          "PLATFORM_DEV_ACK_PERMANENT_HISTORY=true",
+        ].join("\n"),
+      );
+      try {
+        process.env.PLATFORM_DEV_ENV_FILE = tmp;
+        const verdict = H.liveAvailable();
+        assert.equal(
+          verdict.available,
+          false,
+          "a file that acknowledges permanence must not be able to open the gate",
+        );
+        assert.match(verdict.why, /PLATFORM_DEV_ACK_PERMANENT_HISTORY/);
+      } finally {
+        fs.unlinkSync(tmp);
+      }
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  });
+
+  it("announces the target tenant and the permanence before it writes", () => {
+    const said = [];
+    const real = console.log;
+    console.log = (line) => said.push(String(line));
+    try {
+      H.announceLiveRun(CID);
+    } finally {
+      console.log = real;
+    }
+    const banner = said.join("\n");
+    assert.match(banner, new RegExp(CID), "it must name the tenant it is about to write to");
+    assert.match(banner, new RegExp(DEV_PROJECT_REF), "it must name the project");
+    assert.match(banner, /PERMANENT/);
+    assert.match(banner, /cannot be undone/i);
+    assert.ok(
+      !banner.includes(H.BROWSER_FIXTURE.slug) || CID === H.BROWSER_FIXTURE.slug,
+      "the banner must not imply it writes to the browser fixture",
+    );
   });
 
   it("names only the DEV project, and never a production one", () => {

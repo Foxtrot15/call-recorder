@@ -81,6 +81,20 @@ function liveEnv() {
   const fromFile = readEnvFile(path.resolve(ENV_FILE));
   return {
     live: (process.env.PLATFORM_DEV_LIVE || fromFile.PLATFORM_DEV_LIVE) === "true",
+    // DELIBERATELY process.env ONLY — the env file is not consulted, and
+    // fromFile is not part of this expression.
+    //
+    // This is the whole point of the second gate, and it exists because the
+    // first one failed exactly this way. ENV_FILE defaults to
+    // ".env.platform-dev" whether or not PLATFORM_DEV_ENV_FILE is set, so a
+    // developer who once wrote PLATFORM_DEV_LIVE=true into that gitignored
+    // file turned every subsequent plain `npm test` into a live run that wrote
+    // permanent rows to DEV. The suite reported itself as opt-in the entire
+    // time, and it was — opted into by a file, months earlier, silently.
+    //
+    // So an acknowledgement that a file can give is not an acknowledgement.
+    // This one has to be typed on the command line that runs the suite.
+    acknowledged: process.env.PLATFORM_DEV_ACK_PERMANENT_HISTORY === "true",
     url: process.env.SUPABASE_URL || fromFile.SUPABASE_URL || "",
     hasKey: Boolean(process.env.SUPABASE_SERVICE_KEY || fromFile.SUPABASE_SERVICE_KEY),
     fixtureSlug: process.env.PLATFORM_DEV_FIXTURE_SLUG || fromFile.PLATFORM_DEV_FIXTURE_SLUG || FIXTURE.slug,
@@ -88,10 +102,22 @@ function liveEnv() {
 }
 
 /**
- * Three independent conditions, and the reason for each is different:
+ * FOUR independent conditions, and the reason for each is different:
  *   - opted in, so a plain `npm test` never writes to a database
  *   - a key resolves, so the suite fails loudly rather than half-running
  *   - the ref is DEV, so it cannot possibly be production
+ *   - the operator has ACKNOWLEDGED that what this writes is PERMANENT
+ *
+ * The fourth condition arrived after looking at what the first three runs left
+ * behind. ACP1's pcv_refuse_delete_trg refuses to delete a configuration
+ * version — deliberately, because history that can be deleted is not history —
+ * so every run of this suite adds rows to DEV that nobody can ever remove.
+ *
+ * That is not a bug and the database must not change to accommodate it. What
+ * was missing was a person knowing it before they typed the command. So
+ * acknowledging it is a separate act from opting in: "run the live suite" and
+ * "I understand these rows are permanent" are different sentences, and a flag
+ * set in a .env file months ago is not somebody saying the second one.
  */
 function liveAvailable() {
   const env = liveEnv();
@@ -99,7 +125,35 @@ function liveAvailable() {
   if (!env.hasKey) return { available: false, why: `no service key resolved from ${ENV_FILE} or the environment` };
   const ref = (env.url.match(/^https:\/\/([a-z0-9]+)\.supabase\.co\/?$/) || [])[1];
   if (ref !== DEV_PROJECT_REF) return { available: false, why: `SUPABASE_URL names "${ref}", not DEV (${DEV_PROJECT_REF})` };
+  if (!env.acknowledged) {
+    return {
+      available: false,
+      why: 'PLATFORM_DEV_ACK_PERMANENT_HISTORY is not "true" — this suite writes configuration versions to DEV that CANNOT be deleted',
+    };
+  }
   return { available: true, why: null, fixtureSlug: env.fixtureSlug };
+}
+
+/**
+ * Printed before the first write, every single run — because a gate somebody
+ * passed once in a .env file is not the same as being told, now, what is about
+ * to happen and to which tenant.
+ */
+function announceLiveRun(fixtureSlug) {
+  const row = (label, value) => `  |  ${label.padEnd(9)} ${String(value).padEnd(54)}|`;
+  console.log([
+    "",
+    "  +- LIVE DEV RUN -----------------------------------------------------+",
+    row("project", DEV_PROJECT_REF),
+    row("writing", fixtureSlug),
+    row("and", PEER.slug),
+    "  |                                                                    |",
+    "  |  Rows written here are PERMANENT. ACP1 refuses to delete a         |",
+    "  |  configuration version, so this run's history cannot be undone.    |",
+    "  |  It never writes to the browser fixture, dev-client, or prod.      |",
+    "  +--------------------------------------------------------------------+",
+    "",
+  ].join("\n"));
 }
 
 function clock(startMs = Date.now()) {
@@ -190,5 +244,5 @@ async function fixtureRowCounts(db, slug = FIXTURE.slug) {
 
 module.exports = {
   liveAvailable, liveEnv, buildLivePlatform, cleanupTenant, ensureFixtureClient, fixtureRowCounts,
-  clock, FIXTURE, BROWSER_FIXTURE, PEER, ENV_FILE,
+  clock, FIXTURE, BROWSER_FIXTURE, PEER, ENV_FILE, announceLiveRun,
 };

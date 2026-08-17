@@ -1411,15 +1411,45 @@ refusal at startup rather than an error on somebody's first save.
 ### The live contract
 
 `test/platform-dev-live.test.js` runs the same contract against the real
-database — **42 tests**, not a watered-down smoke. It **skips by default**:
-three independent conditions must hold (opted in with the exact string `true`,
-a key resolves, and the project ref is DEV), so `npm test` never touches a
-database, needs a credential, or writes a row.
+database — **42 tests**, not a watered-down smoke. **Four** independent
+conditions must hold: opted in with the exact string `true`, a key resolves,
+the project ref is DEV, and the permanence of what it writes is acknowledged.
 
 ```bash
-PLATFORM_DEV_LIVE=true PLATFORM_DEV_ENV_FILE=.env.platform-dev \
+PLATFORM_DEV_LIVE=true PLATFORM_DEV_ACK_PERMANENT_HISTORY=true \
+PLATFORM_DEV_ENV_FILE=.env.platform-dev \
   node --test test/platform-dev-live.test.js
 ```
+
+#### The fourth condition, and why "opt-in" was not one
+
+This section previously said the suite *"skips by default, so `npm test` never
+touches a database, needs a credential, or writes a row."* **That was wrong,
+and it was wrong here in this worktree.**
+
+`ENV_FILE` defaults to `.env.platform-dev` whether or not
+`PLATFORM_DEV_ENV_FILE` is set. That gitignored file was created in Phase 4B
+with `PLATFORM_DEV_LIVE=true` in it. From that moment a plain `npm test` ran
+the full live contract against DEV and left roughly 25 undeletable
+configuration versions and 95 events behind **every time**. Nobody typed
+anything, no warning was printed, and the suite went on describing itself as
+opt-in — because it was. It had been opted into once, by a file, silently.
+
+Three things follow, and they are the actual policy:
+
+- **A gate a file can open is not a gate.**
+  `PLATFORM_DEV_ACK_PERMANENT_HISTORY` is read from `process.env` **only**; the
+  env file is not consulted for it, and a test asserts the source line contains
+  no `fromFile` and that a file saying `true` still leaves the suite refusing.
+  It has to be typed on the command that runs the suite.
+- **The database does not change.** `pcv_refuse_delete_trg` refuses to delete a
+  configuration version deliberately — history that can be deleted is not
+  history. The debris is the schema working. What was missing was consent.
+- **Every run announces itself** before the first write: the project ref, the
+  tenant it is about to write to, and the sentence that the rows are permanent.
+
+To start clean you pick an unused **lower_snake** slug and seed again. The old
+tenant stays exactly where it is.
 
 What it proves on real Postgres: create/read/update, the **NULL CAS collision**
 (a second editor still holding "never edited" is refused), stale-token refusal,
