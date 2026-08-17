@@ -6,6 +6,10 @@ node_modules/
 .env
 .env.*
 !.env.example
+# P36 template only. It carries no secret; the real .env.platform-dev stays
+# ignored by the .env.* rule above. A trailing comment on a pattern line is
+# PART OF THE PATTERN in gitignore, so this explanation sits on its own line.
+!.env.platform-dev.example
 
 # Logs
 *.log

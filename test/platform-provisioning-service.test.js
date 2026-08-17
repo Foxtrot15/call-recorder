@@ -497,10 +497,45 @@ describe("store binding — postgres mode never silently falls back to memory", 
     assert.equal(r.code, BINDING_CODES.UNKNOWN_MODE);
   });
 
-  it("the application still uses the safe default, because ACP1 is unapplied", () => {
+  it("the application chooses its store explicitly, and memory is still the default", () => {
+    // Rewritten in P36. ACP1 was applied to DEV on 2026-08-17, so this can no
+    // longer say "postgres must not be bound". What must remain true is
+    // stronger and outlives the migration: the router binds NEITHER store
+    // itself, the choice is an explicit env value, and memory is what an
+    // unconfigured deployment gets.
     const router = fs.readFileSync(path.join(ROOT, "src", "routes", "platform-config.js"), "utf8");
-    assert.match(router, /createInMemoryBlueprintStore\(\)/);
-    assert.ok(!/createPostgresBlueprintStore/.test(router), "the router must not bind postgres while ACP1 is unapplied");
+    assert.ok(!/createInMemoryBlueprintStore|createPostgresBlueprintStore/.test(router),
+      "the router constructs a store itself — the binding must be the only place that does");
+    assert.match(router, /platformStoreGate\(\)/, "the router does not go through the store gate");
+
+    const { platformStoreMode } = require("../src/routes/platform-store");
+    assert.equal(platformStoreMode({}), "memory", "an unconfigured deployment must get memory");
+    assert.equal(platformStoreMode({ PLATFORM_CONFIG_STORE: "postgres" }), "postgres");
+    // Exact strings only, and NODE_ENV is deliberately not consulted:
+    // "production means postgres" is an inference about which database a
+    // business's configuration lives in.
+    for (const sloppy of ["POSTGRES", "Postgres", "pg", "true", "1", undefined]) {
+      assert.equal(platformStoreMode({ PLATFORM_CONFIG_STORE: sloppy }), "memory", `"${sloppy}" selected postgres`);
+    }
+    assert.equal(platformStoreMode({ NODE_ENV: "production" }), "memory", "NODE_ENV chose the store");
+  });
+
+  it("FAILS CLOSED rather than falling back to memory when postgres is unavailable", async () => {
+    const { getPlatformServices, resetPlatformServices } = require("../src/routes/platform-store");
+    resetPlatformServices();
+    const services = await getPlatformServices({
+      env: { PLATFORM_CONFIG_STORE: "postgres" },
+      dbFactory: () => null,          // no credentials resolve
+      now: () => new Date(),
+    });
+    assert.equal(services.ok, false);
+    assert.equal(services.configService, null, "a config service was built without a database");
+    assert.equal(services.provisioningService, null);
+    // The refusal may SAY "will not fall back to memory" — that sentence is the
+    // point. What it must not do is hand back a memory store or switch mode.
+    assert.equal(services.mode, "postgres", "the requested mode was silently changed");
+    assert.ok(!/(using|fell back to|falling back to|serving from) memory/i.test(services.message || ""));
+    resetPlatformServices();
   });
 });
 

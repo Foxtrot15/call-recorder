@@ -953,7 +953,11 @@ describe("P32B/P32C approval and activation — separate, and honest about what 
   it("posts activation to the configuration operation and nothing else", () => {
     const handlers = fs.readFileSync(path.join(ROOT, "src", "routes", "platform-ui-handlers.js"), "utf8");
     const activate = handlers.slice(handlers.indexOf("activate: guard("), handlers.indexOf("restore: guard("));
-    assert.match(activate, /configService\.activate/);
+    // P36: the router hands each request the service the store binding settled
+    // on, so the call now reads cfg(req).activate. The rule is unchanged and is
+    // the point of this test — activation calls the CONFIGURATION operation,
+    // and the sweep below still proves it touches nothing else.
+    assert.match(activate, /(cfg\(req\)|configService)\.activate/);
     for (const forbidden of ["provisioning", "provider", "executor", "retell", "compile"]) {
       assert.ok(!new RegExp(forbidden, "i").test(activate.replace(/\/\/[^\n]*/g, "")),
         `the activate handler touches ${forbidden}`);
@@ -1067,8 +1071,9 @@ describe("P35 wizard — an order through the real editor, not a second system",
     const handlers = fs.readFileSync(path.join(ROOT, "src", "routes", "platform-ui-handlers.js"), "utf8");
     const wizardHandler = handlers.slice(handlers.indexOf("wizard: guard("), handlers.indexOf("startWizard: guard("));
     assert.match(wizardHandler, /Step state is DERIVED/);
-    // It starts by creating a REAL draft through the real service.
-    assert.match(handlers.slice(handlers.indexOf("startWizard: guard(")), /configService\.createDraft/);
+    // It starts by creating a REAL draft through the real service — which since
+    // P36 is whichever store the binding settled on, resolved per request.
+    assert.match(handlers.slice(handlers.indexOf("startWizard: guard(")), /(cfg\(req\)|configService)\.createDraft/);
   });
 
   it("ends at an approved plan and says so", () => {
