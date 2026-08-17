@@ -263,65 +263,160 @@
 
   // ── repeatable items ─────────────────────────────────────────────
 
-  function moveItem(index, delta) {
-    var list = main.querySelector(".items");
+  // Kept in step with src/platform/ui/ui-repeatable.js, which is where these
+  // rules are defined and tested. A ratchet reads both files and fails if they
+  // drift, because a browser that indexes rows differently from the server
+  // that parses them is a data-loss bug wearing a working UI.
+  var INDEXED_ATTRIBUTES = ["name", "id", "for", "aria-describedby", "data-error-for", "data-index"];
+  var ID_PREFIX = "f-";
+
+  function escapeForId(value) { return String(value).replace(/[^a-zA-Z0-9_-]/g, "-"); }
+  function escapeForRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+  /** Every index token in one attribute value, rewritten. */
+  function reindexToken(value, path, index) {
+    if (value === null || value === undefined) return value;
+    var text = String(value);
+    if (/^\d+$/.test(text)) return String(index);
+    var p = escapeForRegExp(path);
+    var idPath = escapeForRegExp(escapeForId(path));
+    return text
+      .replace(new RegExp(p + "\\[\\d+\\]", "g"), path + "[" + index + "]")
+      .replace(new RegExp("(" + ID_PREFIX + idPath + "-)\\d+(-)", "g"), "$1" + index + "$2");
+  }
+
+  /**
+   * The list a control belongs to, resolved from the control itself.
+   *
+   * Previously every operation called main.querySelector(".items") and got
+   * whichever list happened to come first in the document — so on the
+   * Knowledge screen, which renders two lists, "Add reference" added an
+   * approved fact. The button already carried data-repeatable; it was passed
+   * to addItem and then discarded with `void path`.
+   */
+  function listFor(el) {
+    var wrap = el.closest ? el.closest(".repeatable") : null;
+    if (!wrap) return null;
+    var list = wrap.querySelector(".items");
+    if (!list || list.getAttribute("data-repeatable") !== wrap.getAttribute("data-repeatable")) return null;
+    return list;
+  }
+
+  /** Direct children only — a nested list's rows are not this list's rows. */
+  function rowsOf(list) {
+    var out = [];
+    var kids = list.children;
+    for (var i = 0; i < kids.length; i += 1) {
+      if (kids[i].className && String(kids[i].className).split(" ").indexOf("item") !== -1) out.push(kids[i]);
+    }
+    return out;
+  }
+
+  /**
+   * Stamp position onto a row: name, id, for, aria-describedby, data-error-for
+   * and data-index, on the row and on everything inside it.
+   *
+   * The old version rewrote `name` only, and only its first [n] occurrence. So
+   * a moved row kept another row's element ids, its label's `for`, its
+   * aria-describedby and its error slot — which is how a row could be moved
+   * and a server error then appear beside a different service.
+   */
+  function stampIndex(row, path, index) {
+    var nodes = [row];
+    var inner = row.querySelectorAll("*");
+    for (var n = 0; n < inner.length; n += 1) nodes.push(inner[n]);
+
+    for (var i = 0; i < nodes.length; i += 1) {
+      for (var a = 0; a < INDEXED_ATTRIBUTES.length; a += 1) {
+        var attr = INDEXED_ATTRIBUTES[a];
+        if (!nodes[i].hasAttribute(attr)) continue;
+        nodes[i].setAttribute(attr, reindexToken(nodes[i].getAttribute(attr), path, index));
+      }
+    }
+  }
+
+  function reindex(list, path) {
+    var rows = rowsOf(list);
+    for (var i = 0; i < rows.length; i += 1) stampIndex(rows[i], path, i);
+  }
+
+  /** Reorder the DOM to match a plan's `order`, then restamp every position. */
+  function applyOrder(list, path, order) {
+    var rows = rowsOf(list);
+    var next = [];
+    for (var i = 0; i < order.length; i += 1) next.push(order[i] === null ? null : rows[order[i]]);
+    for (var j = 0; j < next.length; j += 1) if (next[j]) list.appendChild(next[j]);
+    reindex(list, path);
+  }
+
+  function moveItem(el, index, delta) {
+    var list = listFor(el);
     if (!list) return;
-    var items = list.querySelectorAll(".item");
-    var from = items[index];
-    var to = items[index + delta];
-    if (!from || !to) return;
-    if (delta < 0) list.insertBefore(from, to);
-    else list.insertBefore(to, from);
-    reindex(list);
+    var path = list.getAttribute("data-repeatable");
+    var rows = rowsOf(list);
+    var target = index + delta;
+    // A refusal, not a clamp: Move up on the first row does nothing at all.
+    if (target < 0 || target >= rows.length || !rows[index]) return;
+
+    var order = [];
+    for (var i = 0; i < rows.length; i += 1) order.push(i);
+    order[index] = target;
+    order[target] = index;
+    applyOrder(list, path, order);
+    focusRow(list, target);
     setStatus("idle", "Order changed. Save to keep it.");
   }
 
-  function removeItem(index) {
-    var list = main.querySelector(".items");
+  function removeItem(el, index) {
+    var list = listFor(el);
     if (!list) return;
-    var items = list.querySelectorAll(".item");
-    if (!items[index]) return;
-    items[index].parentNode.removeChild(items[index]);
-    reindex(list);
+    var path = list.getAttribute("data-repeatable");
+    var rows = rowsOf(list);
+    if (!rows[index]) return;
+    rows[index].parentNode.removeChild(rows[index]);
+    reindex(list, path);
+    var left = rowsOf(list);
+    if (left.length) focusRow(list, Math.min(index, left.length - 1));
     setStatus("idle", "Removed. Save to keep the change.");
   }
 
-  function addItem(path) {
-    var list = main.querySelector(".items");
-    if (!list) return;
-    var template = list.querySelector(".item");
-    if (!template) {
-      setStatus("error", "Reload the page to add the first one.");
+  /**
+   * Add a row built from the server's blank template — never from a live row.
+   *
+   * The template is rendered by the same server function that renders a real
+   * row, from the schema's blank item, so "what does a new one look like?" has
+   * exactly one answer and it is not "whatever is currently on screen".
+   */
+  function addItem(el) {
+    var wrap = el.closest ? el.closest(".repeatable") : null;
+    var list = listFor(el);
+    if (!wrap || !list) return;
+    var path = list.getAttribute("data-repeatable");
+
+    var template = wrap.querySelector(".item-template");
+    if (!template || !template.content) {
+      // No silent fallback to cloning a row. That fallback WAS the bug.
+      setStatus("error", "This page cannot add a row — reload it.");
       return;
     }
-    var copy = template.cloneNode(true);
-    var fields = copy.querySelectorAll("input, select, textarea");
-    for (var i = 0; i < fields.length; i += 1) {
-      if (fields[i].type === "checkbox" || fields[i].type === "radio") fields[i].checked = false;
-      else fields[i].value = "";
-    }
+
+    var row = template.content.firstElementChild.cloneNode(true);
     var empty = list.querySelector(".items__empty");
     if (empty) empty.parentNode.removeChild(empty);
-    list.appendChild(copy);
-    reindex(list);
-    var first = copy.querySelector("input, select, textarea");
+
+    list.appendChild(row);
+    stampIndex(row, path, rowsOf(list).length - 1);
+
+    var first = row.querySelector("input, select, textarea");
     if (first) first.focus();
     setStatus("idle", "Added. Fill it in and save.");
-    void path;
   }
 
-  /** Names carry the index, so every reorder rewrites them. */
-  function reindex(list) {
-    var items = list.querySelectorAll(".item");
-    for (var i = 0; i < items.length; i += 1) {
-      items[i].setAttribute("data-index", String(i));
-      var controls = items[i].querySelectorAll("[data-index]");
-      for (var c = 0; c < controls.length; c += 1) controls[c].setAttribute("data-index", String(i));
-      var fields = items[i].querySelectorAll("[name]");
-      for (var f = 0; f < fields.length; f += 1) {
-        fields[f].name = fields[f].name.replace(/\[\d+\]/, "[" + i + "]");
-      }
-    }
+  function focusRow(list, index) {
+    var rows = rowsOf(list);
+    if (!rows[index]) return;
+    var btn = rows[index].querySelector('[data-action="move-up"], [data-action="remove-item"]');
+    if (btn && btn.focus) btn.focus();
   }
 
   // ── delegation ───────────────────────────────────────────────────
@@ -334,10 +429,12 @@
 
     if (act === "reload-latest") { event.preventDefault(); window.location.reload(); return; }
     if (act === "show-my-changes") { event.preventDefault(); revealMyChanges(); return; }
-    if (act === "move-up") { event.preventDefault(); moveItem(index, -1); return; }
-    if (act === "move-down") { event.preventDefault(); moveItem(index, 1); return; }
-    if (act === "remove-item") { event.preventDefault(); removeItem(index); return; }
-    if (act === "add-item") { event.preventDefault(); addItem(el.getAttribute("data-repeatable")); return; }
+    // Every one of these resolves its list from the clicked control, so a
+    // screen with two lists cannot act on the wrong one.
+    if (act === "move-up") { event.preventDefault(); moveItem(el, index, -1); return; }
+    if (act === "move-down") { event.preventDefault(); moveItem(el, index, 1); return; }
+    if (act === "remove-item") { event.preventDefault(); removeItem(el, index); return; }
+    if (act === "add-item") { event.preventDefault(); addItem(el); return; }
   });
 
   main.addEventListener("submit", function (event) {

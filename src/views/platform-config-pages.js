@@ -14,6 +14,7 @@ const { escapeHtml, escapeAttr } = require("./escape");
 const S = require("./platform-shell");
 const F = require("../platform/ui/ui-fields");
 const V = require("../platform/ui/ui-vocabulary");
+const R = require("../platform/ui/ui-repeatable");
 
 // ════════════════════════════════════════════════════════════════════
 // P30 — CONFIGURATION HOME
@@ -172,11 +173,16 @@ ${model.events.length ? S.card("Audit history", S.table({
 // ════════════════════════════════════════════════════════════════════
 
 /** One repeatable item — a service, an urgency rule, an approved fact. */
-function renderItem(repeatable, item, index) {
+function renderItem(repeatable, item, index, { blank = false } = {}) {
   const inner = repeatable.fields.map((f) =>
-    S.renderField({ ...f, name: `${repeatable.path}[${index}].${f.name}` }, item ? item[f.name] : undefined)).join("");
+    S.renderField({ ...f, name: R.itemNameFor(repeatable.path, index, f.name) }, item ? item[f.name] : undefined)).join("");
 
-  const label = (item && (item.name || item.label || item.statement || item.when || item[repeatable.idField])) || `${repeatable.itemNoun} ${index + 1}`;
+  // A blank row says what it is rather than claiming a position, because the
+  // template is stamped in at whatever index the list has reached and a title
+  // reading "service 1" on the sixth row is a small lie about which row it is.
+  const label = blank
+    ? `New ${repeatable.itemNoun}`
+    : (item && (item.name || item.label || item.statement || item.when || item[repeatable.idField])) || `${repeatable.itemNoun} ${index + 1}`;
 
   return `<li class="item" data-index="${escapeAttr(String(index))}">
   <div class="item__head">
@@ -193,8 +199,21 @@ function renderItem(repeatable, item, index) {
 
 function renderRepeatable(repeatable, items) {
   const list = (items || []).map((item, i) => renderItem(repeatable, item, i)).join("");
+
+  // A blank row, rendered by the SAME function that renders a real one, from
+  // the schema's blank item rather than from anything on screen. This is the
+  // fix for "Add service produced a copy of an existing service": the browser
+  // no longer has anything to clone, because the server already sent it the
+  // one correct answer to "what does a new one look like?".
+  //
+  // <template> content is inert and not part of the document, so the ids
+  // inside it collide with nothing while it waits. The browser stamps the
+  // real index over the placeholder before inserting it.
+  const blank = renderItem(repeatable, R.blankItem(repeatable), 0, { blank: true });
+
   return `<div class="repeatable" data-repeatable="${escapeAttr(repeatable.path)}">
-  <ul class="items">${list || `<li class="items__empty">No ${escapeHtml(repeatable.itemNoun)}s yet.</li>`}</ul>
+  <ul class="items" data-repeatable="${escapeAttr(repeatable.path)}">${list || `<li class="items__empty">No ${escapeHtml(repeatable.itemNoun)}s yet.</li>`}</ul>
+  <template class="item-template" data-repeatable="${escapeAttr(repeatable.path)}">${blank}</template>
   <button type="button" class="btn btn--secondary" data-action="add-item" data-repeatable="${escapeAttr(repeatable.path)}">Add ${escapeHtml(repeatable.itemNoun)}</button>
 </div>`;
 }

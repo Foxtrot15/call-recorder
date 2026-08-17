@@ -61,7 +61,7 @@ unlisted.
 | 1 authority | `blueprint-authority.js`, `config-patch.js`, `migrate-locksmith-profile.js`, `integrations.js`, `blueprint-store-postgres.js`, `config-audit.js`, `provisioning-diff.js`, `provisioning-plan-authority.js`, `provisioning-readiness.js`, `store-binding.js`, `execution-preflight.js`, `execution-claim.js`, `provider-mutation-port.js`, `resource-registry-writer.js`, `provisioning-executor.js`, `reconciliation-engine.js` | No |
 | 2 behaviour | `behaviour-spec.js` | No |
 | 3 provider | `provider-compiler-retell.js`, `provisioning-desired-state.js` | Yes — they build provider payloads |
-| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js`, `ui/ui-vocabulary.js`, `ui/ui-diff.js`, `ui/ui-fields.js`, `ui/ui-view-models.js` | Yes — they compose the compiler to show a person its output |
+| 4 tooling | `client-cli.js`, `config-service.js`, `provisioning-service.js`, `provision-cli.js`, `ui/ui-vocabulary.js`, `ui/ui-diff.js`, `ui/ui-fields.js`, `ui/ui-view-models.js`, `ui/ui-repeatable.js` | Yes — they compose the compiler to show a person its output |
 
 ---
 
@@ -1196,6 +1196,7 @@ decided and draws it.
 | `ui-diff.js` | how a domain change is said in words a business owner can approve |
 | `ui-fields.js` | the editor's sections and fields, built **from** the domain's own vocabularies |
 | `ui-view-models.js` | what each screen shows, and which controls are offered to whom |
+| `ui-repeatable.js` | add / remove / reorder on a list, and every identifier those operations must rewrite |
 
 A decision made in a `<script>` tag is a decision nothing can test without a
 browser, and this repo has no browser in its test stack. It also has no need

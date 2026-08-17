@@ -213,6 +213,10 @@ const LAYER = Object.freeze({
   "ui-diff.js": 4,
   "ui-fields.js": 4,
   "ui-view-models.js": 4,
+  // Layer 4 like its neighbours: it is the semantics of a list on a screen —
+  // add, remove, reorder, and the identifiers those operations rewrite. It
+  // knows nothing about a business and nothing about the DOM.
+  "ui-repeatable.js": 4,
 });
 
 const DOMAIN_MAX_LAYER = 2;

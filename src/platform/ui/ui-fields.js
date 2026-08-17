@@ -25,6 +25,7 @@
 
 const B = require("../client-blueprint");
 const V = require("./ui-vocabulary");
+const R = require("./ui-repeatable");
 
 /** An option list built FROM a domain vocabulary, never a copy of one. */
 const options = (values, labels = {}) =>
@@ -74,7 +75,10 @@ const SERVICE_FIELDS = Object.freeze([
   field({ name: "name", label: "Name", required: true, hint: "What a caller would call it." }),
   field({ name: "aliases", type: "list", label: "Also called", hint: "Other words callers use for the same thing." }),
   field({ name: "description", type: "textarea", label: "Description" }),
-  field({ name: "enabled", type: "boolean", label: "Offered", required: true,
+  // blankDefault: a service somebody is adding is one they offer. The other
+  // required field here, urgencyCategory, deliberately has NO default — see
+  // blankItem() in ui-repeatable.js for why guessing it is the wrong kindness.
+  field({ name: "enabled", type: "boolean", label: "Offered", required: true, blankDefault: true,
     hint: "Turning this off removes it from what the assistant offers, without deleting it." }),
   field({ name: "urgencyCategory", type: "select", label: "Urgency", required: true, options: options(B.URGENCY_LEVELS) }),
   field({ name: "qualificationRequirements", type: "list", label: "Qualification requirements",
@@ -331,6 +335,23 @@ function applySection(blueprint, key, values = {}) {
     if (f.locked || !f.path) continue;
     if (!Object.prototype.hasOwnProperty.call(values, f.name)) continue;
     out = setPath(out, f.path, values[f.name]);
+  }
+
+  // Repeatables. This was missing entirely: the loop above walks only the
+  // section's own fields, whose names are "legalName"-shaped, while a
+  // repeatable posts "services[0].serviceId"-shaped keys. So every add,
+  // removal, reorder and edit of a service, urgency rule, approved fact or
+  // appointment type was posted by the browser, accepted by the server, and
+  // dropped on the floor. The save returned 200 and changed nothing.
+  //
+  // A repeatable is only applied when the payload actually mentions it, so a
+  // section saved by something that does not render the list — an older page,
+  // a partial form — cannot silently empty it.
+  for (const r of [s.repeatable, s.secondaryRepeatable]) {
+    if (!r) continue;
+    const mentioned = Object.keys(values).some((k) => k.startsWith(`${r.path}[`));
+    if (!mentioned) continue;
+    out = setPath(out, r.path, R.parseItems(values, r));
   }
 
   if (key === "hours") {
