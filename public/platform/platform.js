@@ -267,7 +267,7 @@
   // rules are defined and tested. A ratchet reads both files and fails if they
   // drift, because a browser that indexes rows differently from the server
   // that parses them is a data-loss bug wearing a working UI.
-  var INDEXED_ATTRIBUTES = ["name", "id", "for", "aria-describedby", "data-error-for", "data-index"];
+  var INDEXED_ATTRIBUTES = ["name", "id", "for", "aria-describedby", "data-error-for", "data-index", "data-field"];
   var ID_PREFIX = "f-";
 
   function escapeForId(value) { return String(value).replace(/[^a-zA-Z0-9_-]/g, "-"); }
@@ -449,8 +449,14 @@
       stampIndex(row, path, rowsOf(list).length - 1);
     });
 
-    var first = row.querySelector("input, select, textarea");
-    if (first) first.focus();
+    // The first control a PERSON can use, which is not the same as the first
+    // control in the row. Since the identity key was added, the first control
+    // is a hidden input — and focusing a hidden input does nothing at all, so
+    // "Add service" stopped moving focus into the new row and left it wherever
+    // it happened to be. Whatever the person typed next went there instead.
+    var first = row.querySelector(
+      'input:not([type="hidden"]):not([readonly]), select, textarea');
+    if (first && first.focus) first.focus();
     setStatus("idle", "Added. Fill it in and save.");
   }
 

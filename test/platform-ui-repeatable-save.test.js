@@ -344,6 +344,50 @@ describe("P36#2 — ratchets: reindexing may not cost a person their answer", ()
     }
   });
 
+  it("focuses a control a PERSON can type into, not the identity field", () => {
+    // Regression from 316d94b: adding the hidden identity input made it the
+    // FIRST control in the row, and addItem focused "the first control". A
+    // hidden input cannot take focus, so Add stopped moving focus into the new
+    // row at all — leaving it wherever it happened to be, which is one way
+    // typing reaches a row the person is not looking at.
+    const focusLine = CODE.match(/var first = row\.querySelector\(([\s\S]*?)\);/);
+    assert.ok(focusLine, "addItem must still choose something to focus");
+    assert.match(focusLine[1], /:not\(\[type="hidden"\]\)/,
+      "the focus target must exclude hidden inputs");
+    assert.match(focusLine[1], /:not\(\[readonly\]\)/,
+      "and readonly ones, which a person cannot type into either");
+
+    // And prove it against the real markup: the first control in a rendered
+    // row IS hidden, so the naive selector would still pick it.
+    const first = controlsIn(rowsOf(renderServices(V1))[0])[0];
+    assert.equal(first.type, "hidden", "the identity field is still first in the row");
+  });
+
+  it("gives every control a unique id, before and after a reorder", () => {
+    // A duplicate id makes <label for> focus another row's control, which is
+    // how typing lands in the wrong service. Asserted at rest for the rendered
+    // page and for the state after a reorder, applying the same rewrite rules
+    // the browser applies.
+    const html = renderServices(V1);
+    const stamp = (rowHtml, index) =>
+      rowHtml.replace(/\b(name|id|for|aria-describedby|data-error-for|data-index|data-field)="([^"]*)"/g,
+        (m, attr, val) => `${attr}="${R.reindexToken(val, "services", index)}"`);
+    const idsOf = (h) => [...h.matchAll(/\sid="([^"]*)"/g)].map((m) => m[1]);
+
+    const rendered = idsOf(rowsOf(html).join("\n"));
+    assert.equal(new Set(rendered).size, rendered.length, "rendered ids must be unique");
+
+    // Add, then move the new row up one — the founder's sequence.
+    const added = [...rowsOf(html), stamp(templateOf(html), 5)];
+    const addedIds = idsOf(added.join("\n"));
+    assert.equal(new Set(addedIds).size, addedIds.length, "ids must stay unique after Add");
+
+    const moved = [added[0], added[1], added[2], added[3], added[5], added[4]]
+      .map((r, i) => stamp(r, i));
+    const movedIds = idsOf(moved.join("\n"));
+    assert.equal(new Set(movedIds).size, movedIds.length, "ids must stay unique after Move up");
+  });
+
   it("submits identity as a hidden field the person cannot edit", () => {
     const pages = fs.readFileSync(
       path.join(__dirname, "..", "src", "views", "platform-config-pages.js"), "utf8");

@@ -62,6 +62,12 @@ const escapeForRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, 
  */
 const INDEXED_ATTRIBUTES = Object.freeze([
   "name", "id", "for", "aria-describedby", "data-error-for", "data-index",
+  // data-field: the wrapper's record of which field it holds. It was missed
+  // when this list was first written, so after a reorder every wrapper still
+  // claimed the index it used to have. Nothing reads it today, which is the
+  // only reason it has not caused its own data-loss bug — an attribute that is
+  // correct by luck is not correct.
+  "data-field",
 ]);
 
 /**

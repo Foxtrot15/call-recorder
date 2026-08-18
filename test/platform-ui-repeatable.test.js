@@ -145,7 +145,26 @@ describe("P36 — every identifier is a function of position", () => {
 
   it("covers every attribute that carries a position", () => {
     assert.deepEqual([...R.INDEXED_ATTRIBUTES].sort(),
-      ["aria-describedby", "data-error-for", "data-index", "for", "id", "name"]);
+      ["aria-describedby", "data-field", "data-error-for", "data-index", "for", "id", "name"].sort());
+  });
+
+  it("names every index-bearing attribute the server actually emits", () => {
+    // The list was hand-written once and missed data-field. So instead of
+    // trusting it, read the rendered markup and assert that every attribute
+    // whose value contains an index token is one this list rewrites.
+    const html = require("../src/views/platform-config-pages").renderEditor({
+      section: F.sectionFor("services"),
+      values: F.readSection({ services: FIVE }, "services"),
+      items: FIVE, secondaryItems: null, clientId: "c", configVersion: 1,
+    }, "/b");
+
+    const carrying = new Set();
+    for (const [, attr, value] of html.matchAll(/\b([a-z-]+)="([^"]*)"/g)) {
+      if (/services\[\d+\]/.test(value) || /f-services-\d+-/.test(value)) carrying.add(attr);
+    }
+    const missed = [...carrying].filter((a) => !R.INDEXED_ATTRIBUTES.includes(a));
+    assert.deepEqual(missed, [],
+      `these attributes carry an index but are never rewritten: ${missed.join(", ")}`);
   });
 
   it("leaves a nested path's own index alone", () => {
